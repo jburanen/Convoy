@@ -130,5 +130,10 @@ tmp/
 # This note names the internal test host + account; must not enter the public repo.
 .claude/memory/test-host-deploy.md
 
+# --- Local-only dev-host bootstrap doc (OneDrive-synced, never committed) --
+# Sensitive infra identifiers for the test host; carry it across machines via
+# OneDrive/manual copy, never git. (Also matched by *.local.* below.)
+DEV-HOST.local.md
+
 # --- Docker runtime data (bind-mounted into the container) ---------------
 /data/
