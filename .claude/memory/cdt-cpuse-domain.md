@@ -15,9 +15,15 @@ CLI syntax — Check Point changes these across releases.)
 - Lifecycle per package: `import` → `verify` → `install` → (optional reboot) →
   `uninstall`. Packages: hotfixes, Jumbo Hotfix Accumulators (JHF/HFA), and major
   version upgrades.
-- CLI via Gaia clish `installer` verbs, e.g. `show installer packages`,
-  `installer import`, `installer verify <pkg>`, `installer install <pkg>`. Also a
-  Gaia Portal web UI. Reference: sk92449.
+- CLI via Gaia clish `installer` verbs (confirmed via docs MCP; there is **no
+  documented `da_cli`/expert-mode equivalent** — clish `installer` IS the
+  automation surface). Also a Gaia Portal web UI. Reference: sk92449.
+  - `installer import local <FULL PATH> not-interactive` — package may sit in any
+    dir (`/var/log/upload/` is conventional); full path required.
+  - `installer verify <ID> not-interactive` / `installer install <ID> not-interactive`
+  - `show installer packages all|imported|installed`; `show installer status build`
+  - `not-interactive` suppresses prompts — essential for automation.
+  - On MDPS-enabled boxes, `set mdps environment mplane` first.
 - **Management servers are patched with CPUSE locally**, not via CDT.
 
 **CDT — Central Deployment Tool** (reference: sk111158; confirmed via docs MCP)

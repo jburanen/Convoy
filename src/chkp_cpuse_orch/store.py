@@ -73,6 +73,17 @@ class JobEvent(BaseModel):
     message: str
 
 
+class PackageRecord(BaseModel):
+    """Metadata for one uploaded package file (content lives on the data volume)."""
+
+    id: str = Field(default_factory=new_id)
+    filename: str
+    sha1: str  # Check Point publishes SHA-1 (and SHA-256) per package — the UI
+    sha256: str  # shows both so the operator can compare before distributing
+    size: int
+    created_at: datetime = Field(default_factory=utcnow)
+
+
 class CredentialRecord(BaseModel):
     """Ciphertext row — the store never sees plaintext secrets."""
 
@@ -127,6 +138,17 @@ _MIGRATIONS: tuple[str, ...] = (
         message TEXT NOT NULL
     );
     CREATE INDEX idx_job_events_job ON job_events (job_id, seq);
+    """,
+    # v2: package metadata (Phase 2 — package store).
+    """
+    CREATE TABLE packages (
+        id         TEXT PRIMARY KEY,
+        filename   TEXT NOT NULL UNIQUE,
+        sha1       TEXT NOT NULL,
+        sha256     TEXT NOT NULL,
+        size       INTEGER NOT NULL,
+        created_at TEXT NOT NULL
+    );
     """,
 )
 
@@ -225,6 +247,38 @@ class Store:
     def delete_credential(self, host: str, kind: str) -> bool:
         with self._connect() as conn:
             cur = conn.execute("DELETE FROM credentials WHERE host = ? AND kind = ?", (host, kind))
+        return cur.rowcount > 0
+
+    # -- packages (metadata; file content lives in packages.py's directory) ------
+
+    def insert_package(self, rec: PackageRecord) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO packages (id, filename, sha1, sha256, size, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    rec.id,
+                    rec.filename,
+                    rec.sha1,
+                    rec.sha256,
+                    rec.size,
+                    rec.created_at.isoformat(),
+                ),
+            )
+
+    def get_package(self, filename: str) -> PackageRecord | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM packages WHERE filename = ?", (filename,)).fetchone()
+        return None if row is None else _package_from_row(row)
+
+    def list_packages(self) -> list[PackageRecord]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT * FROM packages ORDER BY filename").fetchall()
+        return [_package_from_row(r) for r in rows]
+
+    def delete_package(self, filename: str) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute("DELETE FROM packages WHERE filename = ?", (filename,))
         return cur.rowcount > 0
 
     # -- jobs ------------------------------------------------------------------
@@ -369,6 +423,17 @@ def _job_from_row(row: sqlite3.Row) -> JobRecord:
         finished_at=_dt(row["finished_at"]),
         error=row["error"],
         cancel_requested=bool(row["cancel_requested"]),
+    )
+
+
+def _package_from_row(row: sqlite3.Row) -> PackageRecord:
+    return PackageRecord(
+        id=row["id"],
+        filename=row["filename"],
+        sha1=row["sha1"],
+        sha256=row["sha256"],
+        size=row["size"],
+        created_at=datetime.fromisoformat(row["created_at"]),
     )
 
 

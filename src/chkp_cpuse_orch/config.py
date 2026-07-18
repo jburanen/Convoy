@@ -40,6 +40,8 @@ class Paths(BaseModel):
     # SQLite DB for jobs / credential ciphertext / package metadata. In the
     # container this lives on the bind-mounted /data volume (git-ignored).
     db_path: Path = Path("state") / "orch.db"
+    # Uploaded package files (JHFs, upgrades). Also git-ignored / on /data.
+    packages_dir: Path = Path("packages")
 
 
 class Config(BaseModel):

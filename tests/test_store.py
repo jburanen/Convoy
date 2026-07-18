@@ -5,7 +5,14 @@ from pathlib import Path
 import pytest
 
 from chkp_cpuse_orch.errors import StoreError
-from chkp_cpuse_orch.store import CredentialRecord, JobRecord, JobStatus, Store
+from chkp_cpuse_orch.store import (
+    _MIGRATIONS,
+    CredentialRecord,
+    JobRecord,
+    JobStatus,
+    PackageRecord,
+    Store,
+)
 
 
 @pytest.fixture
@@ -139,6 +146,43 @@ def test_list_credentials_filters_by_host(store: Store) -> None:
     store.upsert_credential(CredentialRecord(host="b", kind="ssh_password", ciphertext=b"3"))
     assert len(store.list_credentials("a")) == 2
     assert len(store.list_credentials()) == 3
+
+
+def test_package_roundtrip_and_unique_filename(store: Store) -> None:
+    rec = PackageRecord(filename="jhf.tgz", sha1="a" * 40, sha256="b" * 64, size=123)
+    store.insert_package(rec)
+    loaded = store.get_package("jhf.tgz")
+    assert loaded is not None
+    assert loaded.sha256 == "b" * 64
+    assert loaded.size == 123
+    import sqlite3
+
+    with pytest.raises(sqlite3.IntegrityError):
+        store.insert_package(
+            PackageRecord(filename="jhf.tgz", sha1="c" * 40, sha256="d" * 64, size=1)
+        )
+    assert [p.filename for p in store.list_packages()] == ["jhf.tgz"]
+    assert store.delete_package("jhf.tgz") is True
+    assert store.get_package("jhf.tgz") is None
+
+
+def test_v1_database_upgrades_in_place(tmp_path: Path) -> None:
+    # Build a schema-v1 DB by hand (as Phase 1 shipped it), then reopen: the
+    # packages table must appear without disturbing existing data.
+    import sqlite3
+
+    path = tmp_path / "orch.db"
+    conn = sqlite3.connect(path)
+    conn.executescript(_MIGRATIONS[0])
+    conn.execute("PRAGMA user_version = 1")
+    conn.execute("INSERT INTO meta (key, value) VALUES ('k', 'v')")
+    conn.commit()
+    conn.close()
+
+    store = Store(path)
+    assert store.get_meta("k") == "v"  # survived the upgrade
+    store.insert_package(PackageRecord(filename="p.tgz", sha1="a" * 40, sha256="b" * 64, size=1))
+    assert store.get_package("p.tgz") is not None
 
 
 def test_future_schema_version_refused(tmp_path: Path) -> None:

@@ -43,6 +43,10 @@ class JobError(OrchestratorError):
     """A background job could not be submitted or managed."""
 
 
+class PackageError(OrchestratorError):
+    """Package store failure: bad upload, checksum mismatch, or missing file."""
+
+
 class PreCheckError(OrchestratorError):
     """A pre-deployment health check failed; the run must not proceed."""
 

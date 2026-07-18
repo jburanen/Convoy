@@ -33,6 +33,18 @@ UI is the primary interface (see [[architecture]]); the CLI is secondary.
   scrypt with a per-DB salt; a canary token in `meta` makes a wrong key fail fast.
   Only new runtime dependency.
 
+## Web frontend structure (operator preference — hand-editable, 2026-07-17)
+The operator wants to **hand-edit the UI files directly**, so the frontend must stay
+plain and file-based:
+- Static `*.html` + `css/` + `js/` files under `src/chkp_cpuse_orch/web/static/`,
+  served via FastAPI `StaticFiles`. What's on disk is what the browser gets.
+- **No build step, no bundler, no npm, no SPA framework.** Edit → refresh.
+- Dynamic data comes from plain-JS `fetch()` against the JSON API, filling
+  placeholders. Repeated markup (table rows, cards) lives in HTML `<template>`
+  elements in the page — never in Python strings, never in JS string literals.
+- Avoid Jinja; if templating ever becomes unavoidable, keep it to a minimal base
+  layout. Never generate HTML from Python.
+
 ## New core infrastructure (shared by both subsystems)
 - **Credential store, encrypted at rest.** Ciphertext in SQLite; master key supplied
   at container start (env var / docker secret), held only in memory, never written to
