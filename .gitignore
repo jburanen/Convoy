@@ -111,6 +111,7 @@ htmlcov/
 .vscode/*
 !.vscode/settings.json
 !.vscode/extensions.json
+*.code-workspace
 .idea/
 *.swp
 *.swo
