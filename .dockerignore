@@ -1,0 +1,28 @@
+# Keep the build context small and secret-free.
+.git
+.gitignore
+.claude
+.claudeignore
+.venv
+venv
+env
+ENV
+__pycache__
+*.py[cod]
+*.egg-info
+.pytest_cache
+.mypy_cache
+.ruff_cache
+htmlcov
+.coverage*
+dist
+build
+tests
+examples
+data
+# Never ship env/secret material into an image layer.
+.env
+*.env
+!.env.example
+*.key
+*.pem

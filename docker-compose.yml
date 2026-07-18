@@ -1,0 +1,28 @@
+# chkp-cpuse-orch — test/dev deployment.
+# Brought up on the test host by scripts/deploy.sh (git pull + up --build).
+services:
+  web:
+    build: .
+    image: chkp-cpuse-orch:dev
+    container_name: chkp-cpuse-orch
+    # Run as the host deploy account (deployer, uid/gid 1001) so bind-mounted
+    # files stay owned by a non-root user that can manage them without sudo.
+    user: "1001:1001"
+    ports:
+      - "8080:8080"
+    environment:
+      # Config/inventory are read from the mounted data dir at runtime.
+      CHKP_CPUSE_CONFIG: /data/config.yaml
+    volumes:
+      - ./data:/data:rw
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health').status==200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

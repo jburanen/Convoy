@@ -1,0 +1,16 @@
+# Repo is authored on Windows but built/deployed on Linux. Force LF so shell
+# scripts, the Dockerfile, and compose files never ship CRLF (which breaks
+# `#!/usr/bin/env bash` and container healthchecks on Linux).
+* text=auto eol=lf
+
+# Windows-only helpers keep CRLF.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary types Git must not touch.
+*.png binary
+*.jpg binary
+*.gz  binary
+*.tgz binary
+*.whl binary

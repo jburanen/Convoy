@@ -125,3 +125,10 @@ desktop.ini
 local/
 scratch/
 tmp/
+
+# --- Local-only project memory (host-specific; real infra identifiers) ---
+# This note names the internal test host + account; must not enter the public repo.
+.claude/memory/test-host-deploy.md
+
+# --- Docker runtime data (bind-mounted into the container) ---------------
+/data/
