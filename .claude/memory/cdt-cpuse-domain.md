@@ -20,22 +20,77 @@ CLI syntax — Check Point changes these across releases.)
   Gaia Portal web UI. Reference: sk92449.
 - **Management servers are patched with CPUSE locally**, not via CDT.
 
-**CDT — Central Deployment Tool** (reference: sk111158)
-- Runs *on a Security Management Server or Multi-Domain Server*. Pushes packages and
-  scripts to *many* managed Security Gateways / clusters at once, using CPUSE on each
-  target under the hood.
-- Driven by an **XML deployment configuration** plus a **target list** (gateways).
-  Handles: copy package → verify → install → reboot, with concurrency/batch limits.
-- Invoked as the `cdt` command on the management server shell (expert mode).
-- Good for gateway fleets; NOT used to upgrade the management server itself.
+**CDT — Central Deployment Tool** (reference: sk111158; confirmed via docs MCP)
+- Runs *on a Security Management Server or Multi-Domain Server (MDS)*. Pushes packages
+  and scripts to *many* managed Security Gateways / cluster members at once, using
+  CPUSE on each target under the hood. NOT used to upgrade the management server itself.
+- Beyond install/uninstall it can: take snapshots, run shell scripts, push/pull files,
+  automate RMA backup/restore, and handle **cluster upgrades automatically** (standby
+  members first, then automatic failover; incl. Connectivity Upgrades).
+- Requires **Expert mode, admin / uid 0**. Run long jobs under **`nohup`** so an SSH
+  drop doesn't kill the deployment.
+- The binary is **`$CDTDIR/CentralDeploymentTool`** (not a bare `cdt`). Config is XML;
+  the target list is a **CSV of candidates**.
+
+**CDT command workflow** (Security Mgmt Server; for MDS prefix with `mdsenv <DMS>` and
+pass `<DMS>` as a trailing arg):
+1. **Configure** `$CDTDIR/CentralDeploymentTool.xml`:
+   - `<PackageToInstall>` → absolute path to the CPUSE **offline** package
+   - `<CPUSE>` → path to the CPUSE RPM (upgrades the agent on targets)
+   - optional `<PreInstallationScript>` / `<PostInstallationScript>`
+2. **Generate** candidates CSV: `$CDTDIR/CentralDeploymentTool -generate <cands>.csv`
+3. **Edit** the CSV — this is where **upgrade ORDER** is set and unwanted targets
+   removed. CSV order == cluster-aware sequencing == blast-radius control.
+4. *(optional)* **Preparations** to front-load slow work before the window:
+   - `-preparations <cands>.csv` (ship packages, run pre-scripts)
+   - `-extended_preparations <cands>.csv` (also update CPUSE + import packages)
+5. **Execute**: `$CDTDIR/CentralDeploymentTool -execute <cands>.csv`
+   - Per target CDT: validates state → prepares Access Control policy (upgrades) →
+     updates CPUSE → push/import/install → validates policy install → pre/post scripts
+     → cluster failover.
+- **Gotcha:** after upgrades you may still need to **manually install** Threat
+  Prevention, QoS, and Desktop policies (depends on CDT version).
+
+**Advanced mode — Deployment Plan file** (richer than a flat CSV; confirmed via docs MCP):
+- Two complementary files:
+  - **Deployment Plan (XML)** = *WHAT* to do — packages, actions, scripts. Lives in
+    `/opt/CPcdt/DeploymentPlanRepository/`. (This is the structured form of what the
+    simple mode put inline in `CentralDeploymentTool.xml`.)
+  - **Candidates List (CSV)** = *WHERE* — target gateways/cluster members. Lives in
+    `/opt/CPcdt/CandidateListsRepository/`. Columns: Object Name, Cluster Name, IP,
+    Version/JHF Take, State (active/standby), **Upgrade Order**.
+- Relationship: the Deployment Plan is *input* to generating the Candidates list — CDT
+  filters candidates by the **first package** in the plan; you then edit the CSV to pick
+  targets/order. Both files are passed together to execute.
+- Advanced commands use **named flags** (vs. the positional simple mode):
+  ```bash
+  $CDTDIR/CentralDeploymentTool -generate  -candidates=<c>.csv -deploymentplan=<p>.xml [-server=<DMS IP>] [-session=<name>]
+  $CDTDIR/CentralDeploymentTool -execute   -candidates=<c>.csv -deploymentplan=<p>.xml [-server=<DMS IP>] [-session=<name>]
+  ```
+  Gaia clish equivalents: `start cdt generate-candidates deployment-plan "<p>.xml" candidates-list "<c>.csv" [server <DMS>] [session <name>]`
+  and `start cdt execute deployment-plan "<p>.xml" candidates-list "<c>.csv" [server <DMS>] [session <name>]`.
+- **Filter file** (optional): plain text, one gateway name per line, narrows targets:
+  `-filter=<FilterFile.txt>` on generate/execute.
+- **Monitoring**: `watch -d cat $CDTDIR/CDT_status.txt` (full log) and
+  `$CDTDIR/CDT_status_brief.txt` (brief). These are the artifacts our reporting layer
+  should tail/parse rather than reinventing.
+
+**How our tool maps onto CDT** (keep wrappers thin — see [[architecture]]):
+- our `plan` / dry-run ≈ `-generate` + inspecting/ordering the CSV (no live changes)
+- our preparation phase ≈ `-preparations` / `-extended_preparations`
+- our `deploy --execute` ≈ `-execute`
+- cluster-aware ordering + health gating live in `orchestrator.py`/`checks.py`, realized
+  as the **CSV order** we hand CDT. (see [[safety-constraints]])
 
 **Typical end-to-end upgrade this tool orchestrates**
 1. Pre-checks: HA state, cluster member roles, connectivity, free disk, current
    versions. (see [[safety-constraints]])
 2. Patch the **management server** via CPUSE (local, one host, often HA pair).
-3. Stage package to the CDT repository on the management server.
-4. Deploy to **gateways** in batches via CDT, respecting cluster failover order.
-5. Post-checks: version confirmed, policy installed, cluster healthy, logs clean.
+3. Stage package + configure CDT XML on the management server.
+4. Generate + order the candidates CSV; optionally run preparations.
+5. Deploy to **gateways** in batches via CDT `-execute`, respecting cluster failover order.
+6. Post-checks: version confirmed, policy installed (incl. manual TP/QoS/Desktop if
+   needed), cluster healthy, logs clean.
 
 **How we reach the boxes:** SSH to Gaia (clish/expert) is the baseline transport;
 Gaia REST API and the Check Point Management API (`mgmt_cli`) are used where
