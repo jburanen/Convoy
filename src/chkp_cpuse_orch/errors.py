@@ -31,6 +31,18 @@ class CPUSEError(OrchestratorError):
     """A CPUSE / Deployment Agent operation failed on a Gaia host."""
 
 
+class StoreError(OrchestratorError):
+    """Local persistence (SQLite on the data volume) failed or is inconsistent."""
+
+
+class CredentialError(OrchestratorError):
+    """Credential store failure: missing credential, bad master key, or bad input."""
+
+
+class JobError(OrchestratorError):
+    """A background job could not be submitted or managed."""
+
+
 class PreCheckError(OrchestratorError):
     """A pre-deployment health check failed; the run must not proceed."""
 

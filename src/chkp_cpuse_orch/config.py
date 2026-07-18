@@ -37,6 +37,9 @@ class Paths(BaseModel):
     reports_dir: Path = Path("reports")
     logs_dir: Path = Path("logs")
     state_dir: Path = Path("state")
+    # SQLite DB for jobs / credential ciphertext / package metadata. In the
+    # container this lives on the bind-mounted /data volume (git-ignored).
+    db_path: Path = Path("state") / "orch.db"
 
 
 class Config(BaseModel):

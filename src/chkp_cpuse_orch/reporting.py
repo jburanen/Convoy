@@ -36,4 +36,5 @@ def configure_logging(*, level: int = logging.INFO, json_output: bool = False) -
 
 def get_logger(name: str) -> structlog.stdlib.BoundLogger:
     """Return a bound logger. Bind run-id / target context at call sites."""
-    return structlog.get_logger(name)
+    logger: structlog.stdlib.BoundLogger = structlog.get_logger(name)
+    return logger

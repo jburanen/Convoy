@@ -24,6 +24,8 @@ known_hosts
 secrets.*
 credentials.*
 .credentials
+# ...but the credential-store *source module* is code, not a secret:
+!src/chkp_cpuse_orch/credentials.py
 *.env
 .env
 .env.*
