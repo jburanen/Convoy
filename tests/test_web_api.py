@@ -289,6 +289,24 @@ def test_cdt_endpoints_locked_without_credentials(client: TestClient) -> None:
     assert "no SSH credential" in resp.json()["detail"]
 
 
+# -- provisioning -----------------------------------------------------------------
+
+
+def test_provision_renders_commands_without_plaintext(client: TestClient) -> None:
+    resp = client.post("/api/provision", json={"username": "svc-patch", "password": "s3cret-pw!"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["commands"][1] == "set user svc-patch gid 100 shell /bin/bash"
+    assert "s3cret-pw!" not in resp.text  # only the salted hash is echoed
+    assert any("clish -c" in n for n in body["notes"])
+
+
+def test_provision_rejects_bad_input(client: TestClient) -> None:
+    resp = client.post("/api/provision", json={"username": "BAD NAME", "password": "longenough"})
+    assert resp.status_code == 400
+    assert "invalid username" in resp.json()["detail"]
+
+
 # -- jobs -------------------------------------------------------------------------
 
 

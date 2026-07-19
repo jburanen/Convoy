@@ -47,6 +47,10 @@ class PackageError(OrchestratorError):
     """Package store failure: bad upload, checksum mismatch, or missing file."""
 
 
+class ProvisioningError(OrchestratorError):
+    """Invalid input for generating Gaia user-provisioning commands."""
+
+
 class PreCheckError(OrchestratorError):
     """A pre-deployment health check failed; the run must not proceed."""
 

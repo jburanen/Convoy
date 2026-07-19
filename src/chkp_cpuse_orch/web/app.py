@@ -51,6 +51,11 @@ from ..reporting import configure_logging, get_logger
 from ..services.cdt_ops import CDTService
 from ..services.common import ClientFactory, HostConnector
 from ..services.patching import PatchingService
+from ..services.provisioning import (
+    DEFAULT_UID,
+    PROVISIONING_NOTES,
+    render_gaia_user_commands,
+)
 from ..store import JobEvent, JobRecord, PackageRecord, Store
 
 logger = get_logger(__name__)
@@ -93,6 +98,12 @@ class ExecuteRequest(BaseModel):
 class CandidatesIn(BaseModel):
     header: list[str]
     rows: list[list[str]]  # row order == deployment order
+
+
+class ProvisionRequest(BaseModel):
+    username: str
+    password: str = Field(min_length=1)  # only hashed, never stored or echoed
+    uid: int = DEFAULT_UID
 
 
 # -- app factory -------------------------------------------------------------------
@@ -217,6 +228,16 @@ def _register_routes(app: FastAPI) -> None:
             "management_servers": len(service.management_servers()),
             "packages": len(request.app.state.packages.list()),
         }
+
+    # -- service-account provisioning (pure rendering; nothing stored) ---------
+
+    @app.post("/api/provision")
+    def provision(body: ProvisionRequest) -> dict[str, list[str]]:
+        try:
+            commands = render_gaia_user_commands(body.username, body.password, uid=body.uid)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        return {"commands": commands, "notes": PROVISIONING_NOTES}
 
     # -- servers -------------------------------------------------------------
 

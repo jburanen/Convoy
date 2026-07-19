@@ -26,6 +26,27 @@
 
 <main>
 
+  <!-- ==================== Service-account provisioning ================= -->
+  <section id="provision">
+    <h2>Provision access user</h2>
+    <p class="hint">
+      Generates the clish commands that create this tool's service account on a
+      management server — paste them into clish on <strong>each</strong> server.
+      The account's shell is <code>/bin/bash</code> so SCP package staging works
+      (the tool wraps its CPUSE commands in <code>clish&nbsp;-c</code> to match).
+      The password appears in the output only as a salted SHA-512 hash.
+      Afterwards, save the same username/password in the Credentials section below.
+    </p>
+    <form id="provision-form">
+      <input type="text" id="prov-username" placeholder="username (e.g. svc-patch)" required>
+      <input type="password" id="prov-password" placeholder="password (8+ chars)" required>
+      <input type="number" id="prov-uid" value="2600" min="1000" max="65000" title="uid">
+      <button type="submit">Generate commands</button>
+      <button type="button" id="prov-copy" class="small hidden">Copy to clipboard</button>
+    </form>
+    <pre id="prov-output" class="job-events mono hidden"></pre>
+  </section>
+
   <!-- ======================= Management servers ======================= -->
   <section id="servers">
     <h2>Management servers</h2>

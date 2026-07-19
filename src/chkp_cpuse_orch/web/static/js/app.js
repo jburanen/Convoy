@@ -72,6 +72,45 @@ function addChip(box, text, cls) {
   box.appendChild(chip);
 }
 
+/* ---------- 2b. service-account provisioning ---------- */
+
+document.getElementById("provision-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const passwordInput = document.getElementById("prov-password");
+  const output = document.getElementById("prov-output");
+  const copyBtn = document.getElementById("prov-copy");
+  try {
+    const resp = await api("/api/provision", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: document.getElementById("prov-username").value.trim(),
+        password: passwordInput.value,
+        uid: Number(document.getElementById("prov-uid").value) || 2600,
+      }),
+    });
+    passwordInput.value = ""; // plaintext leaves the page as soon as possible
+    output.textContent =
+      resp.commands.join("\n") +
+      "\n\n# " + resp.notes.join("\n# ");
+    output.classList.remove("hidden");
+    copyBtn.classList.remove("hidden");
+  } catch (e) {
+    toast("Generate failed: " + e.message);
+  }
+});
+
+document.getElementById("prov-copy").addEventListener("click", async () => {
+  const text = document.getElementById("prov-output").textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+    document.getElementById("prov-copy").textContent = "Copied";
+    setTimeout(() => { document.getElementById("prov-copy").textContent = "Copy to clipboard"; }, 1500);
+  } catch {
+    toast("Clipboard unavailable — select and copy manually.");
+  }
+});
+
 /* ---------- 3. servers ---------- */
 
 async function loadServers() {
