@@ -46,14 +46,38 @@ class Paths(BaseModel):
     inventory_path: Path = Path("inventory.yaml")
 
 
+class EnvironmentDef(BaseModel):
+    """One independent management environment: its own inventory of management
+    servers (and thus its own CDT-discovered gateways) and its own credential
+    namespace. Packages and the underlying database stay shared."""
+
+    name: str = Field(pattern=r"[a-z0-9][a-z0-9_-]{0,31}")
+    inventory: Path
+
+
+DEFAULT_ENVIRONMENT = "default"
+
+
 class Config(BaseModel):
     """Top-level tool configuration."""
 
     defaults: DeploymentDefaults = DeploymentDefaults()
     paths: Paths = Paths()
 
+    # Independent management environments. Empty → one implicit "default"
+    # environment backed by paths.inventory_path (backward compatible).
+    environments: list[EnvironmentDef] = Field(default_factory=list)
+
     # Name of the maintenance window policy to enforce (looked up elsewhere).
     maintenance_window: str | None = None
+
+    def resolved_environments(self) -> list[EnvironmentDef]:
+        if self.environments:
+            names = [e.name for e in self.environments]
+            if len(names) != len(set(names)):
+                raise ConfigError(f"duplicate environment names in config: {names}")
+            return self.environments
+        return [EnvironmentDef(name=DEFAULT_ENVIRONMENT, inventory=self.paths.inventory_path)]
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> Config:

@@ -14,6 +14,7 @@ from chkp_cpuse_orch.inventory import Host, Inventory, Role, Site
 from chkp_cpuse_orch.jobs import JobRunner
 from chkp_cpuse_orch.packages import PackageStore
 from chkp_cpuse_orch.services.cdt_ops import CDTService
+from chkp_cpuse_orch.services.common import EnvironmentRegistry, HostConnector
 from chkp_cpuse_orch.store import JobStatus, Store
 
 from .fakes import FakeTransport, make_factory
@@ -55,13 +56,13 @@ def service(store: Store, tmp_path: Path, transport: FakeTransport) -> CDTServic
             )
         ]
     )
+    registry = EnvironmentRegistry()
+    registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
     return CDTService(
-        inventory=inventory,
-        credentials=creds,
+        registry=registry,
         packages=packages,
         runner=JobRunner(store),
         poll_interval=0.01,  # fast execute polling in tests
-        client_factory=make_factory(transport),
     )
 
 
@@ -73,13 +74,13 @@ def _run(service: CDTService) -> None:
 
 
 def test_get_candidates(service: CDTService) -> None:
-    cands = service.get_candidates("mgmt-01")
+    cands = service.get_candidates("default", "mgmt-01")
     assert [r[0] for r in cands.rows] == ["fw-a1", "fw-a2"]
 
 
 def test_save_candidates_pushes_csv(service: CDTService, transport: FakeTransport) -> None:
     count = service.save_candidates(
-        "mgmt-01", CandidatesFile(header=["Object Name"], rows=[["fw-a2"], ["fw-a1"]])
+        "default", "mgmt-01", CandidatesFile(header=["Object Name"], rows=[["fw-a2"], ["fw-a1"]])
     )
     assert count == 2
     assert transport.puts[-1][1] == "/opt/CPcdt/orch_candidates.csv"
@@ -90,14 +91,14 @@ def test_save_candidates_refused_while_running(
 ) -> None:
     transport.responses["pgrep"] = (0, "")  # CDT process alive
     with pytest.raises(CDTError, match="refusing to change candidates"):
-        service.save_candidates("mgmt-01", CandidatesFile(header=["x"], rows=[["y"]]))
+        service.save_candidates("default", "mgmt-01", CandidatesFile(header=["x"], rows=[["y"]]))
 
 
 def test_get_status(service: CDTService, transport: FakeTransport) -> None:
     transport.responses["test -x"] = (0, "")
     transport.responses["pgrep"] = (1, "")
     transport.responses["CDT_status_brief"] = "idle since boot"
-    status = service.get_status("mgmt-01")
+    status = service.get_status("default", "mgmt-01")
     assert status == {"available": True, "running": False, "brief": "idle since boot"}
 
 
@@ -108,7 +109,7 @@ def test_stage_job_uploads_package_and_config(
     service: CDTService, store: Store, transport: FakeTransport
 ) -> None:
     transport.responses["stat -c %s"] = (1, "")  # not staged yet
-    job = service.submit_stage("mgmt-01", PKG)
+    job = service.submit_stage("default", "mgmt-01", PKG)
     _run(service)
 
     finished = store.get_job(job.id)
@@ -122,7 +123,7 @@ def test_stage_job_skips_upload_when_size_matches(
     service: CDTService, store: Store, transport: FakeTransport
 ) -> None:
     transport.responses["stat -c %s"] = (0, str(len(PKG_CONTENT)))
-    job = service.submit_stage("mgmt-01", PKG)
+    job = service.submit_stage("default", "mgmt-01", PKG)
     _run(service)
 
     assert store.get_job(job.id).status is JobStatus.SUCCEEDED
@@ -135,7 +136,7 @@ def test_stage_job_skips_upload_when_size_matches(
 def test_generate_job_reports_row_count(
     service: CDTService, store: Store, transport: FakeTransport
 ) -> None:
-    job = service.submit_generate("mgmt-01")
+    job = service.submit_generate("default", "mgmt-01")
     _run(service)
 
     assert store.get_job(job.id).status is JobStatus.SUCCEEDED
@@ -147,7 +148,7 @@ def test_generate_job_reports_row_count(
 def test_prepare_job_extended_flag(
     service: CDTService, store: Store, transport: FakeTransport
 ) -> None:
-    job = service.submit_prepare("mgmt-01", extended=True)
+    job = service.submit_prepare("default", "mgmt-01", extended=True)
     _run(service)
 
     assert store.get_job(job.id).status is JobStatus.SUCCEEDED
@@ -156,7 +157,7 @@ def test_prepare_job_extended_flag(
 
 def test_execute_requires_confirmation(service: CDTService) -> None:
     with pytest.raises(JobError, match="explicit confirmation"):
-        service.submit_execute("mgmt-01", confirmed=False)
+        service.submit_execute("default", "mgmt-01", confirmed=False)
 
 
 def test_execute_job_polls_until_done(
@@ -167,7 +168,7 @@ def test_execute_job_polls_until_done(
     transport.responses["nohup"] = "started"
     transport.responses["CDT_status_brief"] = "2 of 2 succeeded"
 
-    job = service.submit_execute("mgmt-01", confirmed=True)
+    job = service.submit_execute("default", "mgmt-01", confirmed=True)
     _run(service)
 
     finished = store.get_job(job.id)
@@ -184,7 +185,7 @@ def test_execute_job_fails_when_status_reports_failures(
     transport.responses["nohup"] = "started"
     transport.responses["CDT_status_brief"] = "1 succeeded, 1 Failed"
 
-    job = service.submit_execute("mgmt-01", confirmed=True)
+    job = service.submit_execute("default", "mgmt-01", confirmed=True)
     _run(service)
 
     finished = store.get_job(job.id)

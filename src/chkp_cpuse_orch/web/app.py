@@ -49,7 +49,7 @@ from ..jobs import JobRunner
 from ..packages import PackageStore
 from ..reporting import configure_logging, get_logger
 from ..services.cdt_ops import CDTService
-from ..services.common import ClientFactory, HostConnector
+from ..services.common import ClientFactory, EnvironmentRegistry, HostConnector
 from ..services.patching import PatchingService
 from ..services.provisioning import (
     DEFAULT_UID,
@@ -122,12 +122,6 @@ def create_app(
         store = Store(cfg.paths.db_path)
         packages = PackageStore(store, cfg.paths.packages_dir)
 
-        inventory = Inventory()
-        if cfg.paths.inventory_path.is_file():
-            inventory = Inventory.load(cfg.paths.inventory_path)
-        else:
-            logger.warning("no inventory file", path=str(cfg.paths.inventory_path))
-
         credentials: CredentialStore | None = None
         try:
             credentials = CredentialStore(store, load_master_key())
@@ -137,26 +131,32 @@ def create_app(
             logger.warning("credential store locked", reason=str(exc))
             app.state.credentials_error = str(exc)
 
+        # Independent management environments: each gets its own inventory and
+        # credential namespace (see .claude/memory/patching-web-design.md).
+        registry = EnvironmentRegistry()
+        for env_def in cfg.resolved_environments():
+            inventory = Inventory()
+            if env_def.inventory.is_file():
+                inventory = Inventory.load(env_def.inventory)
+            else:
+                logger.warning(
+                    "no inventory file for environment",
+                    environment=env_def.name,
+                    path=str(env_def.inventory),
+                )
+            registry.add(
+                env_def.name,
+                HostConnector(inventory, credentials, client_factory, environment=env_def.name),
+            )
+
         runner = JobRunner(store)
-        connector = HostConnector(inventory, credentials, client_factory)
-        service = PatchingService(
-            inventory=inventory,
-            credentials=credentials,
-            packages=packages,
-            runner=runner,
-            connector=connector,
-        )
-        cdt_service = CDTService(
-            inventory=inventory,
-            credentials=credentials,
-            packages=packages,
-            runner=runner,
-            connector=connector,
-        )
+        service = PatchingService(registry=registry, packages=packages, runner=runner)
+        cdt_service = CDTService(registry=registry, packages=packages, runner=runner)
 
         app.state.store = store
         app.state.packages = packages
         app.state.credentials = credentials
+        app.state.registry = registry
         app.state.runner = runner
         app.state.service = service
         app.state.cdt = cdt_service
@@ -186,6 +186,19 @@ def _service(request: Request) -> PatchingService:
     return service
 
 
+def _registry(request: Request) -> EnvironmentRegistry:
+    registry: EnvironmentRegistry = request.app.state.registry
+    return registry
+
+
+def _require_env(request: Request, env: str) -> None:
+    """404 (via _map_error) when the environment doesn't exist."""
+    try:
+        _registry(request).get(env)
+    except InventoryError as exc:
+        raise _map_error(exc) from exc
+
+
 def _credentials_or_503(request: Request) -> CredentialStore:
     credentials: CredentialStore | None = request.app.state.credentials
     if credentials is None:
@@ -199,7 +212,8 @@ def _map_error(exc: OrchestratorError) -> HTTPException:
     an internal operator tool, not a public API."""
     status = 400
     if isinstance(exc, InventoryError | PackageError):
-        status = 404 if "not found" in str(exc) or "no such" in str(exc) else 400
+        missing = any(s in str(exc) for s in ("not found", "no such", "unknown environment"))
+        status = 404 if missing else 400
     elif isinstance(exc, CredentialError):
         status = 503 if "locked" in str(exc) else 409
     elif isinstance(exc, CDTError):
@@ -225,9 +239,22 @@ def _register_routes(app: FastAPI) -> None:
         return {
             "version": __version__,
             "credentials_unlocked": request.app.state.credentials is not None,
-            "management_servers": len(service.management_servers()),
+            "environments": _registry(request).names(),
+            "management_servers": sum(
+                len(service.management_servers(env)) for env in _registry(request).names()
+            ),
             "packages": len(request.app.state.packages.list()),
         }
+
+    # -- environments ----------------------------------------------------------
+
+    @app.get("/api/environments")
+    def environments(request: Request) -> list[dict[str, Any]]:
+        service = _service(request)
+        return [
+            {"name": env, "management_servers": len(service.management_servers(env))}
+            for env in _registry(request).names()
+        ]
 
     # -- service-account provisioning (pure rendering; nothing stored) ---------
 
@@ -239,28 +266,31 @@ def _register_routes(app: FastAPI) -> None:
             raise _map_error(exc) from exc
         return {"commands": commands, "notes": PROVISIONING_NOTES}
 
-    # -- servers -------------------------------------------------------------
+    # -- servers (environment-scoped) ------------------------------------------
 
-    @app.get("/api/servers")
-    def servers(request: Request) -> list[dict[str, Any]]:
+    @app.get("/api/env/{env}/servers")
+    def servers(env: str, request: Request) -> list[dict[str, Any]]:
         service = _service(request)
-        return [
-            {
-                "name": h.name,
-                "address": h.address,
-                "role": h.role.value,
-                "ssh_user": h.ssh_user,
-                "credentials": service.credential_kinds(h.name),
-            }
-            for h in service.management_servers()
-        ]
+        try:
+            return [
+                {
+                    "name": h.name,
+                    "address": h.address,
+                    "role": h.role.value,
+                    "ssh_user": h.ssh_user,
+                    "credentials": service.credential_kinds(env, h.name),
+                }
+                for h in service.management_servers(env)
+            ]
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
 
-    @app.get("/api/servers/{name}/state")
-    async def server_state(name: str, request: Request) -> dict[str, Any]:
+    @app.get("/api/env/{env}/servers/{name}/state")
+    async def server_state(env: str, name: str, request: Request) -> dict[str, Any]:
         _credentials_or_503(request)
         service = _service(request)
         try:
-            detected = await asyncio.to_thread(service.detect, name)
+            detected = await asyncio.to_thread(service.detect, env, name)
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
         return {
@@ -278,20 +308,24 @@ def _register_routes(app: FastAPI) -> None:
             ],
         }
 
-    @app.post("/api/servers/{name}/import", status_code=202)
-    def server_import(name: str, body: ImportRequest, request: Request) -> JobRecord:
+    @app.post("/api/env/{env}/servers/{name}/import", status_code=202)
+    def server_import(env: str, name: str, body: ImportRequest, request: Request) -> JobRecord:
         _credentials_or_503(request)
         try:
-            return _service(request).submit_import(name, body.package)
+            return _service(request).submit_import(env, name, body.package)
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
-    @app.post("/api/servers/{name}/install", status_code=202)
-    def server_install(name: str, body: InstallRequest, request: Request) -> JobRecord:
+    @app.post("/api/env/{env}/servers/{name}/install", status_code=202)
+    def server_install(env: str, name: str, body: InstallRequest, request: Request) -> JobRecord:
         _credentials_or_503(request)
         try:
             return _service(request).submit_install(
-                name, body.package_id, confirmed=body.confirmed, verify_first=body.verify_first
+                env,
+                name,
+                body.package_id,
+                confirmed=body.confirmed,
+                verify_first=body.verify_first,
             )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
@@ -322,14 +356,16 @@ def _register_routes(app: FastAPI) -> None:
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
-    # -- credentials (never echo secrets) --------------------------------------
+    # -- credentials (environment-scoped; never echo secrets) -------------------
 
-    @app.get("/api/credentials")
-    def list_credentials(request: Request) -> list[CredentialInfo]:
-        return _credentials_or_503(request).list()
+    @app.get("/api/env/{env}/credentials")
+    def list_credentials(env: str, request: Request) -> list[CredentialInfo]:
+        _require_env(request, env)
+        return _credentials_or_503(request).list(environment=env)
 
-    @app.put("/api/credentials", status_code=201)
-    def put_credential(body: CredentialIn, request: Request) -> CredentialInfo:
+    @app.put("/api/env/{env}/credentials", status_code=201)
+    def put_credential(env: str, body: CredentialIn, request: Request) -> CredentialInfo:
+        _require_env(request, env)
         store = _credentials_or_503(request)
         try:
             return store.put(
@@ -338,14 +374,18 @@ def _register_routes(app: FastAPI) -> None:
                     kind=body.kind,
                     username=body.username,
                     secret=SecretStr(body.secret),
+                    environment=env,
                 )
             )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
-    @app.delete("/api/credentials/{host}/{kind}")
-    def delete_credential(host: str, kind: CredentialKind, request: Request) -> dict[str, bool]:
-        return {"deleted": _credentials_or_503(request).delete(host, kind)}
+    @app.delete("/api/env/{env}/credentials/{host}/{kind}")
+    def delete_credential(
+        env: str, host: str, kind: CredentialKind, request: Request
+    ) -> dict[str, bool]:
+        _require_env(request, env)
+        return {"deleted": _credentials_or_503(request).delete(host, kind, environment=env)}
 
     # -- CDT (gateway fleet, driven from a management server) --------------------
 
@@ -353,31 +393,32 @@ def _register_routes(app: FastAPI) -> None:
         cdt: CDTService = request.app.state.cdt
         return cdt
 
-    @app.get("/api/cdt/{name}/status")
-    async def cdt_status(name: str, request: Request) -> dict[str, Any]:
+    @app.get("/api/env/{env}/cdt/{name}/status")
+    async def cdt_status(env: str, name: str, request: Request) -> dict[str, Any]:
         _credentials_or_503(request)
         try:
-            return await asyncio.to_thread(_cdt(request).get_status, name)
+            return await asyncio.to_thread(_cdt(request).get_status, env, name)
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
-    @app.get("/api/cdt/{name}/candidates")
-    async def cdt_candidates(name: str, request: Request) -> dict[str, Any]:
+    @app.get("/api/env/{env}/cdt/{name}/candidates")
+    async def cdt_candidates(env: str, name: str, request: Request) -> dict[str, Any]:
         _credentials_or_503(request)
         try:
-            cands = await asyncio.to_thread(_cdt(request).get_candidates, name)
+            cands = await asyncio.to_thread(_cdt(request).get_candidates, env, name)
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
         return {"header": cands.header, "rows": cands.rows}
 
-    @app.put("/api/cdt/{name}/candidates")
+    @app.put("/api/env/{env}/cdt/{name}/candidates")
     async def cdt_save_candidates(
-        name: str, body: CandidatesIn, request: Request
+        env: str, name: str, body: CandidatesIn, request: Request
     ) -> dict[str, int]:
         _credentials_or_503(request)
         try:
             count = await asyncio.to_thread(
                 _cdt(request).save_candidates,
+                env,
                 name,
                 CandidatesFile(header=body.header, rows=body.rows),
             )
@@ -385,35 +426,35 @@ def _register_routes(app: FastAPI) -> None:
             raise _map_error(exc) from exc
         return {"rows": count}
 
-    @app.post("/api/cdt/{name}/stage", status_code=202)
-    def cdt_stage(name: str, body: StageRequest, request: Request) -> JobRecord:
+    @app.post("/api/env/{env}/cdt/{name}/stage", status_code=202)
+    def cdt_stage(env: str, name: str, body: StageRequest, request: Request) -> JobRecord:
         _credentials_or_503(request)
         try:
-            return _cdt(request).submit_stage(name, body.package)
+            return _cdt(request).submit_stage(env, name, body.package)
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
-    @app.post("/api/cdt/{name}/generate", status_code=202)
-    def cdt_generate(name: str, request: Request) -> JobRecord:
+    @app.post("/api/env/{env}/cdt/{name}/generate", status_code=202)
+    def cdt_generate(env: str, name: str, request: Request) -> JobRecord:
         _credentials_or_503(request)
         try:
-            return _cdt(request).submit_generate(name)
+            return _cdt(request).submit_generate(env, name)
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
-    @app.post("/api/cdt/{name}/prepare", status_code=202)
-    def cdt_prepare(name: str, body: PrepareRequest, request: Request) -> JobRecord:
+    @app.post("/api/env/{env}/cdt/{name}/prepare", status_code=202)
+    def cdt_prepare(env: str, name: str, body: PrepareRequest, request: Request) -> JobRecord:
         _credentials_or_503(request)
         try:
-            return _cdt(request).submit_prepare(name, extended=body.extended)
+            return _cdt(request).submit_prepare(env, name, extended=body.extended)
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
-    @app.post("/api/cdt/{name}/execute", status_code=202)
-    def cdt_execute(name: str, body: ExecuteRequest, request: Request) -> JobRecord:
+    @app.post("/api/env/{env}/cdt/{name}/execute", status_code=202)
+    def cdt_execute(env: str, name: str, body: ExecuteRequest, request: Request) -> JobRecord:
         _credentials_or_503(request)
         try:
-            return _cdt(request).submit_execute(name, confirmed=body.confirmed)
+            return _cdt(request).submit_execute(env, name, confirmed=body.confirmed)
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 

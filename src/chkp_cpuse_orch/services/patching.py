@@ -21,15 +21,22 @@ import posixpath
 from dataclasses import dataclass, field
 
 from ..cpuse import CPUSE, DEFAULT_STAGING_DIR, GaiaShell, PackageScope, PackageState
-from ..credentials import CredentialStore
 from ..errors import JobError, TransportError
-from ..inventory import Host, Inventory
+from ..inventory import Host
 from ..jobs import JobContext, JobRunner
 from ..packages import PackageStore
 from ..store import JobRecord
-from .common import ClientFactory, HostConnector, Transport
+from .common import ClientFactory, EnvironmentRegistry, HostConnector, Transport
 
-__all__ = ["JOB_IMPORT", "JOB_INSTALL", "ClientFactory", "PatchingService", "Transport"]
+__all__ = [
+    "JOB_IMPORT",
+    "JOB_INSTALL",
+    "ClientFactory",
+    "EnvironmentRegistry",
+    "HostConnector",
+    "PatchingService",
+    "Transport",
+]
 
 JOB_IMPORT = "mgmt.import"
 JOB_INSTALL = "mgmt.install"
@@ -45,22 +52,19 @@ class DetectedState:
 
 
 class PatchingService:
-    """Per-management-server CPUSE operations over the shared core."""
+    """Per-management-server CPUSE operations, across independent environments."""
 
     def __init__(
         self,
         *,
-        inventory: Inventory,
-        credentials: CredentialStore | None,
+        registry: EnvironmentRegistry,
         packages: PackageStore,
         runner: JobRunner,
         staging_dir: str = DEFAULT_STAGING_DIR,
         shell: GaiaShell = GaiaShell.EXPERT,
-        client_factory: ClientFactory | None = None,
-        connector: HostConnector | None = None,
     ) -> None:
         self.runner = runner
-        self.connector = connector or HostConnector(inventory, credentials, client_factory)
+        self.registry = registry
         self._packages = packages
         self._staging_dir = staging_dir
         self._shell = shell
@@ -69,18 +73,19 @@ class PatchingService:
 
     # -- queries -----------------------------------------------------------------
 
-    def management_servers(self) -> list[Host]:
-        return self.connector.management_servers()
+    def management_servers(self, environment: str) -> list[Host]:
+        return self.registry.get(environment).management_servers()
 
-    def credential_kinds(self, host_name: str) -> list[str]:
-        return self.connector.credential_kinds(host_name)
+    def credential_kinds(self, environment: str, host_name: str) -> list[str]:
+        return self.registry.get(environment).credential_kinds(host_name)
 
-    def detect(self, host_name: str) -> DetectedState:
+    def detect(self, environment: str, host_name: str) -> DetectedState:
         """Live-query CPUSE state. Blocking (SSH) — call via ``asyncio.to_thread``
         from async contexts. Always detected state, never assumed."""
-        host = self.connector.mgmt_host(host_name)
-        self.connector.require_ssh_credential(host)
-        client = self.connector.connect(host)
+        connector = self.registry.get(environment)
+        host = connector.mgmt_host(host_name)
+        connector.require_ssh_credential(host)
+        client = connector.connect(host)
         try:
             cpuse = CPUSE(client, shell=self._shell)
             return DetectedState(
@@ -93,17 +98,27 @@ class PatchingService:
 
     # -- job submission ------------------------------------------------------------
 
-    def submit_import(self, host_name: str, package_filename: str) -> JobRecord:
+    def submit_import(self, environment: str, host_name: str, package_filename: str) -> JobRecord:
         """Enqueue: SFTP the stored package to the host + `installer import local`."""
-        host = self.connector.mgmt_host(host_name)
-        self.connector.require_ssh_credential(host)
+        connector = self.registry.get(environment)
+        host = connector.mgmt_host(host_name)
+        connector.require_ssh_credential(host)
         self._packages.path_for(package_filename)  # validates record + content file
         return self.runner.submit(
-            JOB_IMPORT, target=host.name, params={"package": package_filename}
+            JOB_IMPORT,
+            target=host.name,
+            params={"package": package_filename},
+            environment=environment,
         )
 
     def submit_install(
-        self, host_name: str, package_id: str, *, confirmed: bool, verify_first: bool = True
+        self,
+        environment: str,
+        host_name: str,
+        package_id: str,
+        *,
+        confirmed: bool,
+        verify_first: bool = True,
     ) -> JobRecord:
         """Enqueue verify+install of an imported package. ``confirmed`` must be
         True — installs can reboot a management server; the UI collects an
@@ -112,12 +127,14 @@ class PatchingService:
             raise JobError(
                 "install requires explicit confirmation — it may reboot the management server"
             )
-        host = self.connector.mgmt_host(host_name)
-        self.connector.require_ssh_credential(host)
+        connector = self.registry.get(environment)
+        host = connector.mgmt_host(host_name)
+        connector.require_ssh_credential(host)
         return self.runner.submit(
             JOB_INSTALL,
             target=host.name,
             params={"package_id": package_id, "verify_first": verify_first},
+            environment=environment,
         )
 
     # -- job handlers (async wrappers over blocking SSH work) ----------------------
@@ -129,13 +146,14 @@ class PatchingService:
         await asyncio.to_thread(self._do_install, ctx)
 
     def _do_import(self, ctx: JobContext) -> None:
-        host = self.connector.mgmt_host(ctx.job.target or "")
+        connector = self.registry.get(ctx.job.environment)
+        host = connector.mgmt_host(ctx.job.target or "")
         package = str(ctx.job.params["package"])
         local_path = self._packages.path_for(package)
         local_size = local_path.stat().st_size
         remote_path = posixpath.join(self._staging_dir, package)
 
-        client = self.connector.connect(host)
+        client = connector.connect(host)
         try:
             ctx.log(f"uploading {package} ({local_size} bytes) to {host.name}:{remote_path}")
             reporter = ProgressReporter(ctx, local_size)
@@ -154,11 +172,12 @@ class PatchingService:
             client.close()
 
     def _do_install(self, ctx: JobContext) -> None:
-        host = self.connector.mgmt_host(ctx.job.target or "")
+        connector = self.registry.get(ctx.job.environment)
+        host = connector.mgmt_host(ctx.job.target or "")
         package_id = str(ctx.job.params["package_id"])
         verify_first = bool(ctx.job.params.get("verify_first", True))
 
-        client = self.connector.connect(host)
+        client = connector.connect(host)
         try:
             cpuse = CPUSE(client, shell=self._shell)
             if verify_first:

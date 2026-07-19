@@ -20,5 +20,15 @@ paths:
   #   packages_dir: /data/packages
   #   inventory_path: /data/inventory.yaml
 
+# Independent management environments: each has its own inventory of management
+# servers (gateways are discovered per-environment via CDT) and its own
+# credential namespace. Packages and the database are shared. Omit this block
+# entirely for a single environment backed by paths.inventory_path.
+# environments:
+#   - name: corp
+#     inventory: /data/inventories/corp.yaml
+#   - name: dmz
+#     inventory: /data/inventories/dmz.yaml
+
 # Name of the approved maintenance window to enforce (looked up at runtime).
 maintenance_window: null

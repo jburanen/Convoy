@@ -12,6 +12,7 @@ from chkp_cpuse_orch.errors import CredentialError, InventoryError, JobError, Pa
 from chkp_cpuse_orch.inventory import Host, Inventory, Role, Site
 from chkp_cpuse_orch.jobs import JobRunner
 from chkp_cpuse_orch.packages import PackageStore
+from chkp_cpuse_orch.services.common import EnvironmentRegistry, HostConnector
 from chkp_cpuse_orch.services.patching import PatchingService
 from chkp_cpuse_orch.store import JobStatus, Store
 
@@ -81,13 +82,9 @@ def service(
     inventory: Inventory,
     transport: FakeTransport,
 ) -> PatchingService:
-    return PatchingService(
-        inventory=inventory,
-        credentials=creds,
-        packages=packages,
-        runner=JobRunner(store),
-        client_factory=make_factory(transport),
-    )
+    registry = EnvironmentRegistry()
+    registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
+    return PatchingService(registry=registry, packages=packages, runner=JobRunner(store))
 
 
 def _run(service: PatchingService) -> None:
@@ -98,13 +95,13 @@ def _run(service: PatchingService) -> None:
 
 
 def test_management_servers_excludes_gateways(service: PatchingService) -> None:
-    assert [h.name for h in service.management_servers()] == ["mgmt-01", "mgmt-02"]
+    assert [h.name for h in service.management_servers("default")] == ["mgmt-01", "mgmt-02"]
 
 
 def test_detect_parses_live_state_and_closes(
     service: PatchingService, transport: FakeTransport
 ) -> None:
-    detected = service.detect("mgmt-01")
+    detected = service.detect("default", "mgmt-01")
     assert detected.agent_build == DA_BUILD
     assert [p.identifier for p in detected.packages] == [
         "Check_Point_R81_20_JUMBO_HF_MAIN_Bundle_T89_FULL.tgz",
@@ -115,12 +112,12 @@ def test_detect_parses_live_state_and_closes(
 
 def test_detect_requires_credentials(service: PatchingService) -> None:
     with pytest.raises(CredentialError, match="no SSH credential"):
-        service.detect("mgmt-02")  # inventory has it, credential store doesn't
+        service.detect("default", "mgmt-02")  # inventory has it, credential store doesn't
 
 
 def test_credential_kinds_secret_free_summary(service: PatchingService) -> None:
-    assert service.credential_kinds("mgmt-01") == ["ssh_password"]
-    assert service.credential_kinds("mgmt-02") == []
+    assert service.credential_kinds("default", "mgmt-01") == ["ssh_password"]
+    assert service.credential_kinds("default", "mgmt-02") == []
 
 
 # -- submission validation --------------------------------------------------------
@@ -128,19 +125,19 @@ def test_credential_kinds_secret_free_summary(service: PatchingService) -> None:
 
 def test_submit_import_rejects_unknown_and_gateway_hosts(service: PatchingService) -> None:
     with pytest.raises(InventoryError, match="not found"):
-        service.submit_import("nope", PKG)
+        service.submit_import("default", "nope", PKG)
     with pytest.raises(InventoryError, match="patched via CDT"):
-        service.submit_import("fw-01", PKG)
+        service.submit_import("default", "fw-01", PKG)
 
 
 def test_submit_import_rejects_missing_package(service: PatchingService) -> None:
     with pytest.raises(PackageError, match="no such package"):
-        service.submit_import("mgmt-01", "ghost.tgz")
+        service.submit_import("default", "mgmt-01", "ghost.tgz")
 
 
 def test_submit_install_requires_confirmation(service: PatchingService) -> None:
     with pytest.raises(JobError, match="explicit confirmation"):
-        service.submit_install("mgmt-01", "Pkg", confirmed=False)
+        service.submit_install("default", "mgmt-01", "Pkg", confirmed=False)
 
 
 # -- import job -------------------------------------------------------------------
@@ -149,7 +146,7 @@ def test_submit_install_requires_confirmation(service: PatchingService) -> None:
 def test_import_job_uploads_then_imports(
     service: PatchingService, store: Store, transport: FakeTransport
 ) -> None:
-    job = service.submit_import("mgmt-01", PKG)
+    job = service.submit_import("default", "mgmt-01", PKG)
     _run(service)
 
     finished = store.get_job(job.id)
@@ -170,7 +167,7 @@ def test_import_job_fails_closed_on_size_mismatch(
     service: PatchingService, store: Store, transport: FakeTransport
 ) -> None:
     transport.put_size = lambda local: 1  # remote reports a short file
-    job = service.submit_import("mgmt-01", PKG)
+    job = service.submit_import("default", "mgmt-01", PKG)
     _run(service)
 
     finished = store.get_job(job.id)
@@ -186,7 +183,7 @@ def test_import_job_fails_closed_on_size_mismatch(
 def test_install_job_verifies_then_installs(
     service: PatchingService, store: Store, transport: FakeTransport
 ) -> None:
-    job = service.submit_install("mgmt-01", "Check_Point_R81_20_T89", confirmed=True)
+    job = service.submit_install("default", "mgmt-01", "Check_Point_R81_20_T89", confirmed=True)
     _run(service)
 
     assert store.get_job(job.id).status is JobStatus.SUCCEEDED
@@ -199,7 +196,7 @@ def test_install_job_can_skip_verify(
     service: PatchingService, store: Store, transport: FakeTransport
 ) -> None:
     job = service.submit_install(
-        "mgmt-01", "Check_Point_R81_20_T89", confirmed=True, verify_first=False
+        "default", "mgmt-01", "Check_Point_R81_20_T89", confirmed=True, verify_first=False
     )
     _run(service)
 
@@ -211,7 +208,7 @@ def test_failed_installer_command_fails_the_job(
     service: PatchingService, store: Store, transport: FakeTransport
 ) -> None:
     transport.fail_rc = 1
-    job = service.submit_install("mgmt-01", "Pkg-1", confirmed=True)
+    job = service.submit_install("default", "mgmt-01", "Pkg-1", confirmed=True)
     _run(service)
 
     finished = store.get_job(job.id)
@@ -230,14 +227,32 @@ def test_wildcard_credential_fallback(
     transport: FakeTransport,
 ) -> None:
     creds.put(Credential(host="*", kind=CredentialKind.SSH_PASSWORD, secret=SecretStr("fleet-pw")))
-    runner = JobRunner(store)
-    service = PatchingService(
-        inventory=inventory,
-        credentials=creds,
-        packages=packages,
-        runner=runner,
-        client_factory=make_factory(transport),
-    )
+    registry = EnvironmentRegistry()
+    registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
+    service = PatchingService(registry=registry, packages=packages, runner=JobRunner(store))
     # mgmt-02 has no host-specific credential; the "*" default satisfies it.
-    detected = service.detect("mgmt-02")
+    detected = service.detect("default", "mgmt-02")
     assert detected.agent_build == DA_BUILD
+
+
+def test_wildcard_credential_never_crosses_environments(
+    store: Store,
+    creds: CredentialStore,
+    packages: PackageStore,
+    inventory: Inventory,
+    transport: FakeTransport,
+) -> None:
+    # A "*" credential stored in another environment must NOT satisfy this one.
+    creds.put(
+        Credential(
+            host="*",
+            kind=CredentialKind.SSH_PASSWORD,
+            secret=SecretStr("other-env-pw"),
+            environment="other",
+        )
+    )
+    registry = EnvironmentRegistry()
+    registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
+    service = PatchingService(registry=registry, packages=packages, runner=JobRunner(store))
+    with pytest.raises(CredentialError, match="no SSH credential"):
+        service.detect("default", "mgmt-02")

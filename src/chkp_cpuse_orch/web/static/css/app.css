@@ -55,7 +55,20 @@ header { padding-top: 1.5rem; }
 header h1 { margin: 0; font-size: 1.5rem; }
 .subtitle { margin: 0.15rem 0 0.75rem; color: var(--muted); }
 
-footer { padding: 2rem 1.25rem; }
+footer {
+  padding: 2rem 1.25rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+#footer-repo {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--muted);
+  text-decoration: none; /* underline appears on hover only */
+}
+#footer-repo:hover { text-decoration: underline; color: var(--text); }
 
 /* ---- status chips (top of page) ---- */
 #status-chips { display: flex; gap: 0.5rem; flex-wrap: wrap; }
@@ -67,6 +80,15 @@ footer { padding: 2rem 1.25rem; }
   font-size: 0.85rem;
 }
 .chip.warn { color: var(--warn); border-color: var(--warn); }
+
+/* ---- environment picker ---- */
+#env-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.6rem;
+}
+#env-picker { font-weight: 600; }
 
 /* ---- tabs ---- */
 #tabs {

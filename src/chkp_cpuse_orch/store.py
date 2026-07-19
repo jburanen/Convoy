@@ -54,6 +54,7 @@ class JobRecord(BaseModel):
     id: str = Field(default_factory=new_id)
     kind: str
     target: str | None = None  # inventory Host.name this job acts on
+    environment: str = "default"  # which management environment it ran against
     params: dict[str, Any] = Field(default_factory=dict)
     status: JobStatus = JobStatus.PENDING
     created_at: datetime = Field(default_factory=utcnow)
@@ -88,7 +89,8 @@ class CredentialRecord(BaseModel):
     """Ciphertext row — the store never sees plaintext secrets."""
 
     id: str = Field(default_factory=new_id)
-    host: str  # inventory Host.name, or "*" for a fleet-wide default
+    environment: str = "default"  # credential namespaces are per-environment
+    host: str  # inventory Host.name, or "*" for an environment-wide default
     kind: str  # CredentialKind value; kept as str so the schema stays dumb
     username: str | None = None
     ciphertext: bytes
@@ -150,6 +152,31 @@ _MIGRATIONS: tuple[str, ...] = (
         created_at TEXT NOT NULL
     );
     """,
+    # v3: independent management environments. Credentials get an environment
+    # namespace (unique key rebuilt — SQLite can't alter constraints in place);
+    # jobs record which environment they ran against. Existing rows land in
+    # 'default'. Packages stay shared by design.
+    """
+    ALTER TABLE jobs ADD COLUMN environment TEXT NOT NULL DEFAULT 'default';
+
+    CREATE TABLE credentials_v3 (
+        id          TEXT PRIMARY KEY,
+        environment TEXT NOT NULL DEFAULT 'default',
+        host        TEXT NOT NULL,
+        kind        TEXT NOT NULL,
+        username    TEXT,
+        ciphertext  BLOB NOT NULL,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL,
+        UNIQUE (environment, host, kind)
+    );
+    INSERT INTO credentials_v3
+        (id, environment, host, kind, username, ciphertext, created_at, updated_at)
+        SELECT id, 'default', host, kind, username, ciphertext, created_at, updated_at
+        FROM credentials;
+    DROP TABLE credentials;
+    ALTER TABLE credentials_v3 RENAME TO credentials;
+    """,
 )
 
 
@@ -207,13 +234,14 @@ class Store:
         now = utcnow()
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO credentials (id, host, kind, username, ciphertext,"
-                " created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT (host, kind) DO UPDATE SET"
+                "INSERT INTO credentials (id, environment, host, kind, username, ciphertext,"
+                " created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT (environment, host, kind) DO UPDATE SET"
                 " username = excluded.username, ciphertext = excluded.ciphertext,"
                 " updated_at = excluded.updated_at",
                 (
                     rec.id,
+                    rec.environment,
                     rec.host,
                     rec.kind,
                     rec.username,
@@ -222,31 +250,45 @@ class Store:
                     now.isoformat(),
                 ),
             )
-        stored = self.get_credential(rec.host, rec.kind)
+        stored = self.get_credential(rec.host, rec.kind, environment=rec.environment)
         assert stored is not None  # just written
         return stored
 
-    def get_credential(self, host: str, kind: str) -> CredentialRecord | None:
+    def get_credential(
+        self, host: str, kind: str, environment: str = "default"
+    ) -> CredentialRecord | None:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT * FROM credentials WHERE host = ? AND kind = ?", (host, kind)
+                "SELECT * FROM credentials WHERE environment = ? AND host = ? AND kind = ?",
+                (environment, host, kind),
             ).fetchone()
         return None if row is None else _credential_from_row(row)
 
-    def list_credentials(self, host: str | None = None) -> list[CredentialRecord]:
+    def list_credentials(
+        self, host: str | None = None, environment: str | None = None
+    ) -> list[CredentialRecord]:
         query = "SELECT * FROM credentials"
-        args: tuple[Any, ...] = ()
+        clauses: list[str] = []
+        args: list[Any] = []
         if host is not None:
-            query += " WHERE host = ?"
-            args = (host,)
-        query += " ORDER BY host, kind"
+            clauses.append("host = ?")
+            args.append(host)
+        if environment is not None:
+            clauses.append("environment = ?")
+            args.append(environment)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY environment, host, kind"
         with self._connect() as conn:
-            rows = conn.execute(query, args).fetchall()
+            rows = conn.execute(query, tuple(args)).fetchall()
         return [_credential_from_row(r) for r in rows]
 
-    def delete_credential(self, host: str, kind: str) -> bool:
+    def delete_credential(self, host: str, kind: str, environment: str = "default") -> bool:
         with self._connect() as conn:
-            cur = conn.execute("DELETE FROM credentials WHERE host = ? AND kind = ?", (host, kind))
+            cur = conn.execute(
+                "DELETE FROM credentials WHERE environment = ? AND host = ? AND kind = ?",
+                (environment, host, kind),
+            )
         return cur.rowcount > 0
 
     # -- packages (metadata; file content lives in packages.py's directory) ------
@@ -286,13 +328,14 @@ class Store:
     def insert_job(self, job: JobRecord) -> None:
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO jobs (id, kind, target, params, status, created_at,"
+                "INSERT INTO jobs (id, kind, target, environment, params, status, created_at,"
                 " started_at, finished_at, error, cancel_requested)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     job.id,
                     job.kind,
                     job.target,
+                    job.environment,
                     json.dumps(job.params),
                     job.status.value,
                     job.created_at.isoformat(),
@@ -416,6 +459,7 @@ def _job_from_row(row: sqlite3.Row) -> JobRecord:
         id=row["id"],
         kind=row["kind"],
         target=row["target"],
+        environment=row["environment"],
         params=json.loads(row["params"]),
         status=JobStatus(row["status"]),
         created_at=datetime.fromisoformat(row["created_at"]),
@@ -440,6 +484,7 @@ def _package_from_row(row: sqlite3.Row) -> PackageRecord:
 def _credential_from_row(row: sqlite3.Row) -> CredentialRecord:
     return CredentialRecord(
         id=row["id"],
+        environment=row["environment"],
         host=row["host"],
         kind=row["kind"],
         username=row["username"],

@@ -47,10 +47,11 @@ class CredentialKind(StrEnum):
 class Credential(BaseModel):
     """A decrypted credential. Exists in memory only — never log or persist."""
 
-    host: str  # inventory Host.name, or "*" for a fleet-wide default
+    host: str  # inventory Host.name, or "*" for an environment-wide default
     kind: CredentialKind
     username: str | None = None
     secret: SecretStr  # SecretStr keeps it out of repr()/logs
+    environment: str = "default"  # credential namespaces are per-environment
 
     def reveal(self) -> str:
         return self.secret.get_secret_value()
@@ -62,6 +63,7 @@ class CredentialInfo(BaseModel):
     host: str
     kind: CredentialKind
     username: str | None
+    environment: str = "default"
 
 
 def load_master_key(environ: os._Environ[str] | dict[str, str] | None = None) -> str:
@@ -126,6 +128,7 @@ class CredentialStore:
         if not cred.reveal():
             raise CredentialError("refusing to store an empty secret")
         rec = CredentialRecord(
+            environment=cred.environment,
             host=cred.host,
             kind=cred.kind.value,
             username=cred.username,
@@ -133,36 +136,49 @@ class CredentialStore:
         )
         stored = self._store.upsert_credential(rec)
         return CredentialInfo(
-            host=stored.host, kind=CredentialKind(stored.kind), username=stored.username
+            host=stored.host,
+            kind=CredentialKind(stored.kind),
+            username=stored.username,
+            environment=stored.environment,
         )
 
-    def get(self, host: str, kind: CredentialKind) -> Credential:
-        cred = self.try_get(host, kind)
+    def get(self, host: str, kind: CredentialKind, environment: str = "default") -> Credential:
+        cred = self.try_get(host, kind, environment)
         if cred is None:
-            raise CredentialError(f"no {kind.value} credential stored for host {host!r}")
+            raise CredentialError(
+                f"no {kind.value} credential stored for host {host!r} "
+                f"in environment {environment!r}"
+            )
         return cred
 
-    def try_get(self, host: str, kind: CredentialKind) -> Credential | None:
-        rec = self._store.get_credential(host, kind.value)
+    def try_get(
+        self, host: str, kind: CredentialKind, environment: str = "default"
+    ) -> Credential | None:
+        rec = self._store.get_credential(host, kind.value, environment=environment)
         if rec is None:
             return None
         return self._decrypt(rec)
 
-    def for_host(self, host: str) -> dict[CredentialKind, Credential]:
-        """All credentials for one host, keyed by kind (mixed-auth lookup)."""
+    def for_host(self, host: str, environment: str = "default") -> dict[CredentialKind, Credential]:
+        """All credentials for one host in one environment, keyed by kind."""
         return {
             CredentialKind(rec.kind): self._decrypt(rec)
-            for rec in self._store.list_credentials(host)
+            for rec in self._store.list_credentials(host, environment=environment)
         }
 
-    def list(self) -> list[CredentialInfo]:
+    def list(self, environment: str | None = None) -> list[CredentialInfo]:
         return [
-            CredentialInfo(host=r.host, kind=CredentialKind(r.kind), username=r.username)
-            for r in self._store.list_credentials()
+            CredentialInfo(
+                host=r.host,
+                kind=CredentialKind(r.kind),
+                username=r.username,
+                environment=r.environment,
+            )
+            for r in self._store.list_credentials(environment=environment)
         ]
 
-    def delete(self, host: str, kind: CredentialKind) -> bool:
-        return self._store.delete_credential(host, kind.value)
+    def delete(self, host: str, kind: CredentialKind, environment: str = "default") -> bool:
+        return self._store.delete_credential(host, kind.value, environment=environment)
 
     def _decrypt(self, rec: CredentialRecord) -> Credential:
         try:
@@ -177,6 +193,7 @@ class CredentialStore:
             kind=CredentialKind(rec.kind),
             username=rec.username,
             secret=SecretStr(plaintext),
+            environment=rec.environment,
         )
 
 

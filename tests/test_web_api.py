@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from chkp_cpuse_orch.config import Config, Paths
+from chkp_cpuse_orch.config import Config, EnvironmentDef, Paths
 from chkp_cpuse_orch.credentials import MASTER_KEY_ENV
 from chkp_cpuse_orch.web.app import create_app
 
@@ -68,7 +68,7 @@ def client(
 
 def _add_ssh_credential(client: TestClient, host: str = "mgmt-01") -> None:
     resp = client.put(
-        "/api/credentials",
+        "/api/env/default/credentials",
         json={"host": host, "kind": "ssh_password", "username": "admin", "secret": "pw"},
     )
     assert resp.status_code == 201, resp.text
@@ -109,23 +109,34 @@ def test_status_reports_unlocked_and_counts(client: TestClient) -> None:
     body = client.get("/api/status").json()
     assert body["credentials_unlocked"] is True
     assert body["management_servers"] == 1  # fw-01 is a gateway, not counted
+    assert body["environments"] == ["default"]
+
+
+def test_environments_endpoint(client: TestClient) -> None:
+    envs = client.get("/api/environments").json()
+    assert envs == [{"name": "default", "management_servers": 1}]
+
+
+def test_unknown_environment_is_404(client: TestClient) -> None:
+    assert client.get("/api/env/nope/servers").status_code == 404
+    assert client.get("/api/env/nope/credentials").status_code == 404
 
 
 # -- servers ---------------------------------------------------------------------
 
 
 def test_servers_lists_management_only_with_credential_summary(client: TestClient) -> None:
-    servers = client.get("/api/servers").json()
+    servers = client.get("/api/env/default/servers").json()
     assert [s["name"] for s in servers] == ["mgmt-01"]
     assert servers[0]["credentials"] == []
     _add_ssh_credential(client)
-    servers = client.get("/api/servers").json()
+    servers = client.get("/api/env/default/servers").json()
     assert servers[0]["credentials"] == ["ssh_password"]
 
 
 def test_server_state_detects_live_packages(client: TestClient) -> None:
     _add_ssh_credential(client)
-    state = client.get("/api/servers/mgmt-01/state")
+    state = client.get("/api/env/default/servers/mgmt-01/state")
     assert state.status_code == 200, state.text
     body = state.json()
     assert body["agent_build"] == DA_BUILD
@@ -134,7 +145,7 @@ def test_server_state_detects_live_packages(client: TestClient) -> None:
 
 
 def test_server_state_without_credentials_is_409(client: TestClient) -> None:
-    resp = client.get("/api/servers/mgmt-01/state")
+    resp = client.get("/api/env/default/servers/mgmt-01/state")
     assert resp.status_code == 409
     assert "no SSH credential" in resp.json()["detail"]
 
@@ -144,12 +155,14 @@ def test_server_state_without_credentials_is_409(client: TestClient) -> None:
 
 def test_credentials_roundtrip_never_echoes_secret(client: TestClient) -> None:
     _add_ssh_credential(client)
-    listing = client.get("/api/credentials").json()
-    assert listing == [{"host": "mgmt-01", "kind": "ssh_password", "username": "admin"}]
+    listing = client.get("/api/env/default/credentials").json()
+    assert listing == [
+        {"host": "mgmt-01", "kind": "ssh_password", "username": "admin", "environment": "default"}
+    ]
     assert "pw" not in str(listing)
-    resp = client.delete("/api/credentials/mgmt-01/ssh_password")
+    resp = client.delete("/api/env/default/credentials/mgmt-01/ssh_password")
     assert resp.json() == {"deleted": True}
-    assert client.get("/api/credentials").json() == []
+    assert client.get("/api/env/default/credentials").json() == []
 
 
 def test_locked_credential_store_returns_503(
@@ -159,7 +172,7 @@ def test_locked_credential_store_returns_503(
     app = create_app(_config(tmp_path))
     with TestClient(app) as c:
         assert c.get("/health").status_code == 200  # app still boots
-        resp = c.get("/api/credentials")
+        resp = c.get("/api/env/default/credentials")
         assert resp.status_code == 503
         assert "master key" in resp.json()["detail"]
         assert c.get("/api/status").json()["credentials_unlocked"] is False
@@ -192,7 +205,7 @@ def test_import_flow_end_to_end(client: TestClient, transport: FakeTransport) ->
     _add_ssh_credential(client)
     _upload_package(client)
 
-    resp = client.post("/api/servers/mgmt-01/import", json={"package": "jhf.tgz"})
+    resp = client.post("/api/env/default/servers/mgmt-01/import", json={"package": "jhf.tgz"})
     assert resp.status_code == 202, resp.text
     job = _wait_for_job(client, resp.json()["id"])
     assert job["status"] == "succeeded", job["error"]
@@ -205,7 +218,7 @@ def test_import_flow_end_to_end(client: TestClient, transport: FakeTransport) ->
 def test_install_requires_confirmation_flag(client: TestClient) -> None:
     _add_ssh_credential(client)
     resp = client.post(
-        "/api/servers/mgmt-01/install",
+        "/api/env/default/servers/mgmt-01/install",
         json={"package_id": "Check_Point_R81_20_T89", "confirmed": False},
     )
     assert resp.status_code == 400
@@ -215,7 +228,7 @@ def test_install_requires_confirmation_flag(client: TestClient) -> None:
 def test_install_flow_end_to_end(client: TestClient, transport: FakeTransport) -> None:
     _add_ssh_credential(client)
     resp = client.post(
-        "/api/servers/mgmt-01/install",
+        "/api/env/default/servers/mgmt-01/install",
         json={"package_id": "Check_Point_R81_20_T89", "confirmed": True},
     )
     assert resp.status_code == 202, resp.text
@@ -227,7 +240,7 @@ def test_install_flow_end_to_end(client: TestClient, transport: FakeTransport) -
 def test_import_against_gateway_is_rejected(client: TestClient) -> None:
     _add_ssh_credential(client, host="fw-01")
     _upload_package(client)
-    resp = client.post("/api/servers/fw-01/import", json={"package": "jhf.tgz"})
+    resp = client.post("/api/env/default/servers/fw-01/import", json={"package": "jhf.tgz"})
     assert resp.status_code == 400
     assert "patched via CDT" in resp.json()["detail"]
 
@@ -237,19 +250,19 @@ def test_import_against_gateway_is_rejected(client: TestClient) -> None:
 
 def test_cdt_status_endpoint(client: TestClient) -> None:
     _add_ssh_credential(client)
-    body = client.get("/api/cdt/mgmt-01/status").json()
+    body = client.get("/api/env/default/cdt/mgmt-01/status").json()
     assert body == {"available": True, "running": False, "brief": ""}
 
 
 def test_cdt_candidates_get_and_put(client: TestClient, transport: FakeTransport) -> None:
     _add_ssh_credential(client)
-    cands = client.get("/api/cdt/mgmt-01/candidates").json()
+    cands = client.get("/api/env/default/cdt/mgmt-01/candidates").json()
     assert cands["header"][0] == "Object Name"
     assert len(cands["rows"]) == 2
 
     # Reverse the order and save — this is the blast-radius edit.
     resp = client.put(
-        "/api/cdt/mgmt-01/candidates",
+        "/api/env/default/cdt/mgmt-01/candidates",
         json={"header": cands["header"], "rows": list(reversed(cands["rows"]))},
     )
     assert resp.status_code == 200, resp.text
@@ -259,7 +272,7 @@ def test_cdt_candidates_get_and_put(client: TestClient, transport: FakeTransport
 
 def test_cdt_execute_requires_confirmation(client: TestClient) -> None:
     _add_ssh_credential(client)
-    resp = client.post("/api/cdt/mgmt-01/execute", json={"confirmed": False})
+    resp = client.post("/api/env/default/cdt/mgmt-01/execute", json={"confirmed": False})
     assert resp.status_code == 400
     assert "confirmation" in resp.json()["detail"]
 
@@ -269,14 +282,14 @@ def test_cdt_stage_and_generate_flow(client: TestClient, transport: FakeTranspor
     _upload_package(client)
     transport.responses["stat -c %s"] = (1, "")  # package not staged yet
 
-    resp = client.post("/api/cdt/mgmt-01/stage", json={"package": "jhf.tgz"})
+    resp = client.post("/api/env/default/cdt/mgmt-01/stage", json={"package": "jhf.tgz"})
     assert resp.status_code == 202, resp.text
     job = _wait_for_job(client, resp.json()["id"])
     assert job["status"] == "succeeded", job["error"]
     assert transport.puts[0][1] == "/var/log/upload/jhf.tgz"
     assert transport.puts[1][1] == "/opt/CPcdt/CentralDeploymentTool.xml"
 
-    resp = client.post("/api/cdt/mgmt-01/generate")
+    resp = client.post("/api/env/default/cdt/mgmt-01/generate")
     assert resp.status_code == 202
     job = _wait_for_job(client, resp.json()["id"])
     assert job["status"] == "succeeded", job["error"]
@@ -284,7 +297,7 @@ def test_cdt_stage_and_generate_flow(client: TestClient, transport: FakeTranspor
 
 def test_cdt_endpoints_locked_without_credentials(client: TestClient) -> None:
     # No SSH credential stored for the host → 409 with a clear message.
-    resp = client.get("/api/cdt/mgmt-01/status")
+    resp = client.get("/api/env/default/cdt/mgmt-01/status")
     assert resp.status_code == 409
     assert "no SSH credential" in resp.json()["detail"]
 
@@ -312,3 +325,55 @@ def test_provision_rejects_bad_input(client: TestClient) -> None:
 
 def test_unknown_job_is_404(client: TestClient) -> None:
     assert client.get("/api/jobs/nope").status_code == 404
+
+
+# -- multiple independent environments ---------------------------------------------
+
+INVENTORY_B_YAML = """\
+sites:
+  - name: other-site
+    hosts:
+      - name: mgmt-b1
+        address: 192.0.2.50
+        role: management
+"""
+
+
+def test_two_environments_are_isolated(
+    tmp_path: Path, transport: FakeTransport, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(MASTER_KEY_ENV, "api test master key")
+    (tmp_path / "corp.yaml").write_text(INVENTORY_YAML, encoding="utf-8")
+    (tmp_path / "dmz.yaml").write_text(INVENTORY_B_YAML, encoding="utf-8")
+    cfg = _config(tmp_path)
+    cfg.environments = [
+        EnvironmentDef(name="corp", inventory=tmp_path / "corp.yaml"),
+        EnvironmentDef(name="dmz", inventory=tmp_path / "dmz.yaml"),
+    ]
+    app = create_app(cfg, client_factory=make_factory(transport))
+    with TestClient(app) as c:
+        # Both environments visible, each with its own inventory.
+        envs = {e["name"]: e["management_servers"] for e in c.get("/api/environments").json()}
+        assert envs == {"corp": 1, "dmz": 1}
+        assert [s["name"] for s in c.get("/api/env/corp/servers").json()] == ["mgmt-01"]
+        assert [s["name"] for s in c.get("/api/env/dmz/servers").json()] == ["mgmt-b1"]
+
+        # A credential stored in corp is invisible in dmz — and does not
+        # authorize actions there.
+        resp = c.put(
+            "/api/env/corp/credentials",
+            json={"host": "mgmt-01", "kind": "ssh_password", "secret": "corp-pw"},
+        )
+        assert resp.status_code == 201
+        assert len(c.get("/api/env/corp/credentials").json()) == 1
+        assert c.get("/api/env/dmz/credentials").json() == []
+
+        state = c.get("/api/env/dmz/servers/mgmt-b1/state")
+        assert state.status_code == 409  # no credential in dmz
+        assert "no SSH credential" in state.json()["detail"]
+
+        # Jobs record which environment they belong to.
+        _upload_package(c)
+        job = c.post("/api/env/corp/servers/mgmt-01/import", json={"package": "jhf.tgz"})
+        assert job.status_code == 202
+        assert job.json()["environment"] == "corp"

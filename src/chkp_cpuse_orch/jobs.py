@@ -87,14 +87,17 @@ class JobRunner:
         *,
         target: str | None = None,
         params: dict[str, Any] | None = None,
+        environment: str = "default",
     ) -> JobRecord:
         """Persist a PENDING job and wake the runner. Returns immediately."""
         if kind not in self._handlers:
             raise JobError(f"no handler registered for job kind {kind!r}")
-        job = JobRecord(kind=kind, target=target, params=params or {})
+        job = JobRecord(kind=kind, target=target, params=params or {}, environment=environment)
         self._store.insert_job(job)
         self._wake.set()
-        logger.info("job submitted", job_id=job.id, kind=kind, target=target)
+        logger.info(
+            "job submitted", job_id=job.id, kind=kind, target=target, environment=environment
+        )
         return job
 
     def request_cancel(self, job_id: str) -> None:

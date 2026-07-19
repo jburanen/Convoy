@@ -52,15 +52,18 @@ def default_client_factory(host: Host, creds: dict[CredentialKind, Credential]) 
 
 
 class HostConnector:
-    """Inventory + credentials + factory → connected transports to mgmt servers."""
+    """Inventory + credentials + factory → connected transports to mgmt servers.
+    One connector per environment; credential lookups stay inside it."""
 
     def __init__(
         self,
         inventory: Inventory,
         credentials: CredentialStore | None,
         client_factory: ClientFactory | None = None,
+        environment: str = "default",
     ) -> None:
         self.inventory = inventory
+        self.environment = environment
         self._credentials = credentials
         self._client_factory = client_factory or default_client_factory
 
@@ -80,14 +83,19 @@ class HostConnector:
         """Which credential kinds are stored for a host (secret-free)."""
         if self._credentials is None:
             return []
-        return [info.kind.value for info in self._credentials.list() if info.host == host_name]
+        return [
+            info.kind.value
+            for info in self._credentials.list(environment=self.environment)
+            if info.host == host_name
+        ]
 
     def require_ssh_credential(self, host: Host) -> None:
         creds = self.host_credentials(host)
         if CredentialKind.SSH_PASSWORD not in creds and CredentialKind.SSH_PRIVATE_KEY not in creds:
             raise CredentialError(
-                f"no SSH credential stored for {host.name!r} — add an ssh_password "
-                "or ssh_private_key credential first"
+                f"no SSH credential stored for {host.name!r} in environment "
+                f"{self.environment!r} — add an ssh_password or ssh_private_key "
+                "credential first"
             )
 
     def host_credentials(self, host: Host) -> dict[CredentialKind, Credential]:
@@ -95,10 +103,34 @@ class HostConnector:
             raise CredentialError(
                 "credential store is locked — set the master key and restart the service"
             )
-        creds = self._credentials.for_host(host.name)
+        creds = self._credentials.for_host(host.name, environment=self.environment)
         if not creds:
-            creds = self._credentials.for_host("*")  # fleet-wide default, if any
+            # Environment-wide default, if any. Never crosses environments.
+            creds = self._credentials.for_host("*", environment=self.environment)
         return creds
 
     def connect(self, host: Host) -> Transport:
         return self._client_factory(host, self.host_credentials(host))
+
+
+class EnvironmentRegistry:
+    """Named, independent management environments → their connectors."""
+
+    def __init__(self) -> None:
+        self._envs: dict[str, HostConnector] = {}
+
+    def add(self, name: str, connector: HostConnector) -> None:
+        if name in self._envs:
+            raise InventoryError(f"environment {name!r} registered twice")
+        self._envs[name] = connector
+
+    def get(self, name: str) -> HostConnector:
+        connector = self._envs.get(name)
+        if connector is None:
+            raise InventoryError(
+                f"unknown environment: {name!r} (have: {', '.join(self._envs) or 'none'})"
+            )
+        return connector
+
+    def names(self) -> list[str]:
+        return list(self._envs)

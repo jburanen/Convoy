@@ -26,13 +26,11 @@ from pathlib import Path
 
 from ..cdt import CDT, CandidatesFile, build_config_xml
 from ..cpuse import DEFAULT_STAGING_DIR
-from ..credentials import CredentialStore
 from ..errors import CDTError, JobError, TransportError
-from ..inventory import Inventory
 from ..jobs import JobCancelled, JobContext, JobRunner
 from ..packages import PackageStore
 from ..store import JobRecord
-from .common import ClientFactory, HostConnector, Transport
+from .common import EnvironmentRegistry, Transport
 from .patching import ProgressReporter
 
 JOB_CDT_STAGE = "cdt.stage"
@@ -47,17 +45,14 @@ class CDTService:
     def __init__(
         self,
         *,
-        inventory: Inventory,
-        credentials: CredentialStore | None,
+        registry: EnvironmentRegistry,
         packages: PackageStore,
         runner: JobRunner,
         staging_dir: str = DEFAULT_STAGING_DIR,
         poll_interval: float = 15.0,
-        client_factory: ClientFactory | None = None,
-        connector: HostConnector | None = None,
     ) -> None:
         self.runner = runner
-        self.connector = connector or HostConnector(inventory, credentials, client_factory)
+        self.registry = registry
         self._packages = packages
         self._staging_dir = staging_dir
         self._poll_interval = poll_interval
@@ -68,8 +63,8 @@ class CDTService:
 
     # -- sync queries (blocking SSH; call via asyncio.to_thread from routes) -------
 
-    def get_status(self, host_name: str) -> dict[str, object]:
-        with self._session(host_name) as s:
+    def get_status(self, environment: str, host_name: str) -> dict[str, object]:
+        with self._session(environment, host_name) as s:
             status = s.cdt.status()
             return {
                 "available": s.cdt.is_available(),
@@ -77,14 +72,14 @@ class CDTService:
                 "brief": status.brief,
             }
 
-    def get_candidates(self, host_name: str) -> CandidatesFile:
-        with self._session(host_name) as s:
+    def get_candidates(self, environment: str, host_name: str) -> CandidatesFile:
+        with self._session(environment, host_name) as s:
             return s.cdt.read_candidates()
 
-    def save_candidates(self, host_name: str, candidates: CandidatesFile) -> int:
+    def save_candidates(self, environment: str, host_name: str, candidates: CandidatesFile) -> int:
         """Push an edited candidates CSV back. Returns the row count. Refused
         while CDT is running — changing targets mid-deployment is never OK."""
-        with self._session(host_name) as s:
+        with self._session(environment, host_name) as s:
             if s.cdt.status().running:
                 raise CDTError("CDT is currently running — refusing to change candidates")
             _put_text(s.transport, candidates.to_csv(), s.cdt.candidates_path)
@@ -92,25 +87,38 @@ class CDTService:
 
     # -- job submission -------------------------------------------------------------
 
-    def submit_stage(self, host_name: str, package_filename: str) -> JobRecord:
-        host = self.connector.mgmt_host(host_name)
-        self.connector.require_ssh_credential(host)
+    def submit_stage(self, environment: str, host_name: str, package_filename: str) -> JobRecord:
+        connector = self.registry.get(environment)
+        host = connector.mgmt_host(host_name)
+        connector.require_ssh_credential(host)
         self._packages.path_for(package_filename)  # validates record + content
         return self.runner.submit(
-            JOB_CDT_STAGE, target=host.name, params={"package": package_filename}
+            JOB_CDT_STAGE,
+            target=host.name,
+            params={"package": package_filename},
+            environment=environment,
         )
 
-    def submit_generate(self, host_name: str) -> JobRecord:
-        host = self.connector.mgmt_host(host_name)
-        self.connector.require_ssh_credential(host)
-        return self.runner.submit(JOB_CDT_GENERATE, target=host.name)
+    def submit_generate(self, environment: str, host_name: str) -> JobRecord:
+        connector = self.registry.get(environment)
+        host = connector.mgmt_host(host_name)
+        connector.require_ssh_credential(host)
+        return self.runner.submit(JOB_CDT_GENERATE, target=host.name, environment=environment)
 
-    def submit_prepare(self, host_name: str, *, extended: bool = False) -> JobRecord:
-        host = self.connector.mgmt_host(host_name)
-        self.connector.require_ssh_credential(host)
-        return self.runner.submit(JOB_CDT_PREPARE, target=host.name, params={"extended": extended})
+    def submit_prepare(
+        self, environment: str, host_name: str, *, extended: bool = False
+    ) -> JobRecord:
+        connector = self.registry.get(environment)
+        host = connector.mgmt_host(host_name)
+        connector.require_ssh_credential(host)
+        return self.runner.submit(
+            JOB_CDT_PREPARE,
+            target=host.name,
+            params={"extended": extended},
+            environment=environment,
+        )
 
-    def submit_execute(self, host_name: str, *, confirmed: bool) -> JobRecord:
+    def submit_execute(self, environment: str, host_name: str, *, confirmed: bool) -> JobRecord:
         """The real fleet deployment. ``confirmed`` must be True — this touches
         every gateway in the candidates list, in CSV order."""
         if not confirmed:
@@ -118,9 +126,10 @@ class CDTService:
                 "execute requires explicit confirmation — it deploys to every "
                 "gateway in the candidates list"
             )
-        host = self.connector.mgmt_host(host_name)
-        self.connector.require_ssh_credential(host)
-        return self.runner.submit(JOB_CDT_EXECUTE, target=host.name)
+        connector = self.registry.get(environment)
+        host = connector.mgmt_host(host_name)
+        connector.require_ssh_credential(host)
+        return self.runner.submit(JOB_CDT_EXECUTE, target=host.name, environment=environment)
 
     # -- job handlers ---------------------------------------------------------------
 
@@ -142,7 +151,7 @@ class CDTService:
         local_size = local_path.stat().st_size
         remote_pkg = posixpath.join(self._staging_dir, package)
 
-        with self._session(ctx.job.target or "") as s:
+        with self._session(ctx.job.environment, ctx.job.target or "") as s:
             existing = s.transport.run(f"stat -c %s {remote_pkg} 2>/dev/null")
             if existing.ok and existing.stdout.strip() == str(local_size):
                 ctx.log(f"{package} already staged at {remote_pkg} (size matches) — skip upload")
@@ -163,7 +172,7 @@ class CDTService:
             ctx.log(f"CDT config written to {s.cdt.config_path} (PackageToInstall={remote_pkg})")
 
     def _do_generate(self, ctx: JobContext) -> None:
-        with self._session(ctx.job.target or "") as s:
+        with self._session(ctx.job.environment, ctx.job.target or "") as s:
             ctx.log("generating candidates CSV (CentralDeploymentTool -generate)")
             s.cdt.generate()
             candidates = s.cdt.read_candidates()
@@ -174,14 +183,14 @@ class CDTService:
 
     def _do_prepare(self, ctx: JobContext) -> None:
         extended = bool(ctx.job.params.get("extended", False))
-        with self._session(ctx.job.target or "") as s:
+        with self._session(ctx.job.environment, ctx.job.target or "") as s:
             verb = "extended preparations" if extended else "preparations"
             ctx.log(f"running CDT {verb} (packages shipped to targets ahead of the window)")
             s.cdt.preparations(extended=extended)
             ctx.log(f"{verb} finished")
 
     def _do_execute(self, ctx: JobContext) -> None:
-        with self._session(ctx.job.target or "") as s:
+        with self._session(ctx.job.environment, ctx.job.target or "") as s:
             candidates = s.cdt.read_candidates()  # also proves generate ran
             ctx.log(
                 f"launching CDT execute for {len(candidates.rows)} candidate(s) "
@@ -218,10 +227,11 @@ class CDTService:
 
     # -- plumbing --------------------------------------------------------------------
 
-    def _session(self, host_name: str) -> _CDTSession:
-        host = self.connector.mgmt_host(host_name)
-        self.connector.require_ssh_credential(host)
-        return _CDTSession(self.connector.connect(host))
+    def _session(self, environment: str, host_name: str) -> _CDTSession:
+        connector = self.registry.get(environment)
+        host = connector.mgmt_host(host_name)
+        connector.require_ssh_credential(host)
+        return _CDTSession(connector.connect(host))
 
 
 def _put_text(transport: Transport, text: str, remote_path: str) -> None:

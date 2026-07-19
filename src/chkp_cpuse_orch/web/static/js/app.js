@@ -47,6 +47,42 @@ function fmtTime(iso) {
   return iso ? new Date(iso).toLocaleString() : "";
 }
 
+/* ---------- 1a. environments ---------- */
+
+// Independent management environments (own inventory + credentials each).
+// The picker in the header scopes servers, credentials, and CDT; packages
+// and the underlying storage are shared. Selection sticks via localStorage.
+let currentEnv = localStorage.getItem("currentEnv") || null;
+
+function envUrl(path) {
+  return `/api/env/${encodeURIComponent(currentEnv)}${path}`;
+}
+
+async function loadEnvironments() {
+  const picker = document.getElementById("env-picker");
+  const envs = await api("/api/environments");
+  picker.replaceChildren();
+  for (const env of envs) {
+    picker.appendChild(new Option(`${env.name} (${env.management_servers} server(s))`, env.name));
+  }
+  if (!envs.some((e) => e.name === currentEnv)) {
+    currentEnv = envs.length ? envs[0].name : null;
+  }
+  picker.value = currentEnv ?? "";
+  // Hide the picker row entirely when there's just the implicit default env.
+  document.getElementById("env-row").classList.toggle("hidden", envs.length <= 1);
+}
+
+document.getElementById("env-picker").addEventListener("change", async (ev) => {
+  currentEnv = ev.target.value;
+  localStorage.setItem("currentEnv", currentEnv);
+  // Reload everything env-scoped; clear CDT state from the previous env.
+  cdtCandidates = null;
+  renderCdtCandidates();
+  document.getElementById("cdt-status").textContent = "";
+  await Promise.all([loadServers(), loadPackages(), loadCredentials(), refreshStatus()]);
+});
+
 /* ---------- 1b. tabs ---------- */
 
 // Default tab: Provisioning when the inventory has no management servers yet,
@@ -152,7 +188,7 @@ async function loadServers() {
   const tbody = document.querySelector("#servers-table tbody");
   const infoTbody = document.querySelector("#servers-info-table tbody");
   const namelist = document.getElementById("server-names");
-  const servers = await api("/api/servers");
+  const servers = await api(envUrl("/servers"));
   const packages = await api("/api/packages");
 
   tbody.replaceChildren();
@@ -218,7 +254,7 @@ async function refreshState(name, row) {
   btn.disabled = true;
   agentDiv.textContent = "querying…";
   try {
-    const state = await api(`/api/servers/${encodeURIComponent(name)}/state`);
+    const state = await api(envUrl(`/servers/${encodeURIComponent(name)}/state`));
     agentDiv.textContent = state.agent_build ? `DA build ${state.agent_build}` : "";
     pkgsDiv.replaceChildren();
     for (const pkg of state.packages) {
@@ -249,7 +285,7 @@ async function importPackage(name, row) {
   const select = row.querySelector(".pkg-select");
   if (!select.value) { toast("Choose an uploaded package first."); return; }
   try {
-    await api(`/api/servers/${encodeURIComponent(name)}/import`, {
+    await api(envUrl(`/servers/${encodeURIComponent(name)}/import`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ package: select.value }),
@@ -269,7 +305,7 @@ async function installPackage(name, packageId) {
   );
   if (!sure) return;
   try {
-    await api(`/api/servers/${encodeURIComponent(name)}/install`, {
+    await api(envUrl(`/servers/${encodeURIComponent(name)}/install`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ package_id: packageId, confirmed: true }),
@@ -295,7 +331,7 @@ function cdtServer() {
 async function populateCdtSelectors() {
   const serverSel = document.getElementById("cdt-server");
   const pkgSel = document.getElementById("cdt-package");
-  const [servers, packages] = await Promise.all([api("/api/servers"), api("/api/packages")]);
+  const [servers, packages] = await Promise.all([api(envUrl("/servers")), api("/api/packages")]);
   serverSel.replaceChildren(new Option("— management server —", ""));
   for (const s of servers) serverSel.appendChild(new Option(s.name, s.name));
   pkgSel.replaceChildren(new Option("— package —", ""));
@@ -308,7 +344,7 @@ async function cdtRefreshStatus() {
   const box = document.getElementById("cdt-status");
   box.textContent = "querying…";
   try {
-    const s = await api(`/api/cdt/${encodeURIComponent(name)}/status`);
+    const s = await api(envUrl(`/cdt/${encodeURIComponent(name)}/status`));
     box.textContent =
       (s.available ? "CDT available" : "CDT NOT FOUND on this server") +
       (s.running ? " — RUNNING" : " — idle") +
@@ -322,7 +358,7 @@ async function cdtLoadCandidates() {
   const name = cdtServer();
   if (!name) return;
   try {
-    cdtCandidates = await api(`/api/cdt/${encodeURIComponent(name)}/candidates`);
+    cdtCandidates = await api(envUrl(`/cdt/${encodeURIComponent(name)}/candidates`));
     renderCdtCandidates();
   } catch (e) {
     toast("Load failed: " + e.message);
@@ -374,7 +410,7 @@ async function cdtSaveCandidates() {
   const name = cdtServer();
   if (!name || !cdtCandidates) { toast("Load candidates first."); return; }
   try {
-    const resp = await api(`/api/cdt/${encodeURIComponent(name)}/candidates`, {
+    const resp = await api(envUrl(`/cdt/${encodeURIComponent(name)}/candidates`), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(cdtCandidates),
@@ -389,7 +425,7 @@ async function cdtAction(path, body) {
   const name = cdtServer();
   if (!name) return;
   try {
-    await api(`/api/cdt/${encodeURIComponent(name)}/${path}`, {
+    await api(envUrl(`/cdt/${encodeURIComponent(name)}/${path}`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body ?? {}),
@@ -483,7 +519,7 @@ async function loadCredentials() {
   tbody.replaceChildren();
   let creds;
   try {
-    creds = await api("/api/credentials");
+    creds = await api(envUrl("/credentials"));
   } catch (e) {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
@@ -503,7 +539,7 @@ async function loadCredentials() {
       if (!confirm(`Delete ${cred.kind} credential for ${cred.host}?`)) return;
       try {
         await api(
-          `/api/credentials/${encodeURIComponent(cred.host)}/${encodeURIComponent(cred.kind)}`,
+          envUrl(`/credentials/${encodeURIComponent(cred.host)}/${encodeURIComponent(cred.kind)}`),
           { method: "DELETE" },
         );
         await Promise.all([loadCredentials(), loadServers()]);
@@ -517,7 +553,7 @@ document.getElementById("credential-form").addEventListener("submit", async (ev)
   ev.preventDefault();
   const secretInput = document.getElementById("cred-secret");
   try {
-    await api("/api/credentials", {
+    await api(envUrl("/credentials"), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -546,6 +582,7 @@ async function loadJobs() {
     const row = el("tpl-job-row");
     row.querySelector(".job-kind").textContent = job.kind;
     row.querySelector(".job-target").textContent = job.target ?? "";
+    row.querySelector(".job-env").textContent = job.environment ?? "";
     const badge = row.querySelector(".job-status .badge");
     badge.textContent = job.status;
     badge.classList.add(
@@ -612,6 +649,7 @@ async function pollJobs() {
 
 (async function init() {
   initTabs();
+  await loadEnvironments(); // must resolve currentEnv before env-scoped loads
   await refreshStatus();
   await Promise.all([loadServers(), loadPackages(), loadCredentials(), loadJobs()]);
   pollJobs();
