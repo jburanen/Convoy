@@ -68,6 +68,33 @@ footer { padding: 2rem 1.25rem; }
 }
 .chip.warn { color: var(--warn); border-color: var(--warn); }
 
+/* ---- tabs ---- */
+#tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin-top: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+.tab-btn {
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 6px 6px 0 0;
+  padding: 0.45rem 1rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+.tab-btn:hover { color: var(--text); background: var(--badge-bg); filter: none; }
+.tab-btn.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* panels: only the active tab's panel is shown */
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
 /* ---- sections ---- */
 section {
   background: var(--panel);

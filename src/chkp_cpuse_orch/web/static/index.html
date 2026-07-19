@@ -6,6 +6,10 @@
   framework, no templating engine. Edit it, refresh the browser, done.
   Dynamic data is filled in by /js/app.js using the <template> elements below —
   the repeated markup (table rows, cards) lives HERE, in HTML, not in JS strings.
+
+  Layout: four tabs (nav below the header, one .tab-panel each) plus a Jobs
+  strip that stays visible on every tab. Default tab: Provisioning when no
+  management servers are in the inventory, Management otherwise (see app.js).
 -->
 <html lang="en">
 <head>
@@ -22,150 +26,193 @@
   <div id="status-chips">
     <!-- filled by refreshStatus(); shows a warning chip if credentials are locked -->
   </div>
+  <nav id="tabs">
+    <button class="tab-btn" data-tab="provisioning">Provisioning</button>
+    <button class="tab-btn" data-tab="packages">Packages and Credentials</button>
+    <button class="tab-btn" data-tab="management">Management</button>
+    <button class="tab-btn" data-tab="gateways">Gateways</button>
+  </nav>
 </header>
 
 <main>
 
-  <!-- ==================== Service-account provisioning ================= -->
-  <section id="provision">
-    <h2>Provision access user</h2>
-    <p class="hint">
-      Generates the clish commands that create this tool's service account on a
-      management server — paste them into clish on <strong>each</strong> server.
-      The account's shell is <code>/bin/bash</code> so SCP package staging works
-      (the tool wraps its CPUSE commands in <code>clish&nbsp;-c</code> to match).
-      The password appears in the output only as a salted SHA-512 hash.
-      Afterwards, save the same username/password in the Credentials section below.
-    </p>
-    <form id="provision-form">
-      <input type="text" id="prov-username" placeholder="username (e.g. svc-patch)" required>
-      <input type="password" id="prov-password" placeholder="password (8+ chars)" required>
-      <input type="number" id="prov-uid" value="2600" min="1000" max="65000" title="uid">
-      <button type="submit">Generate commands</button>
-      <button type="button" id="prov-copy" class="small hidden">Copy to clipboard</button>
-    </form>
-    <pre id="prov-output" class="job-events mono hidden"></pre>
-  </section>
+  <!-- ┌────────────────────── TAB 1: Provisioning ──────────────────────┐ -->
+  <div class="tab-panel" id="tab-provisioning">
 
-  <!-- ======================= Management servers ======================= -->
-  <section id="servers">
-    <h2>Management servers</h2>
-    <p class="hint">
-      Patched locally via CPUSE (CDT does not patch management servers).
-      <strong>Refresh</strong> queries live <code>show installer packages</code> state over SSH.
-      <strong>Import</strong> uploads the selected package and imports it into the local
-      CPUSE repository. <strong>Install</strong> appears next to imported packages —
-      it can reboot the server, so it always asks for confirmation.
-    </p>
-    <table id="servers-table">
-      <thead>
-        <tr>
-          <th>Server</th>
-          <th>Address</th>
-          <th>Credentials</th>
-          <th>CPUSE state</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody><!-- tpl-server-row instances --></tbody>
-    </table>
-  </section>
+    <section id="provision">
+      <h2>Provision access user</h2>
+      <p class="hint">
+        Generates the clish commands that create this tool's service account on a
+        management server — paste them into clish on <strong>each</strong> server.
+        The account's shell is <code>/bin/bash</code> so SCP package staging works
+        (the tool wraps its CPUSE commands in <code>clish&nbsp;-c</code> to match).
+        The password appears in the output only as a salted SHA-512 hash.
+        Afterwards, save the same username/password in the
+        <strong>Packages and Credentials</strong> tab.
+      </p>
+      <form id="provision-form">
+        <input type="text" id="prov-username" placeholder="username (e.g. svc-patch)" required>
+        <input type="password" id="prov-password" placeholder="password (8+ chars)" required>
+        <input type="number" id="prov-uid" value="2600" min="1000" max="65000" title="uid">
+        <button type="submit">Generate commands</button>
+        <button type="button" id="prov-copy" class="small hidden">Copy to clipboard</button>
+      </form>
+      <pre id="prov-output" class="job-events mono hidden"></pre>
+    </section>
 
-  <!-- ================= Gateway deployment (CDT) ======================= -->
-  <section id="cdt">
-    <h2>Gateway deployment (CDT)</h2>
-    <p class="hint">
-      CDT runs <em>on</em> a management server and pushes a package to many gateways.
-      Flow: <strong>Stage</strong> (upload package + write CDT config) →
-      <strong>Generate</strong> candidates → <strong>Load</strong>, reorder and trim the
-      list (row order = deployment order = blast-radius control) → <strong>Save order</strong>
-      → optional <strong>Prepare</strong> → <strong>Execute</strong>. Execute runs under
-      nohup on the server and is followed live in the Jobs section.
-    </p>
+    <section id="servers-info">
+      <h2>Management servers in inventory</h2>
+      <p class="hint">
+        Informational view of the inventory. Patching actions live on the
+        <strong>Management</strong> tab. A server is ready once an SSH credential
+        is stored for it.
+      </p>
+      <table id="servers-info-table">
+        <thead>
+          <tr>
+            <th>Server</th>
+            <th>Address</th>
+            <th>Role</th>
+            <th>SSH user</th>
+            <th>Stored credentials</th>
+          </tr>
+        </thead>
+        <tbody><!-- tpl-server-info-row instances --></tbody>
+      </table>
+    </section>
 
-    <div class="cdt-controls">
-      <select id="cdt-server"><option value="">— management server —</option></select>
-      <select id="cdt-package"><option value="">— package —</option></select>
-      <button id="cdt-stage" class="small">Stage</button>
-      <button id="cdt-generate" class="small">Generate</button>
-      <button id="cdt-load" class="small">Load candidates</button>
-      <button id="cdt-save" class="small">Save order</button>
-      <button id="cdt-prepare" class="small">Prepare</button>
-      <label class="muted"><input type="checkbox" id="cdt-extended"> extended</label>
-      <button id="cdt-execute" class="small danger">Execute</button>
-      <button id="cdt-status-btn" class="small">Status</button>
-    </div>
-    <div id="cdt-status" class="muted"></div>
+  </div>
 
-    <table id="cdt-candidates-table">
-      <thead><tr><!-- header cells filled from the CSV by app.js --></tr></thead>
-      <tbody><!-- tpl-cdt-row instances --></tbody>
-    </table>
-  </section>
+  <!-- ┌───────────────── TAB 2: Packages and Credentials ────────────────┐ -->
+  <div class="tab-panel" id="tab-packages">
 
-  <!-- ============================ Packages ============================ -->
-  <section id="packages">
-    <h2>Packages</h2>
-    <p class="hint">
-      Upload a package once, then distribute it to any server. Compare the SHA-1 /
-      SHA-256 with the values published on the Check Point download page before
-      importing anywhere.
-    </p>
-    <form id="upload-form">
-      <input type="file" id="upload-file" required>
-      <button type="submit" id="upload-btn">Upload</button>
-      <span id="upload-progress" class="muted"></span>
-    </form>
-    <table id="packages-table">
-      <thead>
-        <tr>
-          <th>Filename</th>
-          <th>Size</th>
-          <th>SHA-1</th>
-          <th>SHA-256</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody><!-- tpl-package-row instances --></tbody>
-    </table>
-  </section>
+    <section id="packages">
+      <h2>Packages</h2>
+      <p class="hint">
+        Upload a package once, then distribute it to any server. Compare the SHA-1 /
+        SHA-256 with the values published on the Check Point download page before
+        importing anywhere.
+      </p>
+      <form id="upload-form">
+        <input type="file" id="upload-file" required>
+        <button type="submit" id="upload-btn">Upload</button>
+        <span id="upload-progress" class="muted"></span>
+      </form>
+      <table id="packages-table">
+        <thead>
+          <tr>
+            <th>Filename</th>
+            <th>Size</th>
+            <th>SHA-1</th>
+            <th>SHA-256</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody><!-- tpl-package-row instances --></tbody>
+      </table>
+    </section>
 
-  <!-- =========================== Credentials ========================== -->
-  <section id="credentials">
-    <h2>Credentials</h2>
-    <p class="hint">
-      Stored encrypted at rest; secrets are never displayed again after saving.
-      Host <code>*</code> acts as a fleet-wide default. Gaia auth is typically an
-      SSH password (admin) — add an expert password if privileged steps need it.
-    </p>
-    <form id="credential-form">
-      <input type="text" id="cred-host" placeholder="host name (or *)" required list="server-names">
-      <datalist id="server-names"></datalist>
-      <select id="cred-kind">
-        <option value="ssh_password">SSH password</option>
-        <option value="ssh_private_key">SSH private key</option>
-        <option value="expert_password">Expert password</option>
-        <option value="api_key">API key</option>
-      </select>
-      <input type="text" id="cred-username" placeholder="username (optional)">
-      <input type="password" id="cred-secret" placeholder="secret" required>
-      <button type="submit">Save</button>
-    </form>
-    <table id="credentials-table">
-      <thead>
-        <tr><th>Host</th><th>Kind</th><th>Username</th><th></th></tr>
-      </thead>
-      <tbody><!-- tpl-credential-row instances --></tbody>
-    </table>
-  </section>
+    <section id="credentials">
+      <h2>Credentials</h2>
+      <p class="hint">
+        Stored encrypted at rest; secrets are never displayed again after saving.
+        Host <code>*</code> acts as a fleet-wide default. Gaia auth is typically an
+        SSH password (admin) — add an expert password if privileged steps need it.
+      </p>
+      <form id="credential-form">
+        <input type="text" id="cred-host" placeholder="host name (or *)" required list="server-names">
+        <datalist id="server-names"></datalist>
+        <select id="cred-kind">
+          <option value="ssh_password">SSH password</option>
+          <option value="ssh_private_key">SSH private key</option>
+          <option value="expert_password">Expert password</option>
+          <option value="api_key">API key</option>
+        </select>
+        <input type="text" id="cred-username" placeholder="username (optional)">
+        <input type="password" id="cred-secret" placeholder="secret" required>
+        <button type="submit">Save</button>
+      </form>
+      <table id="credentials-table">
+        <thead>
+          <tr><th>Host</th><th>Kind</th><th>Username</th><th></th></tr>
+        </thead>
+        <tbody><!-- tpl-credential-row instances --></tbody>
+      </table>
+    </section>
 
-  <!-- ============================== Jobs ============================== -->
+  </div>
+
+  <!-- ┌────────────────────── TAB 3: Management ────────────────────────┐ -->
+  <div class="tab-panel" id="tab-management">
+
+    <section id="servers">
+      <h2>Patch management servers</h2>
+      <p class="hint">
+        Patched locally via CPUSE (CDT does not patch management servers).
+        <strong>Refresh</strong> queries live <code>show installer packages</code> state over SSH.
+        <strong>Import</strong> uploads the selected package and imports it into the local
+        CPUSE repository. <strong>Install</strong> appears next to imported packages —
+        it can reboot the server, so it always asks for confirmation.
+      </p>
+      <table id="servers-table">
+        <thead>
+          <tr>
+            <th>Server</th>
+            <th>Address</th>
+            <th>Credentials</th>
+            <th>CPUSE state</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody><!-- tpl-server-row instances --></tbody>
+      </table>
+    </section>
+
+  </div>
+
+  <!-- ┌────────────────────── TAB 4: Gateways ──────────────────────────┐ -->
+  <div class="tab-panel" id="tab-gateways">
+
+    <section id="cdt">
+      <h2>Gateway deployment (CDT)</h2>
+      <p class="hint">
+        CDT runs <em>on</em> a management server and pushes a package to many gateways.
+        Flow: <strong>Stage</strong> (upload package + write CDT config) →
+        <strong>Generate</strong> candidates → <strong>Load</strong>, reorder and trim the
+        list (row order = deployment order = blast-radius control) → <strong>Save order</strong>
+        → optional <strong>Prepare</strong> → <strong>Execute</strong>. Execute runs under
+        nohup on the server and is followed live in the Jobs section.
+      </p>
+
+      <div class="cdt-controls">
+        <select id="cdt-server"><option value="">— management server —</option></select>
+        <select id="cdt-package"><option value="">— package —</option></select>
+        <button id="cdt-stage" class="small">Stage</button>
+        <button id="cdt-generate" class="small">Generate</button>
+        <button id="cdt-load" class="small">Load candidates</button>
+        <button id="cdt-save" class="small">Save order</button>
+        <button id="cdt-prepare" class="small">Prepare</button>
+        <label class="muted"><input type="checkbox" id="cdt-extended"> extended</label>
+        <button id="cdt-execute" class="small danger">Execute</button>
+        <button id="cdt-status-btn" class="small">Status</button>
+      </div>
+      <div id="cdt-status" class="muted"></div>
+
+      <table id="cdt-candidates-table">
+        <thead><tr><!-- header cells filled from the CSV by app.js --></tr></thead>
+        <tbody><!-- tpl-cdt-row instances --></tbody>
+      </table>
+    </section>
+
+  </div>
+
+  <!-- ── Jobs: visible on every tab (tracks both subsystems) ─────────── -->
   <section id="jobs">
     <h2>Jobs</h2>
     <p class="hint">
-      Every import/install runs as a background job and survives page reloads.
-      Click a row to see its progress log. Running jobs can be cancelled at the
-      next safe point.
+      Every import/install/CDT action runs as a background job and survives page
+      reloads. Click a row to see its progress log. Running jobs can be cancelled
+      at the next safe point.
     </p>
     <table id="jobs-table">
       <thead>
@@ -189,6 +236,16 @@
 </footer>
 
 <!-- ======================= row/card templates ======================= -->
+
+<template id="tpl-server-info-row">
+  <tr>
+    <td class="srv-name"></td>
+    <td class="srv-address mono"></td>
+    <td class="srv-role"></td>
+    <td class="srv-user mono"></td>
+    <td class="srv-creds"></td>
+  </tr>
+</template>
 
 <template id="tpl-server-row">
   <tr>

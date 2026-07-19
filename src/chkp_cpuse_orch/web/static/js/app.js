@@ -47,6 +47,41 @@ function fmtTime(iso) {
   return iso ? new Date(iso).toLocaleString() : "";
 }
 
+/* ---------- 1b. tabs ---------- */
+
+// Default tab: Provisioning when the inventory has no management servers yet,
+// Management otherwise. Decided once at load (chooseDefaultTab); after that the
+// user's clicks rule. Deep-linking works too: open /#tab-gateways etc.
+let tabChosen = false;
+
+function selectTab(name) {
+  for (const btn of document.querySelectorAll("#tabs .tab-btn")) {
+    btn.classList.toggle("active", btn.dataset.tab === name);
+  }
+  for (const panel of document.querySelectorAll(".tab-panel")) {
+    panel.classList.toggle("active", panel.id === "tab-" + name);
+  }
+  tabChosen = true;
+}
+
+function chooseDefaultTab(serverCount) {
+  if (tabChosen) return; // user (or a #tab- link) already picked one
+  selectTab(serverCount > 0 ? "management" : "provisioning");
+}
+
+function initTabs() {
+  for (const btn of document.querySelectorAll("#tabs .tab-btn")) {
+    btn.addEventListener("click", () => {
+      selectTab(btn.dataset.tab);
+      history.replaceState(null, "", "#tab-" + btn.dataset.tab);
+    });
+  }
+  const fromHash = location.hash.match(/^#tab-(\w+)$/);
+  if (fromHash && document.getElementById("tab-" + fromHash[1])) {
+    selectTab(fromHash[1]);
+  }
+}
+
 /* ---------- 2. status chips ---------- */
 
 async function refreshStatus() {
@@ -115,14 +150,27 @@ document.getElementById("prov-copy").addEventListener("click", async () => {
 
 async function loadServers() {
   const tbody = document.querySelector("#servers-table tbody");
+  const infoTbody = document.querySelector("#servers-info-table tbody");
   const namelist = document.getElementById("server-names");
   const servers = await api("/api/servers");
   const packages = await api("/api/packages");
 
   tbody.replaceChildren();
+  infoTbody.replaceChildren();
   namelist.replaceChildren();
 
   for (const srv of servers) {
+    // Provisioning tab: informational row, no actions.
+    const info = el("tpl-server-info-row");
+    info.querySelector(".srv-name").textContent = srv.name;
+    info.querySelector(".srv-address").textContent = srv.address;
+    info.querySelector(".srv-role").textContent = srv.role;
+    info.querySelector(".srv-user").textContent = srv.ssh_user;
+    info.querySelector(".srv-creds").textContent =
+      srv.credentials.length ? srv.credentials.join(", ") : "none — not reachable yet";
+    infoTbody.appendChild(info);
+
+    // Management tab: the action row.
     const row = el("tpl-server-row");
     row.querySelector(".srv-name").textContent = srv.name;
     row.querySelector(".srv-address").textContent = srv.address;
@@ -148,14 +196,19 @@ async function loadServers() {
   }
 
   if (!servers.length) {
-    const tr = document.createElement("tr");
-    const td = document.createElement("td");
-    td.colSpan = 5;
-    td.className = "muted";
-    td.textContent = "No management servers in inventory. Mount an inventory.yaml (see examples/).";
-    tr.appendChild(td);
-    tbody.appendChild(tr);
+    for (const target of [tbody, infoTbody]) {
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = 5;
+      td.className = "muted";
+      td.textContent =
+        "No management servers in inventory. Mount an inventory.yaml (see examples/).";
+      tr.appendChild(td);
+      target.appendChild(tr);
+    }
   }
+
+  chooseDefaultTab(servers.length);
 }
 
 async function refreshState(name, row) {
@@ -558,6 +611,7 @@ async function pollJobs() {
 /* ---------- boot ---------- */
 
 (async function init() {
+  initTabs();
   await refreshStatus();
   await Promise.all([loadServers(), loadPackages(), loadCredentials(), loadJobs()]);
   pollJobs();
