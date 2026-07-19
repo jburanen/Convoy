@@ -12,6 +12,13 @@ paths:
   reports_dir: reports
   logs_dir: logs
   state_dir: state
+  db_path: state/orch.db        # jobs, credential ciphertext, package metadata
+  packages_dir: packages        # uploaded package files
+  inventory_path: inventory.yaml
+  # In the Docker deployment everything lives on the mounted volume instead:
+  #   db_path: /data/state/orch.db
+  #   packages_dir: /data/packages
+  #   inventory_path: /data/inventory.yaml
 
 # Name of the approved maintenance window to enforce (looked up at runtime).
 maintenance_window: null

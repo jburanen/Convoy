@@ -33,6 +33,7 @@ dependencies = [
 web = [
   "fastapi>=0.111",
   "uvicorn[standard]>=0.30",
+  "python-multipart>=0.0.9",  # multipart parsing for package uploads
 ]
 dev = [
   "pytest>=8.0",
@@ -48,6 +49,10 @@ chkp-cpuse-orch = "chkp_cpuse_orch.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+# Ship the hand-editable static UI (HTML/CSS/JS) inside the wheel/container.
+"chkp_cpuse_orch.web" = ["static/**/*"]
 
 [tool.ruff]
 line-length = 100

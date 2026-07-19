@@ -42,6 +42,8 @@ class Paths(BaseModel):
     db_path: Path = Path("state") / "orch.db"
     # Uploaded package files (JHFs, upgrades). Also git-ignored / on /data.
     packages_dir: Path = Path("packages")
+    # Estate inventory (real file is git-ignored; see examples/inventory.example.yaml).
+    inventory_path: Path = Path("inventory.yaml")
 
 
 class Config(BaseModel):

@@ -13,6 +13,10 @@ services:
     environment:
       # Config/inventory are read from the mounted data dir at runtime.
       CHKP_CPUSE_CONFIG: /data/config.yaml
+      # Master key for the encrypted credential store. Supply via the shell env
+      # or a .env file next to this compose file (git-ignored) — NEVER commit it.
+      # Held in memory only; nothing readable lands on the volume.
+      CHKP_CPUSE_MASTER_KEY: ${CHKP_CPUSE_MASTER_KEY:-}
     volumes:
       - ./data:/data:rw
     restart: unless-stopped

@@ -1,0 +1,154 @@
+/*
+  chkp-cpuse-orch — stylesheet.
+  Hand-editable on purpose: plain CSS, custom properties for theming, no
+  preprocessor. Colors adapt to the OS light/dark preference automatically —
+  tweak the variables below to restyle everything at once.
+*/
+
+:root {
+  --bg: #f7f8fa;
+  --panel: #ffffff;
+  --text: #1c2430;
+  --muted: #68737f;
+  --border: #d9dee5;
+  --accent: #0a6cbd;        /* buttons, links */
+  --accent-text: #ffffff;
+  --danger: #b3382c;        /* destructive actions (install, delete) */
+  --ok: #2e7d32;
+  --warn: #b26a00;
+  --badge-bg: #eef1f5;
+  --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14181d;
+    --panel: #1d232b;
+    --text: #dfe5ec;
+    --muted: #8a95a1;
+    --border: #313a45;
+    --accent: #3d97e0;
+    --accent-text: #0c1117;
+    --danger: #e06055;
+    --ok: #66bb6a;
+    --warn: #e0a04c;
+    --badge-bg: #262e38;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font: 15px/1.5 system-ui, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+header, main, footer {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 1.25rem;
+}
+
+header { padding-top: 1.5rem; }
+header h1 { margin: 0; font-size: 1.5rem; }
+.subtitle { margin: 0.15rem 0 0.75rem; color: var(--muted); }
+
+footer { padding: 2rem 1.25rem; }
+
+/* ---- status chips (top of page) ---- */
+#status-chips { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.chip {
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  background: var(--badge-bg);
+  border: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+.chip.warn { color: var(--warn); border-color: var(--warn); }
+
+/* ---- sections ---- */
+section {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  margin: 1.25rem 0;
+}
+section h2 { margin: 0 0 0.25rem; font-size: 1.15rem; }
+.hint { color: var(--muted); font-size: 0.9rem; margin-top: 0; }
+
+/* ---- tables ---- */
+table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
+th, td {
+  text-align: left;
+  padding: 0.45rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+th { color: var(--muted); font-weight: 600; font-size: 0.85rem; }
+tr.job-row { cursor: pointer; }
+tr.job-row:hover td { background: var(--badge-bg); }
+
+/* ---- forms & buttons ---- */
+form { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin: 0.5rem 0; }
+input, select, button {
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.35rem 0.6rem;
+}
+input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+button {
+  background: var(--accent);
+  color: var(--accent-text);
+  border: none;
+  cursor: pointer;
+}
+button:hover { filter: brightness(1.1); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+button.small { padding: 0.2rem 0.55rem; font-size: 0.85rem; }
+button.danger { background: var(--danger); color: #fff; }
+
+/* ---- badges & state ---- */
+.badge {
+  display: inline-block;
+  padding: 0 0.45rem;
+  border-radius: 4px;
+  background: var(--badge-bg);
+  font-size: 0.82rem;
+}
+.badge.ok { color: var(--ok); }
+.badge.warn { color: var(--warn); }
+.badge.err { color: var(--danger); }
+
+.mono { font-family: var(--mono); font-size: 0.86rem; }
+.muted { color: var(--muted); font-size: 0.85rem; }
+.hidden { display: none; }
+
+/* long hashes: keep the table sane, full value in the title tooltip */
+.clip {
+  max-width: 10rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- detected CPUSE packages inside the server table ---- */
+.srv-packages { margin-top: 0.35rem; display: flex; flex-direction: column; gap: 0.25rem; }
+.detected-pkg { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+
+/* ---- per-job progress log ---- */
+.job-events {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg);
+  border-radius: 6px;
+  max-height: 16rem;
+  overflow: auto;
+  white-space: pre-wrap;
+}
