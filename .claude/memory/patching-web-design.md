@@ -45,6 +45,16 @@ plain and file-based:
 - Avoid Jinja; if templating ever becomes unavoidable, keep it to a minimal base
   layout. Never generate HTML from Python.
 
+## Web UI authentication (requirement, 2026-07-19 — not yet built)
+The admin UI must support **both**:
+- **Basic auth** — local users; password hashes at rest (never plaintext).
+- **LDAP** — bind against the org directory (likely AD); config for server URL,
+  base DN, bind template/service account, and an allowed group.
+Design so both are backends behind one auth layer (session cookie after login;
+FastAPI dependency guarding all /api routes and the static UI). Until this
+ships, the app is safe only on a trusted network — flagged in the Phase 3
+commit message.
+
 ## New core infrastructure (shared by both subsystems)
 - **Credential store, encrypted at rest.** Ciphertext in SQLite; master key supplied
   at container start (env var / docker secret), held only in memory, never written to

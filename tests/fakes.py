@@ -15,12 +15,20 @@ Check_Point_R81_10_JHF_T45.tgz                            Installed
 
 DA_BUILD = "Build 2417"
 
+# A response can be scripted as:
+#   "text"            → rc 0, that stdout
+#   (rc, "text")      → explicit rc + stdout
+#   [resp, resp, ...] → consumed in order; the last one repeats
+Resp = str | tuple[int, str]
+
 
 class FakeTransport:
-    """Satisfies services.patching.Transport. Replies come from ``responses``:
+    """Satisfies services.common.Transport. Replies come from ``responses``:
     the first key found as a substring of the command wins."""
 
-    def __init__(self, responses: dict[str, str] | None = None, fail_rc: int = 0) -> None:
+    def __init__(
+        self, responses: dict[str, Resp | list[Resp]] | None = None, fail_rc: int = 0
+    ) -> None:
         self.responses = responses or {}
         self.fail_rc = fail_rc  # set non-zero to make every command fail
         self.commands: list[str] = []
@@ -31,8 +39,20 @@ class FakeTransport:
 
     def run(self, command: str, *, timeout: float | None = None) -> CommandResult:
         self.commands.append(command)
-        stdout = next((out for key, out in self.responses.items() if key in command), "")
-        return CommandResult(command=command, exit_status=self.fail_rc, stdout=stdout, stderr="")
+        rc, stdout = self._lookup(command)
+        if self.fail_rc:
+            rc = self.fail_rc
+        return CommandResult(command=command, exit_status=rc, stdout=stdout, stderr="")
+
+    def _lookup(self, command: str) -> tuple[int, str]:
+        for key, scripted in self.responses.items():
+            if key in command:
+                if isinstance(scripted, list):
+                    resp = scripted.pop(0) if len(scripted) > 1 else scripted[0]
+                else:
+                    resp = scripted
+                return (0, resp) if isinstance(resp, str) else resp
+        return (0, "")
 
     def put(
         self,

@@ -188,6 +188,150 @@ async function installPackage(name, packageId) {
   }
 }
 
+/* ---------- 3b. gateway deployment (CDT) ---------- */
+
+// Candidate rows held in memory between Load and Save. Kept as
+// { header: [...], rows: [[...], ...] } exactly as the API speaks.
+let cdtCandidates = null;
+
+function cdtServer() {
+  const name = document.getElementById("cdt-server").value;
+  if (!name) toast("Choose a management server first.");
+  return name;
+}
+
+async function populateCdtSelectors() {
+  const serverSel = document.getElementById("cdt-server");
+  const pkgSel = document.getElementById("cdt-package");
+  const [servers, packages] = await Promise.all([api("/api/servers"), api("/api/packages")]);
+  serverSel.replaceChildren(new Option("— management server —", ""));
+  for (const s of servers) serverSel.appendChild(new Option(s.name, s.name));
+  pkgSel.replaceChildren(new Option("— package —", ""));
+  for (const p of packages) pkgSel.appendChild(new Option(p.filename, p.filename));
+}
+
+async function cdtRefreshStatus() {
+  const name = cdtServer();
+  if (!name) return;
+  const box = document.getElementById("cdt-status");
+  box.textContent = "querying…";
+  try {
+    const s = await api(`/api/cdt/${encodeURIComponent(name)}/status`);
+    box.textContent =
+      (s.available ? "CDT available" : "CDT NOT FOUND on this server") +
+      (s.running ? " — RUNNING" : " — idle") +
+      (s.brief ? " — " + s.brief : "");
+  } catch (e) {
+    box.textContent = "status failed: " + e.message;
+  }
+}
+
+async function cdtLoadCandidates() {
+  const name = cdtServer();
+  if (!name) return;
+  try {
+    cdtCandidates = await api(`/api/cdt/${encodeURIComponent(name)}/candidates`);
+    renderCdtCandidates();
+  } catch (e) {
+    toast("Load failed: " + e.message);
+  }
+}
+
+function renderCdtCandidates() {
+  const headRow = document.querySelector("#cdt-candidates-table thead tr");
+  const tbody = document.querySelector("#cdt-candidates-table tbody");
+  headRow.replaceChildren();
+  tbody.replaceChildren();
+  if (!cdtCandidates) return;
+
+  const actionsTh = document.createElement("th"); // order/remove controls column
+  headRow.appendChild(actionsTh);
+  for (const col of cdtCandidates.header) {
+    const th = document.createElement("th");
+    th.textContent = col;
+    headRow.appendChild(th);
+  }
+
+  cdtCandidates.rows.forEach((row, idx) => {
+    const tr = el("tpl-cdt-row");
+    tr.querySelector(".btn-up").addEventListener("click", () => cdtMoveRow(idx, -1));
+    tr.querySelector(".btn-down").addEventListener("click", () => cdtMoveRow(idx, +1));
+    tr.querySelector(".btn-remove").addEventListener("click", () => {
+      cdtCandidates.rows.splice(idx, 1);
+      renderCdtCandidates();
+    });
+    for (const cell of row) {
+      const td = document.createElement("td");
+      td.className = "mono";
+      td.textContent = cell;
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  });
+}
+
+function cdtMoveRow(idx, delta) {
+  const rows = cdtCandidates.rows;
+  const target = idx + delta;
+  if (target < 0 || target >= rows.length) return;
+  [rows[idx], rows[target]] = [rows[target], rows[idx]];
+  renderCdtCandidates();
+}
+
+async function cdtSaveCandidates() {
+  const name = cdtServer();
+  if (!name || !cdtCandidates) { toast("Load candidates first."); return; }
+  try {
+    const resp = await api(`/api/cdt/${encodeURIComponent(name)}/candidates`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cdtCandidates),
+    });
+    toast(`Saved ${resp.rows} candidate(s). Row order is the deployment order.`);
+  } catch (e) {
+    toast("Save failed: " + e.message);
+  }
+}
+
+async function cdtAction(path, body) {
+  const name = cdtServer();
+  if (!name) return;
+  try {
+    await api(`/api/cdt/${encodeURIComponent(name)}/${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body ?? {}),
+    });
+    await loadJobs();
+  } catch (e) {
+    toast(`${path} failed to start: ` + e.message);
+  }
+}
+
+document.getElementById("cdt-stage").addEventListener("click", () => {
+  const pkg = document.getElementById("cdt-package").value;
+  if (!pkg) { toast("Choose an uploaded package first."); return; }
+  cdtAction("stage", { package: pkg });
+});
+document.getElementById("cdt-generate").addEventListener("click", () => cdtAction("generate"));
+document.getElementById("cdt-load").addEventListener("click", cdtLoadCandidates);
+document.getElementById("cdt-save").addEventListener("click", cdtSaveCandidates);
+document.getElementById("cdt-prepare").addEventListener("click", () =>
+  cdtAction("prepare", { extended: document.getElementById("cdt-extended").checked }));
+document.getElementById("cdt-status-btn").addEventListener("click", cdtRefreshStatus);
+document.getElementById("cdt-execute").addEventListener("click", () => {
+  const name = document.getElementById("cdt-server").value;
+  const count = cdtCandidates ? cdtCandidates.rows.length : "?";
+  // Executing deploys to EVERY gateway in the candidates list, in order.
+  const sure = confirm(
+    `Execute the CDT deployment from ${name || "?"}?\n\n` +
+    `This deploys to ${count} gateway(s) in the saved candidate order, ` +
+    "including automatic cluster failovers. Make sure this is inside a " +
+    "maintenance window and the candidate list was reviewed and saved."
+  );
+  if (sure) cdtAction("execute", { confirmed: true });
+});
+
 /* ---------- 4. packages ---------- */
 
 async function loadPackages() {
@@ -213,6 +357,7 @@ async function loadPackages() {
     });
     tbody.appendChild(row);
   }
+  await populateCdtSelectors(); // keep the CDT dropdowns in sync with packages/servers
 }
 
 document.getElementById("upload-form").addEventListener("submit", async (ev) => {

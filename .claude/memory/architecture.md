@@ -19,7 +19,9 @@ chkp_cpuse_orch/
   web/              # FastAPI app (PRIMARY front-end): routes, SSE/WS status, static UI
     app.py          # ASGI app, health/root today; grows the management UI
   services/         # Service core — the shared logic both front-ends call
-    patching.py     # High-level ops: stage/import/install (CPUSE), plan/execute (CDT)
+    common.py       # HostConnector: inventory+credentials→connected Transport; ClientFactory
+    patching.py     # CPUSE-local subsystem: detect/import/install jobs per mgmt server
+    cdt_ops.py      # CDT subsystem: stage/generate/candidates-edit/prepare/execute jobs
   config.py         # Pydantic settings (global tool config, defaults, paths)
   inventory.py      # Pydantic models: Site, ManagementServer, Gateway, Cluster; loader
   credentials.py    # Encrypted-at-rest credential store (key + password; see design)

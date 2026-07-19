@@ -142,6 +142,16 @@ button.danger { background: var(--danger); color: #fff; }
 .srv-packages { margin-top: 0.35rem; display: flex; flex-direction: column; gap: 0.25rem; }
 .detected-pkg { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
 
+/* ---- CDT (gateway deployment) controls ---- */
+.cdt-controls {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 0.5rem 0;
+}
+.cdt-row-actions { white-space: nowrap; }
+
 /* ---- per-job progress log ---- */
 .job-events {
   margin: 0;

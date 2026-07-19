@@ -25,6 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, SecretStr
 
 from .. import __version__
+from ..cdt import CandidatesFile
 from ..config import Config
 from ..credentials import (
     Credential,
@@ -34,6 +35,7 @@ from ..credentials import (
     load_master_key,
 )
 from ..errors import (
+    CDTError,
     CredentialError,
     InventoryError,
     JobError,
@@ -46,7 +48,9 @@ from ..inventory import Inventory
 from ..jobs import JobRunner
 from ..packages import PackageStore
 from ..reporting import configure_logging, get_logger
-from ..services.patching import ClientFactory, PatchingService
+from ..services.cdt_ops import CDTService
+from ..services.common import ClientFactory, HostConnector
+from ..services.patching import PatchingService
 from ..store import JobEvent, JobRecord, PackageRecord, Store
 
 logger = get_logger(__name__)
@@ -72,6 +76,23 @@ class InstallRequest(BaseModel):
     package_id: str  # CPUSE identifier as shown by detect
     confirmed: bool = False  # UI must send True after an explicit operator confirm
     verify_first: bool = True
+
+
+class StageRequest(BaseModel):
+    package: str  # filename in the package store
+
+
+class PrepareRequest(BaseModel):
+    extended: bool = False  # extended also updates CPUSE + imports on targets
+
+
+class ExecuteRequest(BaseModel):
+    confirmed: bool = False  # UI must send True after an explicit operator confirm
+
+
+class CandidatesIn(BaseModel):
+    header: list[str]
+    rows: list[list[str]]  # row order == deployment order
 
 
 # -- app factory -------------------------------------------------------------------
@@ -106,12 +127,20 @@ def create_app(
             app.state.credentials_error = str(exc)
 
         runner = JobRunner(store)
+        connector = HostConnector(inventory, credentials, client_factory)
         service = PatchingService(
             inventory=inventory,
             credentials=credentials,
             packages=packages,
             runner=runner,
-            client_factory=client_factory,
+            connector=connector,
+        )
+        cdt_service = CDTService(
+            inventory=inventory,
+            credentials=credentials,
+            packages=packages,
+            runner=runner,
+            connector=connector,
         )
 
         app.state.store = store
@@ -119,6 +148,7 @@ def create_app(
         app.state.credentials = credentials
         app.state.runner = runner
         app.state.service = service
+        app.state.cdt = cdt_service
 
         interrupted = runner.recover()
         if interrupted:
@@ -161,6 +191,8 @@ def _map_error(exc: OrchestratorError) -> HTTPException:
         status = 404 if "not found" in str(exc) or "no such" in str(exc) else 400
     elif isinstance(exc, CredentialError):
         status = 503 if "locked" in str(exc) else 409
+    elif isinstance(exc, CDTError):
+        status = 409 if "running" in str(exc) else 400
     elif isinstance(exc, TransportError):
         status = 502
     elif isinstance(exc, StoreError):
@@ -293,6 +325,76 @@ def _register_routes(app: FastAPI) -> None:
     @app.delete("/api/credentials/{host}/{kind}")
     def delete_credential(host: str, kind: CredentialKind, request: Request) -> dict[str, bool]:
         return {"deleted": _credentials_or_503(request).delete(host, kind)}
+
+    # -- CDT (gateway fleet, driven from a management server) --------------------
+
+    def _cdt(request: Request) -> CDTService:
+        cdt: CDTService = request.app.state.cdt
+        return cdt
+
+    @app.get("/api/cdt/{name}/status")
+    async def cdt_status(name: str, request: Request) -> dict[str, Any]:
+        _credentials_or_503(request)
+        try:
+            return await asyncio.to_thread(_cdt(request).get_status, name)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+
+    @app.get("/api/cdt/{name}/candidates")
+    async def cdt_candidates(name: str, request: Request) -> dict[str, Any]:
+        _credentials_or_503(request)
+        try:
+            cands = await asyncio.to_thread(_cdt(request).get_candidates, name)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        return {"header": cands.header, "rows": cands.rows}
+
+    @app.put("/api/cdt/{name}/candidates")
+    async def cdt_save_candidates(
+        name: str, body: CandidatesIn, request: Request
+    ) -> dict[str, int]:
+        _credentials_or_503(request)
+        try:
+            count = await asyncio.to_thread(
+                _cdt(request).save_candidates,
+                name,
+                CandidatesFile(header=body.header, rows=body.rows),
+            )
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        return {"rows": count}
+
+    @app.post("/api/cdt/{name}/stage", status_code=202)
+    def cdt_stage(name: str, body: StageRequest, request: Request) -> JobRecord:
+        _credentials_or_503(request)
+        try:
+            return _cdt(request).submit_stage(name, body.package)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+
+    @app.post("/api/cdt/{name}/generate", status_code=202)
+    def cdt_generate(name: str, request: Request) -> JobRecord:
+        _credentials_or_503(request)
+        try:
+            return _cdt(request).submit_generate(name)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+
+    @app.post("/api/cdt/{name}/prepare", status_code=202)
+    def cdt_prepare(name: str, body: PrepareRequest, request: Request) -> JobRecord:
+        _credentials_or_503(request)
+        try:
+            return _cdt(request).submit_prepare(name, extended=body.extended)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+
+    @app.post("/api/cdt/{name}/execute", status_code=202)
+    def cdt_execute(name: str, body: ExecuteRequest, request: Request) -> JobRecord:
+        _credentials_or_503(request)
+        try:
+            return _cdt(request).submit_execute(name, confirmed=body.confirmed)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
 
     # -- jobs ------------------------------------------------------------------
 

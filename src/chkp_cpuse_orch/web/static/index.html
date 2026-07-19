@@ -50,6 +50,38 @@
     </table>
   </section>
 
+  <!-- ================= Gateway deployment (CDT) ======================= -->
+  <section id="cdt">
+    <h2>Gateway deployment (CDT)</h2>
+    <p class="hint">
+      CDT runs <em>on</em> a management server and pushes a package to many gateways.
+      Flow: <strong>Stage</strong> (upload package + write CDT config) →
+      <strong>Generate</strong> candidates → <strong>Load</strong>, reorder and trim the
+      list (row order = deployment order = blast-radius control) → <strong>Save order</strong>
+      → optional <strong>Prepare</strong> → <strong>Execute</strong>. Execute runs under
+      nohup on the server and is followed live in the Jobs section.
+    </p>
+
+    <div class="cdt-controls">
+      <select id="cdt-server"><option value="">— management server —</option></select>
+      <select id="cdt-package"><option value="">— package —</option></select>
+      <button id="cdt-stage" class="small">Stage</button>
+      <button id="cdt-generate" class="small">Generate</button>
+      <button id="cdt-load" class="small">Load candidates</button>
+      <button id="cdt-save" class="small">Save order</button>
+      <button id="cdt-prepare" class="small">Prepare</button>
+      <label class="muted"><input type="checkbox" id="cdt-extended"> extended</label>
+      <button id="cdt-execute" class="small danger">Execute</button>
+      <button id="cdt-status-btn" class="small">Status</button>
+    </div>
+    <div id="cdt-status" class="muted"></div>
+
+    <table id="cdt-candidates-table">
+      <thead><tr><!-- header cells filled from the CSV by app.js --></tr></thead>
+      <tbody><!-- tpl-cdt-row instances --></tbody>
+    </table>
+  </section>
+
   <!-- ============================ Packages ============================ -->
   <section id="packages">
     <h2>Packages</h2>
@@ -160,6 +192,18 @@
     <span class="pkg-status badge"></span>
     <button class="btn-install small danger hidden">Install</button>
   </div>
+</template>
+
+<!-- CDT candidate row: the action buttons live here; the data <td>s are created
+     by app.js because the CSV column set varies across CDT versions. -->
+<template id="tpl-cdt-row">
+  <tr class="cdt-row">
+    <td class="cdt-row-actions">
+      <button class="btn-up small" title="move earlier in deployment order">↑</button>
+      <button class="btn-down small" title="move later in deployment order">↓</button>
+      <button class="btn-remove small danger" title="remove from this deployment">✕</button>
+    </td>
+  </tr>
 </template>
 
 <template id="tpl-package-row">

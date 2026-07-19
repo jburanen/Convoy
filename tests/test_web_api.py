@@ -40,12 +40,18 @@ def _config(tmp_path: Path) -> Config:
     )
 
 
+CANDIDATES_CSV = "Object Name,IP,Upgrade Order\nfw-a1,192.0.2.31,1\nfw-a2,192.0.2.32,2\n"
+
+
 @pytest.fixture
 def transport() -> FakeTransport:
     return FakeTransport(
         responses={
             "show installer packages": SHOW_PACKAGES_ALL,
             "show installer status build": DA_BUILD,
+            "cat /opt/CPcdt/orch_candidates.csv": CANDIDATES_CSV,
+            "pgrep": (1, ""),  # no CDT process running by default
+            "test -x": (0, ""),  # CDT binary present
         }
     )
 
@@ -224,6 +230,63 @@ def test_import_against_gateway_is_rejected(client: TestClient) -> None:
     resp = client.post("/api/servers/fw-01/import", json={"package": "jhf.tgz"})
     assert resp.status_code == 400
     assert "patched via CDT" in resp.json()["detail"]
+
+
+# -- CDT --------------------------------------------------------------------------
+
+
+def test_cdt_status_endpoint(client: TestClient) -> None:
+    _add_ssh_credential(client)
+    body = client.get("/api/cdt/mgmt-01/status").json()
+    assert body == {"available": True, "running": False, "brief": ""}
+
+
+def test_cdt_candidates_get_and_put(client: TestClient, transport: FakeTransport) -> None:
+    _add_ssh_credential(client)
+    cands = client.get("/api/cdt/mgmt-01/candidates").json()
+    assert cands["header"][0] == "Object Name"
+    assert len(cands["rows"]) == 2
+
+    # Reverse the order and save — this is the blast-radius edit.
+    resp = client.put(
+        "/api/cdt/mgmt-01/candidates",
+        json={"header": cands["header"], "rows": list(reversed(cands["rows"]))},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"rows": 2}
+    assert transport.puts[-1][1] == "/opt/CPcdt/orch_candidates.csv"
+
+
+def test_cdt_execute_requires_confirmation(client: TestClient) -> None:
+    _add_ssh_credential(client)
+    resp = client.post("/api/cdt/mgmt-01/execute", json={"confirmed": False})
+    assert resp.status_code == 400
+    assert "confirmation" in resp.json()["detail"]
+
+
+def test_cdt_stage_and_generate_flow(client: TestClient, transport: FakeTransport) -> None:
+    _add_ssh_credential(client)
+    _upload_package(client)
+    transport.responses["stat -c %s"] = (1, "")  # package not staged yet
+
+    resp = client.post("/api/cdt/mgmt-01/stage", json={"package": "jhf.tgz"})
+    assert resp.status_code == 202, resp.text
+    job = _wait_for_job(client, resp.json()["id"])
+    assert job["status"] == "succeeded", job["error"]
+    assert transport.puts[0][1] == "/var/log/upload/jhf.tgz"
+    assert transport.puts[1][1] == "/opt/CPcdt/CentralDeploymentTool.xml"
+
+    resp = client.post("/api/cdt/mgmt-01/generate")
+    assert resp.status_code == 202
+    job = _wait_for_job(client, resp.json()["id"])
+    assert job["status"] == "succeeded", job["error"]
+
+
+def test_cdt_endpoints_locked_without_credentials(client: TestClient) -> None:
+    # No SSH credential stored for the host → 409 with a clear message.
+    resp = client.get("/api/cdt/mgmt-01/status")
+    assert resp.status_code == 409
+    assert "no SSH credential" in resp.json()["detail"]
 
 
 # -- jobs -------------------------------------------------------------------------
