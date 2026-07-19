@@ -89,7 +89,7 @@ async function refreshStatus() {
   box.replaceChildren();
   try {
     const s = await api("/api/status");
-    addChip(box, `v${s.version}`);
+    document.getElementById("footer-version").textContent = "v" + s.version;
     addChip(box, `${s.management_servers} management server(s)`);
     addChip(box, `${s.packages} package(s)`);
     if (!s.credentials_unlocked) {

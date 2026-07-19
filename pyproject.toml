@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chkp-cpuse-orch"
-version = "0.0.1"
+dynamic = ["version"]  # single source: chkp_cpuse_orch.__version__
 description = "Orchestration layer for Check Point's Central Deployment Tool (CDT/CPUSE) — staged, health-gated patching and upgrades across management servers and gateways."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -48,6 +48,9 @@ dev = [
 
 [project.scripts]
 chkp-cpuse-orch = "chkp_cpuse_orch.cli:app"
+
+[tool.setuptools.dynamic]
+version = { attr = "chkp_cpuse_orch.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
