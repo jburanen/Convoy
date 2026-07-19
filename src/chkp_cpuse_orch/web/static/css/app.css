@@ -65,10 +65,10 @@ footer {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  color: var(--muted);
-  text-decoration: none; /* underline appears on hover only */
+  color: var(--muted); /* same as normal footer text; logo follows via currentColor */
+  text-decoration: none;
 }
-#footer-repo:hover { text-decoration: underline; color: var(--text); }
+#footer-repo:hover { text-decoration: underline; } /* underline on hover only */
 
 /* ---- status chips (top of page) ---- */
 #status-chips { display: flex; gap: 0.5rem; flex-wrap: wrap; }
@@ -81,12 +81,18 @@ footer {
 }
 .chip.warn { color: var(--warn); border-color: var(--warn); }
 
-/* ---- environment picker ---- */
+/* ---- header top row: title left, environment picker top-right ---- */
+#header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap; /* picker drops below the title on narrow screens */
+}
 #env-row {
   display: flex;
   gap: 0.5rem;
   align-items: center;
-  margin-top: 0.6rem;
 }
 #env-picker { font-weight: 600; }
 
