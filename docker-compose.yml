@@ -10,12 +10,19 @@ services:
     user: "1001:1001"
     ports:
       - "8080:8080"
+    env_file:
+      # Runtime secrets/config, git-ignored, next to this compose file. Holds the
+      # credential-store master key (CHKP_CPUSE_MASTER_KEY) and — when the web UI's
+      # LDAP authentication is enabled — the CHKP_CPUSE_LDAP_* settings (see
+      # .env.example). NEVER commit .env. required:false so the stack still builds
+      # on a host that hasn't created one yet (auth stays off, storage disabled).
+      - path: .env
+        required: false
     environment:
       # Config/inventory are read from the mounted data dir at runtime.
       CHKP_CPUSE_CONFIG: /data/config.yaml
-      # Master key for the encrypted credential store. Supply via the shell env
-      # or a .env file next to this compose file (git-ignored) — NEVER commit it.
-      # Held in memory only; nothing readable lands on the volume.
+      # Fallback for supplying the master key via the shell env instead of .env;
+      # a value in .env (loaded above) is used when this is empty.
       CHKP_CPUSE_MASTER_KEY: ${CHKP_CPUSE_MASTER_KEY:-}
     volumes:
       - ./data:/data:rw
