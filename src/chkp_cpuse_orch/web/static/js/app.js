@@ -186,6 +186,9 @@ document.getElementById("env-modal-close").addEventListener("click", closeEnvMod
 document.getElementById("env-modal").addEventListener("click", (ev) => {
   if (ev.target.id === "env-modal") closeEnvModal(); // click on backdrop closes
 });
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape") closeEnvModal();
+});
 
 document.getElementById("env-add-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();

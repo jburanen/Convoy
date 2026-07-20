@@ -221,6 +221,9 @@ button.danger { background: var(--danger); color: #fff; }
   z-index: 100;
   overflow: auto;
 }
+/* Must out-rank .modal's display:flex (same-specificity .hidden loses to the
+   later .modal rule) — without this the dialog is stuck open on page load. */
+.modal.hidden { display: none; }
 .modal-card {
   background: var(--panel);
   border: 1px solid var(--border);
