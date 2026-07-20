@@ -51,7 +51,7 @@
   </div>
   <nav id="tabs">
     <button class="tab-btn" data-tab="provisioning">Provisioning</button>
-    <button class="tab-btn" data-tab="packages">Packages and Credentials</button>
+    <button class="tab-btn" data-tab="packages">Packages</button>
     <button class="tab-btn" data-tab="management">Management (CPUSE)</button>
     <button class="tab-btn" data-tab="gateways">Firewall Bulk Patching (CDT)</button>
     <button class="tab-btn" data-tab="jobs">Jobs<span id="jobs-badge" class="tab-badge hidden"></span></button>
@@ -72,7 +72,7 @@
         (the tool wraps its CPUSE commands in <code>clish&nbsp;-c</code> to match).
         The password appears in the output only as a salted SHA-512 hash.
         Afterwards, save the same username/password in the
-        <strong>Packages and Credentials</strong> tab.
+        <strong>Credentials</strong> panel below.
       </p>
       <form id="provision-form">
         <input type="text" id="prov-username" placeholder="username (e.g. svc-patch)" required>
@@ -82,6 +82,40 @@
         <button type="button" id="prov-copy" class="small hidden">Copy to clipboard</button>
       </form>
       <pre id="prov-output" class="job-events mono hidden"></pre>
+    </section>
+
+    <section id="credentials">
+      <h2>Credentials</h2>
+      <p class="hint">
+        Stored encrypted at rest; secrets are never displayed again after saving.
+        Host <code>*</code> acts as a fleet-wide default. Gaia auth is typically an
+        SSH password (admin) — add an expert password if privileged steps need it.
+      </p>
+      <p class="hint warn hidden" id="cred-storage-notice">
+        Credential storage is <strong>disabled</strong> for this environment, so
+        nothing is stored here. You'll be prompted for credentials each time you run
+        an action; they stay in memory only until it finishes. Enable storage from
+        the environment picker → <strong>Manage Environments…</strong>.
+      </p>
+      <form id="credential-form">
+        <input type="text" id="cred-host" placeholder="host name (or *)" required list="server-names">
+        <datalist id="server-names"></datalist>
+        <select id="cred-kind">
+          <option value="ssh_password">SSH password</option>
+          <option value="ssh_private_key">SSH private key</option>
+          <option value="expert_password">Expert password</option>
+          <option value="api_key">API key</option>
+        </select>
+        <input type="text" id="cred-username" placeholder="username (optional)">
+        <input type="password" id="cred-secret" placeholder="secret" required>
+        <button type="submit">Save</button>
+      </form>
+      <table id="credentials-table">
+        <thead>
+          <tr><th>Host</th><th>Kind</th><th>Username</th><th></th></tr>
+        </thead>
+        <tbody><!-- tpl-credential-row instances --></tbody>
+      </table>
     </section>
 
     <section id="servers-info">
@@ -127,7 +161,7 @@
 
   </div>
 
-  <!-- ┌───────────────── TAB 2: Packages and Credentials ────────────────┐ -->
+  <!-- ┌────────────────────────── TAB 2: Packages ──────────────────────────┐ -->
   <div class="tab-panel" id="tab-packages">
 
     <section id="packages">
@@ -157,40 +191,6 @@
           </tr>
         </thead>
         <tbody><!-- tpl-package-row instances --></tbody>
-      </table>
-    </section>
-
-    <section id="credentials">
-      <h2>Credentials</h2>
-      <p class="hint">
-        Stored encrypted at rest; secrets are never displayed again after saving.
-        Host <code>*</code> acts as a fleet-wide default. Gaia auth is typically an
-        SSH password (admin) — add an expert password if privileged steps need it.
-      </p>
-      <p class="hint warn hidden" id="cred-storage-notice">
-        Credential storage is <strong>disabled</strong> for this environment, so
-        nothing is stored here. You'll be prompted for credentials each time you run
-        an action; they stay in memory only until it finishes. Enable storage from
-        the environment picker → <strong>Manage Environments…</strong>.
-      </p>
-      <form id="credential-form">
-        <input type="text" id="cred-host" placeholder="host name (or *)" required list="server-names">
-        <datalist id="server-names"></datalist>
-        <select id="cred-kind">
-          <option value="ssh_password">SSH password</option>
-          <option value="ssh_private_key">SSH private key</option>
-          <option value="expert_password">Expert password</option>
-          <option value="api_key">API key</option>
-        </select>
-        <input type="text" id="cred-username" placeholder="username (optional)">
-        <input type="password" id="cred-secret" placeholder="secret" required>
-        <button type="submit">Save</button>
-      </form>
-      <table id="credentials-table">
-        <thead>
-          <tr><th>Host</th><th>Kind</th><th>Username</th><th></th></tr>
-        </thead>
-        <tbody><!-- tpl-credential-row instances --></tbody>
       </table>
     </section>
 
@@ -322,8 +322,8 @@
 
 <!-- ============ Manage Environments modal (opened from the picker) ========== -->
 <!-- Create + rename only: a rename moves the environment's servers, credentials,
-     and job history to the new name atomically. Server add/remove and deletion
-     stay on the Provisioning tab; credentials on Packages and Credentials. -->
+     and job history to the new name atomically. Server add/remove, deletion, and
+     credentials all live on the Provisioning tab. -->
 <div id="env-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="env-modal-title">
   <div class="modal-card narrow">
     <div class="modal-head">
