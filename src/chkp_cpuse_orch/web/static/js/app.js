@@ -118,10 +118,15 @@ document.getElementById("env-picker").addEventListener("change", async (ev) => {
 // servers, and no credentials or packages anywhere — offer renaming the default
 // environment before any data gets attached to its name. Renaming at this point
 // is safely done as create-new + delete-old: the emptiness check guarantees
-// there is nothing to migrate. Dismissal sticks per browser via localStorage.
+// there is nothing to migrate.
+//
+// Only an EXPLICIT choice (Rename / Keep "default") is remembered in
+// localStorage; closing via ✕, backdrop, or Escape merely hides the dialog for
+// this page load, so an accidental click can't suppress it forever.
+const WELCOME_KEY = "welcomeChoiceMade"; // new key: old accidental "welcomeDismissed" flags are ignored
 
 async function maybeShowWelcome(envs) {
-  if (localStorage.getItem("welcomeDismissed")) return;
+  if (localStorage.getItem(WELCOME_KEY)) return;
   if (envs.length !== 1 || envs[0].name !== "default" || envs[0].management_servers !== 0) return;
   try {
     if ((await api("/api/packages")).length) return;
@@ -131,9 +136,15 @@ async function maybeShowWelcome(envs) {
   document.getElementById("welcome-name").focus();
 }
 
-function dismissWelcome() {
-  localStorage.setItem("welcomeDismissed", "1");
+function hideWelcome() {
+  // Soft close: shows again on the next load while the deployment stays fresh.
   document.getElementById("welcome-modal").classList.add("hidden");
+}
+
+function dismissWelcome() {
+  // Explicit choice made: never prompt this browser again.
+  localStorage.setItem(WELCOME_KEY, "1");
+  hideWelcome();
 }
 
 document.getElementById("welcome-form").addEventListener("submit", async (ev) => {
@@ -153,9 +164,9 @@ document.getElementById("welcome-form").addEventListener("submit", async (ev) =>
   } catch (e) { toast("Rename failed: " + e.message); }
 });
 document.getElementById("welcome-keep").addEventListener("click", dismissWelcome);
-document.getElementById("welcome-close").addEventListener("click", dismissWelcome);
+document.getElementById("welcome-close").addEventListener("click", hideWelcome);
 document.getElementById("welcome-modal").addEventListener("click", (ev) => {
-  if (ev.target.id === "welcome-modal") dismissWelcome(); // backdrop click
+  if (ev.target.id === "welcome-modal") hideWelcome(); // backdrop click
 });
 
 /* ---------- 1a-modal. new environment (create-only) ---------- */
@@ -178,9 +189,7 @@ document.getElementById("env-modal").addEventListener("click", (ev) => {
 document.addEventListener("keydown", (ev) => {
   if (ev.key !== "Escape") return;
   closeEnvModal();
-  if (!document.getElementById("welcome-modal").classList.contains("hidden")) {
-    dismissWelcome();
-  }
+  hideWelcome(); // soft close — the welcome dialog returns next load if still fresh
 });
 
 document.getElementById("env-add-form").addEventListener("submit", async (ev) => {

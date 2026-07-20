@@ -260,10 +260,11 @@
 </main>
 
 <!-- ============ First-run welcome modal ===================================== -->
-<!-- Shown once on a brand-new deployment: exactly one environment ("default")
+<!-- Shown on a brand-new deployment: exactly one environment ("default")
      with no servers, credentials, or packages yet. Offers renaming the default
-     environment before any data is attached to its name. Dismissal is
-     remembered per browser (localStorage). -->
+     environment before any data is attached to its name. Only an explicit
+     choice (Rename / Keep) is remembered per browser (localStorage); closing
+     via ✕/backdrop/Escape shows it again on the next load. -->
 <div id="welcome-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
   <div class="modal-card narrow">
     <div class="modal-head">
