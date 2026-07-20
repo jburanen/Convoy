@@ -506,6 +506,9 @@ document.getElementById("env-delete").addEventListener("click", async () => {
 let tabChosen = false;
 
 function selectTab(name) {
+  // Disabled/WIP tabs can't be opened — including via a #tab- deep link.
+  const target = document.querySelector(`#tabs .tab-btn[data-tab="${name}"]`);
+  if (target && target.disabled) return;
   for (const btn of document.querySelectorAll("#tabs .tab-btn")) {
     btn.classList.toggle("active", btn.dataset.tab === name);
   }

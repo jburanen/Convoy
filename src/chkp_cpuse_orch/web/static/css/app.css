@@ -136,6 +136,14 @@ footer {
   color: var(--accent);
   border-bottom-color: var(--accent);
 }
+/* Disabled / work-in-progress tab: dimmed and non-interactive. */
+.tab-btn:disabled,
+.tab-btn.wip {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.tab-btn:disabled:hover,
+.tab-btn.wip:hover { color: var(--muted); background: transparent; }
 /* Live "N running" pill on the Jobs tab button. */
 .tab-badge {
   display: inline-block;
