@@ -101,6 +101,12 @@ footer {
   gap: 1rem;
   flex-wrap: wrap; /* picker drops below the title on narrow screens */
 }
+#header-right {
+  display: flex;
+  align-items: center;
+  gap: 1rem; /* space between the session controls and the env picker */
+  flex-wrap: wrap;
+}
 #env-row {
   display: flex;
   gap: 0.5rem;

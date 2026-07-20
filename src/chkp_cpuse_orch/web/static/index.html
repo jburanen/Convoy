@@ -23,17 +23,21 @@
 <header>
   <div id="header-top">
     <h1>Check Point Patch Management</h1>
-    <!-- environment picker: top-right, same line as the title -->
-    <div id="env-row">
-      <label class="muted" for="env-picker">Environment:</label>
-      <select id="env-picker"><!-- filled from /api/environments --></select>
+    <!-- right-aligned header cluster: session controls, then the env picker -->
+    <div id="header-right">
+      <!-- Signed-in user + logout; shown only when LDAP auth is enabled. Sits
+           inline, left of the picker. Logout also clears any credentials cached
+           in this tab (see app.js). -->
+      <div id="session-row" class="hidden">
+        <span id="session-user"></span>
+        <button id="logout-btn" class="small secondary">Log out</button>
+      </div>
+      <!-- environment picker: top-right, same line as the title -->
+      <div id="env-row">
+        <label class="muted" for="env-picker">Environment:</label>
+        <select id="env-picker"><!-- filled from /api/environments --></select>
+      </div>
     </div>
-  </div>
-  <!-- Signed-in user + logout; shown only when LDAP auth is enabled. Logout also
-       clears any credentials cached in this tab (see app.js). -->
-  <div id="session-row" class="hidden">
-    <span id="session-user"></span>
-    <button id="logout-btn" class="small secondary">Log out</button>
   </div>
   <p class="subtitle">CPUSE and CDT patch orchestration for on-prem SMS and MDS deployments</p>
   <div id="status-chips">
