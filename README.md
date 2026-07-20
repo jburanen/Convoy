@@ -33,8 +33,9 @@ Two patching subsystems over one shared core (see
 Supporting features, all in the UI:
 
 - **Independent environments.** Separate management estates, each with its own
-  inventory and its own credential namespace; packages are shared. Add/edit
-  environments and their servers from the UI (an "Add/Edit Environments" dialog).
+  inventory and its own credential namespace; packages are shared. Create
+  environments from the picker's "New Environment…" dialog; manage their servers
+  (and delete an environment) on the Provisioning tab.
 - **Encrypted credential store.** SSH key/password + expert password per host,
   encrypted at rest; the master key is supplied at startup and never persisted.
 - **Package store.** Streamed uploads (GB-scale JHFs) with SHA-1/SHA-256 to compare

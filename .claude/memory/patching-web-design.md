@@ -29,8 +29,10 @@ UI is the primary interface (see [[architecture]]); the CLI is secondary.
   (`EnvironmentManager`). **Seeded once** from config.yaml + inventory files on
   first run (meta flag `environments_seeded`), then the DB is authoritative and
   config files are ignored. Only management/mds hosts are stored (gateways come
-  from CDT). The UI "Add/Edit Environments" picker entry opens a **modal** (not a
-  tab). `EnvironmentRegistry.rebuild()` refreshes the live registry after each
+  from CDT). UI split (v0.5.0, operator-directed): the picker's "New Environment…"
+  entry opens a **create-only modal**; server add/remove and environment deletion
+  live on the **Provisioning tab**, scoped to the picker's current environment
+  (no separate manage tab). `EnvironmentRegistry.rebuild()` refreshes the live registry after each
   mutation so long-lived services see changes without reconstruction. Deleting an
   environment drops its `env_hosts` (cascade) **and purges its credentials** — a
   later same-named environment must not inherit old secrets (credential-leak

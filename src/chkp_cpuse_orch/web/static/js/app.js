@@ -54,7 +54,7 @@ function fmtTime(iso) {
 // and the underlying storage are shared. Selection sticks via localStorage.
 let currentEnv = localStorage.getItem("currentEnv") || null;
 
-// Sentinel picker value that opens the manage-environments modal instead of
+// Sentinel picker value that opens the new-environment modal instead of
 // selecting an environment.
 const ENV_MANAGE = "__manage__";
 
@@ -69,8 +69,9 @@ async function loadEnvironments() {
   for (const env of envs) {
     picker.appendChild(new Option(env.name, env.name));
   }
-  // Always-present entry to add/edit environments (kept out of the main tabs).
-  const manage = new Option("Add/Edit Environments…", ENV_MANAGE);
+  // Always-present entry to create an environment (opens the modal; servers
+  // and deletion are managed on the Provisioning tab).
+  const manage = new Option("New Environment…", ENV_MANAGE);
   picker.appendChild(manage);
 
   if (!envs.some((e) => e.name === currentEnv)) {
@@ -101,85 +102,17 @@ document.getElementById("env-picker").addEventListener("change", async (ev) => {
   await selectEnvironment(ev.target.value);
 });
 
-/* ---------- 1a-modal. add/edit environments ---------- */
+/* ---------- 1a-modal. new environment (create-only) ---------- */
 
-// The environment currently expanded in the modal's server editor.
-let envModalSelected = null;
+// The modal only CREATES environments; servers and deletion are managed on the
+// Provisioning tab (section 1a-prov below), scoped to the picker's selection.
 
 function openEnvModal() {
   document.getElementById("env-modal").classList.remove("hidden");
-  renderEnvModal();
+  document.getElementById("env-add-name").focus();
 }
 function closeEnvModal() {
   document.getElementById("env-modal").classList.add("hidden");
-}
-
-async function renderEnvModal() {
-  const list = document.getElementById("env-list");
-  const envs = await api("/api/environments");
-  list.replaceChildren();
-
-  if (envModalSelected && !envs.some((e) => e.name === envModalSelected)) {
-    envModalSelected = null;
-  }
-  if (!envModalSelected && envs.length) envModalSelected = envs[0].name;
-
-  for (const env of envs) {
-    const item = el("tpl-env-list-item");
-    const selectBtn = item.querySelector(".env-select");
-    selectBtn.textContent = `${env.name} (${env.management_servers})`;
-    selectBtn.classList.toggle("active", env.name === envModalSelected);
-    selectBtn.addEventListener("click", () => { envModalSelected = env.name; renderEnvModal(); });
-    item.querySelector(".btn-delete").addEventListener("click", async () => {
-      if (!confirm(
-        `Delete environment "${env.name}"?\n\nIts management-server list AND all ` +
-        "stored credentials for it are permanently removed. This cannot be undone."
-      )) return;
-      try {
-        await api(`/api/environments/${encodeURIComponent(env.name)}`, { method: "DELETE" });
-        if (envModalSelected === env.name) envModalSelected = null;
-        await afterEnvChange();
-      } catch (e) { toast("Delete failed: " + e.message); }
-    });
-    list.appendChild(item);
-  }
-  await renderEnvServers();
-}
-
-async function renderEnvServers() {
-  const tbody = document.querySelector("#env-servers-table tbody");
-  document.getElementById("env-servers-name").textContent = envModalSelected ?? "—";
-  tbody.replaceChildren();
-  if (!envModalSelected) return;
-
-  const servers = await api(`/api/environments/${encodeURIComponent(envModalSelected)}/servers`);
-  for (const s of servers) {
-    const row = el("tpl-env-server-row");
-    row.querySelector(".es-name").textContent = s.name;
-    row.querySelector(".es-address").textContent = s.address;
-    row.querySelector(".es-role").textContent = s.role;
-    row.querySelector(".es-user").textContent = s.ssh_user;
-    row.querySelector(".es-port").textContent = s.ssh_port;
-    row.querySelector(".btn-remove").addEventListener("click", async () => {
-      if (!confirm(`Remove server ${s.name} from ${envModalSelected}?`)) return;
-      try {
-        await api(
-          `/api/environments/${encodeURIComponent(envModalSelected)}/servers/${encodeURIComponent(s.name)}`,
-          { method: "DELETE" },
-        );
-        await afterEnvChange();
-      } catch (e) { toast("Remove failed: " + e.message); }
-    });
-    tbody.appendChild(row);
-  }
-}
-
-// After any environment/server mutation: refresh the modal AND the main UI
-// (picker options, server lists, status) since they depend on the same data.
-async function afterEnvChange() {
-  await renderEnvModal();
-  await loadEnvironments();
-  await Promise.all([loadServers(), loadCredentials(), refreshStatus()]);
 }
 
 document.getElementById("env-modal-close").addEventListener("click", closeEnvModal);
@@ -193,23 +126,30 @@ document.addEventListener("keydown", (ev) => {
 document.getElementById("env-add-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const input = document.getElementById("env-add-name");
+  const name = input.value.trim();
   try {
     await api("/api/environments", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: input.value.trim() }),
+      body: JSON.stringify({ name }),
     });
-    envModalSelected = input.value.trim();
     input.value = "";
-    await afterEnvChange();
-  } catch (e) { toast("Add failed: " + e.message); }
+    closeEnvModal();
+    await loadEnvironments();
+    await selectEnvironment(name);
+    // Land where the new environment's servers are added.
+    selectTab("provisioning");
+    history.replaceState(null, "", "#tab-provisioning");
+  } catch (e) { toast("Create failed: " + e.message); }
 });
+
+/* ---------- 1a-prov. environment management (Provisioning tab) ---------- */
 
 document.getElementById("env-server-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
-  if (!envModalSelected) { toast("Select or add an environment first."); return; }
+  if (!currentEnv) { toast("Create an environment first (picker → New Environment…)."); return; }
   try {
-    await api(`/api/environments/${encodeURIComponent(envModalSelected)}/servers`, {
+    await api(`/api/environments/${encodeURIComponent(currentEnv)}/servers`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -222,8 +162,27 @@ document.getElementById("env-server-form").addEventListener("submit", async (ev)
     });
     document.getElementById("es-name").value = "";
     document.getElementById("es-address").value = "";
-    await afterEnvChange();
+    await Promise.all([loadServers(), refreshStatus()]);
   } catch (e) { toast("Save failed: " + e.message); }
+});
+
+document.getElementById("env-delete").addEventListener("click", async () => {
+  if (!currentEnv) { toast("No environment selected."); return; }
+  if (!confirm(
+    `Delete environment "${currentEnv}"?\n\nIts management-server list AND all ` +
+    "stored credentials for it are permanently removed. This cannot be undone."
+  )) return;
+  try {
+    await api(`/api/environments/${encodeURIComponent(currentEnv)}`, { method: "DELETE" });
+    currentEnv = null;
+    localStorage.removeItem("currentEnv");
+    await loadEnvironments(); // falls back to the first remaining environment
+    if (currentEnv) {
+      await selectEnvironment(currentEnv);
+    } else {
+      await Promise.all([loadServers(), loadCredentials(), refreshStatus()]);
+    }
+  } catch (e) { toast("Delete failed: " + e.message); }
 });
 
 /* ---------- 1b. tabs ---------- */
@@ -335,33 +294,50 @@ async function loadServers() {
   tbody.replaceChildren();
   infoTbody.replaceChildren();
   namelist.replaceChildren();
+  document.getElementById("prov-env-name").textContent = currentEnv ?? "—";
 
   if (!currentEnv) {
-    // No environments defined yet — prompt the operator toward the manage dialog.
-    const msg = "No environments. Use the Environment picker → Add/Edit Environments.";
-    for (const target of [tbody, infoTbody]) {
-      const tr = document.createElement("tr");
-      const td = document.createElement("td");
-      td.colSpan = 5; td.className = "muted"; td.textContent = msg;
-      tr.appendChild(td); target.appendChild(tr);
-    }
+    // No environments defined yet — prompt the operator toward the create dialog.
+    const msg = "No environments. Use the Environment picker → New Environment…";
+    emptyRow(infoTbody, 7, msg);
+    emptyRow(tbody, 5, msg);
     return;
   }
 
-  const servers = await api(envUrl("/servers"));
-  const packages = await api("/api/packages");
+  // Patching view (credentials per server) + editable inventory (has ssh port).
+  const [servers, editable, packages] = await Promise.all([
+    api(envUrl("/servers")),
+    api(`/api/environments/${encodeURIComponent(currentEnv)}/servers`),
+    api("/api/packages"),
+  ]);
+  const credsByName = new Map(servers.map((s) => [s.name, s.credentials]));
 
-  for (const srv of servers) {
-    // Provisioning tab: informational row, no actions.
+  for (const srv of editable) {
+    // Provisioning tab: inventory row with a Remove action (env management —
+    // patching actions stay on the Management tab).
     const info = el("tpl-server-info-row");
     info.querySelector(".srv-name").textContent = srv.name;
     info.querySelector(".srv-address").textContent = srv.address;
     info.querySelector(".srv-role").textContent = srv.role;
     info.querySelector(".srv-user").textContent = srv.ssh_user;
+    info.querySelector(".srv-port").textContent = srv.ssh_port;
+    const creds = credsByName.get(srv.name) ?? [];
     info.querySelector(".srv-creds").textContent =
-      srv.credentials.length ? srv.credentials.join(", ") : "none — not reachable yet";
+      creds.length ? creds.join(", ") : "none — not reachable yet";
+    info.querySelector(".btn-remove").addEventListener("click", async () => {
+      if (!confirm(`Remove server ${srv.name} from ${currentEnv}?`)) return;
+      try {
+        await api(
+          `/api/environments/${encodeURIComponent(currentEnv)}/servers/${encodeURIComponent(srv.name)}`,
+          { method: "DELETE" },
+        );
+        await Promise.all([loadServers(), refreshStatus()]);
+      } catch (e) { toast("Remove failed: " + e.message); }
+    });
     infoTbody.appendChild(info);
+  }
 
+  for (const srv of servers) {
     // Management tab: the action row.
     const row = el("tpl-server-row");
     row.querySelector(".srv-name").textContent = srv.name;
@@ -387,20 +363,22 @@ async function loadServers() {
     namelist.appendChild(opt);
   }
 
-  if (!servers.length) {
-    for (const target of [tbody, infoTbody]) {
-      const tr = document.createElement("tr");
-      const td = document.createElement("td");
-      td.colSpan = 5;
-      td.className = "muted";
-      td.textContent =
-        "No management servers in inventory. Mount an inventory.yaml (see examples/).";
-      tr.appendChild(td);
-      target.appendChild(tr);
-    }
+  if (!editable.length) {
+    emptyRow(infoTbody, 7, "No management servers yet — add one below.");
+    emptyRow(tbody, 5, "No management servers yet — add them on the Provisioning tab.");
   }
 
   chooseDefaultTab(servers.length);
+}
+
+function emptyRow(target, colSpan, text) {
+  const tr = document.createElement("tr");
+  const td = document.createElement("td");
+  td.colSpan = colSpan;
+  td.className = "muted";
+  td.textContent = text;
+  tr.appendChild(td);
+  target.appendChild(tr);
 }
 
 async function refreshState(name, row) {
