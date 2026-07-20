@@ -296,8 +296,7 @@ async function refreshStatus() {
   try {
     const s = await api("/api/status");
     document.getElementById("footer-version").textContent = "v" + s.version;
-    addChip(box, `${s.management_servers} management server(s)`);
-    addChip(box, `${s.packages} package(s)`);
+    // Chips are for warnings only (counts live on their own tabs).
     if (!s.credentials_unlocked) {
       addChip(box, "credential store LOCKED — set CHKP_CPUSE_MASTER_KEY and restart", "warn");
     }
@@ -690,29 +689,62 @@ async function loadPackages() {
   await populateCdtSelectors(); // keep the CDT dropdowns in sync with packages/servers
 }
 
-document.getElementById("upload-form").addEventListener("submit", async (ev) => {
-  ev.preventDefault();
-  const input = document.getElementById("upload-file");
+// Shared upload path for the form and drag & drop.
+async function uploadPackageFile(file) {
   const progress = document.getElementById("upload-progress");
   const btn = document.getElementById("upload-btn");
-  if (!input.files.length) return;
-
   const form = new FormData();
-  form.append("file", input.files[0]);
+  form.append("file", file);
   btn.disabled = true;
-  progress.textContent = "uploading… (large packages take a while)";
+  progress.textContent = `uploading ${file.name}… (large packages take a while)`;
   try {
     await api("/api/packages", { method: "POST", body: form });
-    progress.textContent = "done";
-    input.value = "";
+    progress.textContent = `${file.name}: done`;
     await Promise.all([loadPackages(), loadServers(), refreshStatus()]);
   } catch (e) {
     progress.textContent = "";
-    toast("Upload failed: " + e.message);
+    toast(`Upload of ${file.name} failed: ` + e.message);
   } finally {
     btn.disabled = false;
   }
+}
+
+document.getElementById("upload-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const input = document.getElementById("upload-file");
+  if (!input.files.length) return;
+  await uploadPackageFile(input.files[0]);
+  input.value = "";
 });
+
+// Drag & drop: the whole Packages section is the drop zone. A depth counter
+// keeps the highlight stable while dragging across child elements (dragleave
+// fires on every child boundary). Multiple files upload sequentially.
+{
+  const zone = document.getElementById("packages");
+  let depth = 0;
+  zone.addEventListener("dragenter", (ev) => {
+    ev.preventDefault();
+    depth += 1;
+    zone.classList.add("dragover");
+  });
+  zone.addEventListener("dragover", (ev) => ev.preventDefault()); // allow drop
+  zone.addEventListener("dragleave", () => {
+    depth = Math.max(0, depth - 1);
+    if (!depth) zone.classList.remove("dragover");
+  });
+  zone.addEventListener("drop", async (ev) => {
+    ev.preventDefault();
+    depth = 0;
+    zone.classList.remove("dragover");
+    for (const file of ev.dataTransfer.files) {
+      await uploadPackageFile(file);
+    }
+  });
+  // A missed drop must not make the browser navigate away to the file.
+  window.addEventListener("dragover", (ev) => ev.preventDefault());
+  window.addEventListener("drop", (ev) => ev.preventDefault());
+}
 
 /* ---------- 5. credentials ---------- */
 

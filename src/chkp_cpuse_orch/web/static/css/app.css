@@ -202,6 +202,13 @@ button.secondary:hover { color: var(--text); filter: none; }
   white-space: nowrap;
 }
 
+/* packages section doubles as a drag & drop target for uploads */
+#packages.dragover {
+  outline: 2px dashed var(--accent);
+  outline-offset: -6px;
+  background: var(--badge-bg);
+}
+
 /* ---- detected CPUSE packages inside the server table ---- */
 .srv-packages { margin-top: 0.35rem; display: flex; flex-direction: column; gap: 0.25rem; }
 .detected-pkg { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }

@@ -68,7 +68,7 @@
     </section>
 
     <section id="servers-info">
-      <h2>Management servers in <span id="prov-env-name" class="mono">—</span></h2>
+      <h2>Management servers in <span id="prov-env-name">—</span></h2>
       <p class="hint">
         The inventory of the environment selected in the top-right picker. Add or
         remove servers here; patching actions live on the <strong>Management</strong>
@@ -116,9 +116,10 @@
     <section id="packages">
       <h2>Packages</h2>
       <p class="hint">
-        Upload a package once, then distribute it to any server. Compare the SHA-1 /
-        SHA-256 with the values published on the Check Point download page before
-        importing anywhere.
+        Upload a package once, then distribute it to any server — pick a file below
+        or <strong>drag &amp; drop</strong> it anywhere on this panel. Compare the
+        SHA-1 / SHA-256 with the values published on the Check Point download page
+        before importing anywhere.
       </p>
       <form id="upload-form">
         <input type="file" id="upload-file" required>
@@ -272,11 +273,10 @@
       <button id="welcome-close" class="small" title="Close">✕</button>
     </div>
     <p class="hint">
-      This looks like a fresh installation: one empty environment named
-      <code>default</code> and no data yet. Environments are independent management
-      estates (own servers, own credentials) selected with the top-right picker.
-      If you'd like a more meaningful name — a site, a customer, a datacenter —
-      now is the easiest time, before servers and credentials are attached to it.
+      This looks like a new deployment, so you should rename the default environment 
+      or create a new one. Environments are analogous to your Check Point management
+      systems. If you have Multi-Domain, you should create one environment for the
+      whole MDS system.
     </p>
     <form id="welcome-form">
       <input type="text" id="welcome-name" placeholder="new name (e.g. Corp HQ)">
