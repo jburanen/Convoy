@@ -29,7 +29,7 @@
       <select id="env-picker"><!-- filled from /api/environments --></select>
     </div>
   </div>
-  <p class="subtitle">Check Point CPUSE and CDT patch orchestration</p>
+  <p class="subtitle">CPUSE and CDT patch orchestration for on-prem SMS and MDS deployments</p>
   <div id="status-chips">
     <!-- filled by refreshStatus(); shows a warning chip if credentials are locked -->
   </div>
@@ -293,10 +293,12 @@
       <button id="welcome-close" class="small" title="Close">✕</button>
     </div>
     <p class="hint">
-      This looks like a new deployment, so you should rename the default environment 
-      or create a new one. Environments are analogous to your Check Point management
-      systems. If you have Multi-Domain, you should create one environment for the
-      whole MDS system.
+      This looks like a new deployment, would you like to rename the default environment? 
+      Environments are analogous to your Check Point management systems. Each related 
+      group of management servers should have an environment defined here. That means any 
+      primary management server and related SmartEvent and backup/HA servers. If you are 
+      connecting to Multi-Domain, you should create one environment for the whole MDS 
+      system, not one per domain.
     </p>
     <form id="welcome-form">
       <input type="text" id="welcome-name" placeholder="new name (e.g. Corp HQ)">
