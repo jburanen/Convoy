@@ -75,9 +75,18 @@ def test_create_add_server_rebuilds_registry(store: Store) -> None:
 
 def test_invalid_environment_name_rejected(store: Store) -> None:
     mgr = _manager(store, EnvironmentRegistry())
-    for bad in ("Bad", "has space", "x!", ""):
+    for bad in ("", "   ", "x!", "-leading-dash", "café", "a" * 33):
         with pytest.raises(InventoryError, match="invalid environment name"):
             mgr.create_environment(bad)
+
+
+def test_environment_name_allows_uppercase_and_spaces(store: Store) -> None:
+    registry = EnvironmentRegistry()
+    mgr = _manager(store, registry)
+    # Surrounding whitespace is stripped; the normalized name is returned.
+    assert mgr.create_environment("  Corp HQ Berlin ") == "Corp HQ Berlin"
+    assert [e.name for e in store.list_environments()] == ["Corp HQ Berlin"]
+    assert registry.names() == ["Corp HQ Berlin"]
 
 
 def test_duplicate_environment_rejected(store: Store) -> None:

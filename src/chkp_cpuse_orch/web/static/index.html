@@ -259,6 +259,32 @@
 
 </main>
 
+<!-- ============ First-run welcome modal ===================================== -->
+<!-- Shown once on a brand-new deployment: exactly one environment ("default")
+     with no servers, credentials, or packages yet. Offers renaming the default
+     environment before any data is attached to its name. Dismissal is
+     remembered per browser (localStorage). -->
+<div id="welcome-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
+  <div class="modal-card narrow">
+    <div class="modal-head">
+      <h2 id="welcome-title">New deployment</h2>
+      <button id="welcome-close" class="small" title="Close">✕</button>
+    </div>
+    <p class="hint">
+      This looks like a fresh installation: one empty environment named
+      <code>default</code> and no data yet. Environments are independent management
+      estates (own servers, own credentials) selected with the top-right picker.
+      If you'd like a more meaningful name — a site, a customer, a datacenter —
+      now is the easiest time, before servers and credentials are attached to it.
+    </p>
+    <form id="welcome-form">
+      <input type="text" id="welcome-name" placeholder="new name (e.g. Corp HQ)">
+      <button type="submit">Rename</button>
+      <button type="button" id="welcome-keep" class="small">Keep “default”</button>
+    </form>
+  </div>
+</div>
+
 <!-- ============ New Environment modal (opened from the picker) ============== -->
 <!-- Create-only: everything else about an environment (its servers, deletion) is
      managed on the Provisioning tab; credentials on Packages and Credentials. -->
@@ -275,7 +301,7 @@
       <strong>Packages and Credentials</strong>.
     </p>
     <form id="env-add-form">
-      <input type="text" id="env-add-name" placeholder="environment name (e.g. corp)" required>
+      <input type="text" id="env-add-name" placeholder="environment name (e.g. Corp HQ)" required>
       <button type="submit">Create</button>
     </form>
   </div>

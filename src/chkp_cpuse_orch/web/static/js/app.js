@@ -88,6 +88,7 @@ async function loadEnvironments() {
   picker.value = currentEnv ?? "";
   // Picker is always shown now (it hosts the manage entry even with one env).
   document.getElementById("env-row").classList.remove("hidden");
+  return envs;
 }
 
 async function selectEnvironment(name) {
@@ -111,6 +112,52 @@ document.getElementById("env-picker").addEventListener("change", async (ev) => {
   await selectEnvironment(ev.target.value);
 });
 
+/* ---------- 1a-welcome. first-run dialog ---------- */
+
+// On a brand-new deployment — exactly one environment named "default" with no
+// servers, and no credentials or packages anywhere — offer renaming the default
+// environment before any data gets attached to its name. Renaming at this point
+// is safely done as create-new + delete-old: the emptiness check guarantees
+// there is nothing to migrate. Dismissal sticks per browser via localStorage.
+
+async function maybeShowWelcome(envs) {
+  if (localStorage.getItem("welcomeDismissed")) return;
+  if (envs.length !== 1 || envs[0].name !== "default" || envs[0].management_servers !== 0) return;
+  try {
+    if ((await api("/api/packages")).length) return;
+    if ((await api("/api/env/default/credentials")).length) return;
+  } catch { /* locked credential store — still clearly a fresh deployment */ }
+  document.getElementById("welcome-modal").classList.remove("hidden");
+  document.getElementById("welcome-name").focus();
+}
+
+function dismissWelcome() {
+  localStorage.setItem("welcomeDismissed", "1");
+  document.getElementById("welcome-modal").classList.add("hidden");
+}
+
+document.getElementById("welcome-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const name = document.getElementById("welcome-name").value.trim();
+  if (!name || name === "default") { dismissWelcome(); return; }
+  try {
+    const created = await api("/api/environments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    await api("/api/environments/default", { method: "DELETE" });
+    dismissWelcome();
+    await loadEnvironments();
+    await selectEnvironment(created.name);
+  } catch (e) { toast("Rename failed: " + e.message); }
+});
+document.getElementById("welcome-keep").addEventListener("click", dismissWelcome);
+document.getElementById("welcome-close").addEventListener("click", dismissWelcome);
+document.getElementById("welcome-modal").addEventListener("click", (ev) => {
+  if (ev.target.id === "welcome-modal") dismissWelcome(); // backdrop click
+});
+
 /* ---------- 1a-modal. new environment (create-only) ---------- */
 
 // The modal only CREATES environments; servers and deletion are managed on the
@@ -129,23 +176,26 @@ document.getElementById("env-modal").addEventListener("click", (ev) => {
   if (ev.target.id === "env-modal") closeEnvModal(); // click on backdrop closes
 });
 document.addEventListener("keydown", (ev) => {
-  if (ev.key === "Escape") closeEnvModal();
+  if (ev.key !== "Escape") return;
+  closeEnvModal();
+  if (!document.getElementById("welcome-modal").classList.contains("hidden")) {
+    dismissWelcome();
+  }
 });
 
 document.getElementById("env-add-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const input = document.getElementById("env-add-name");
-  const name = input.value.trim();
   try {
-    await api("/api/environments", {
+    const created = await api("/api/environments", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name: input.value }),
     });
     input.value = "";
     closeEnvModal();
     await loadEnvironments();
-    await selectEnvironment(name);
+    await selectEnvironment(created.name); // server-normalized (trimmed) name
     // Land where the new environment's servers are added.
     selectTab("provisioning");
     history.replaceState(null, "", "#tab-provisioning");
@@ -793,8 +843,9 @@ async function pollJobs() {
 
 (async function init() {
   initTabs();
-  await loadEnvironments(); // must resolve currentEnv before env-scoped loads
+  const envs = await loadEnvironments(); // must resolve currentEnv before env-scoped loads
   await refreshStatus();
   await Promise.all([loadServers(), loadPackages(), loadCredentials(), loadJobs()]);
   pollJobs();
+  await maybeShowWelcome(envs);
 })();

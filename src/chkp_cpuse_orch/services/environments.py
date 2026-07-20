@@ -26,7 +26,12 @@ from .common import ClientFactory, EnvironmentRegistry, HostConnector
 
 logger = get_logger(__name__)
 
-_ENV_NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
+# Names may contain upper/lowercase letters, digits, spaces, '_' and '-', and
+# must start with a letter or digit (surrounding whitespace is stripped before
+# validation, so a name can't end in a space either). Used verbatim as the URL
+# path param (the UI percent-encodes it) and as the credential namespace key;
+# case-sensitive, so "Corp" and "corp" are distinct environments.
+_ENV_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _-]{0,31}")
 _SEEDED_META_KEY = "environments_seeded"
 
 # Roles a management environment's inventory may hold (what this tool connects to).
@@ -85,10 +90,12 @@ class EnvironmentManager:
 
     # -- environment CRUD --------------------------------------------------------
 
-    def create_environment(self, name: str) -> None:
+    def create_environment(self, name: str) -> str:
+        """Create an environment; returns the normalized (stripped) name."""
+        name = name.strip()
         if not _ENV_NAME_RE.fullmatch(name):
             raise InventoryError(
-                f"invalid environment name {name!r}: lowercase letters, digits, "
+                f"invalid environment name {name!r}: letters, digits, spaces, "
                 "'_' and '-', starting with a letter or digit, max 32 chars"
             )
         try:
@@ -96,6 +103,7 @@ class EnvironmentManager:
         except sqlite3.IntegrityError:
             raise InventoryError(f"environment {name!r} already exists") from None
         self.rebuild()
+        return name
 
     def delete_environment(self, name: str) -> None:
         if not self._store.delete_environment(name):

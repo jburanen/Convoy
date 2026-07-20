@@ -272,10 +272,10 @@ def _register_routes(app: FastAPI) -> None:
     @app.post("/api/environments", status_code=201)
     def create_environment(body: EnvironmentIn, request: Request) -> dict[str, str]:
         try:
-            _envmgr(request).create_environment(body.name)
+            name = _envmgr(request).create_environment(body.name)
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
-        return {"name": body.name}
+        return {"name": name}
 
     @app.delete("/api/environments/{env}")
     def delete_environment(env: str, request: Request) -> dict[str, bool]:
