@@ -58,10 +58,20 @@ header h1 { margin: 0; font-size: 1.5rem; }
 footer {
   padding: 2rem 1.25rem;
   display: flex;
-  align-items: center;
+  flex-direction: column; /* GitHub+version row, then the note lines below */
   gap: 0.5rem;
   font-size: 0.85rem; /* same size as .muted (the version text); the GitHub
                          logo keeps its fixed 16px width/height attributes */
+}
+.footer-main { /* GitHub link + version, side by side */
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.footer-notes { /* stacked note lines under the main row */
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
 }
 #footer-repo {
   display: inline-flex;
