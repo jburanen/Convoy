@@ -39,6 +39,12 @@ class CredentialError(OrchestratorError):
     """Credential store failure: missing credential, bad master key, or bad input."""
 
 
+class AuthError(OrchestratorError):
+    """Web authentication failed: bad LDAP credentials, missing group membership,
+    or a directory that could not be reached. The message is deliberately generic
+    at the HTTP boundary — never leak which check failed to the client."""
+
+
 class JobError(OrchestratorError):
     """A background job could not be submitted or managed."""
 

@@ -20,9 +20,12 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request, UploadFile
+from fastapi import FastAPI, HTTPException, Request, Response, UploadFile
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, SecretStr
+from starlette.concurrency import run_in_threadpool
+from starlette.middleware.base import RequestResponseEndpoint
 
 from .. import __version__
 from ..cdt import CandidatesFile
@@ -37,6 +40,7 @@ from ..credentials import (
     load_master_key,
 )
 from ..errors import (
+    AuthError,
     CDTError,
     CredentialError,
     InventoryError,
@@ -59,6 +63,14 @@ from ..services.provisioning import (
     render_gaia_user_commands,
 )
 from ..store import JobEvent, JobRecord, PackageRecord, Store
+from .auth import (
+    SESSION_COOKIE_NAME,
+    Authenticator,
+    AuthManager,
+    AuthSettings,
+    LDAPAuthenticator,
+    load_auth_settings,
+)
 
 logger = get_logger(__name__)
 
@@ -66,6 +78,22 @@ _STATIC_DIR = Path(__file__).parent / "static"
 
 # How often the background reaper sweeps for expired packages.
 _REAP_INTERVAL_SECONDS = 3600.0
+# How often idle web sessions are swept from the DB.
+_SESSION_REAP_INTERVAL_SECONDS = 600.0
+
+# Paths reachable without a valid session (login page + its assets, health, and
+# the auth endpoints login needs). Everything else is guarded when auth is on.
+_PUBLIC_PATHS = frozenset(
+    {
+        "/health",
+        "/login.html",
+        "/js/login.js",
+        "/css/app.css",
+        "/api/auth/login",
+        "/api/auth/config",
+        "/favicon.ico",
+    }
+)
 
 
 async def _reap_expired_packages(
@@ -82,6 +110,22 @@ async def _reap_expired_packages(
         except Exception as exc:  # keep the reaper alive across transient errors
             logger.warning("package reaper sweep failed", error=str(exc))
         await asyncio.sleep(interval)
+
+
+async def _reap_idle_sessions(
+    auth: AuthManager, interval: float = _SESSION_REAP_INTERVAL_SECONDS
+) -> None:
+    """Periodically delete idle-expired web sessions. Idle expiry is also enforced
+    inline on every request; this just keeps the table from accumulating stale
+    rows for users who simply close the tab."""
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            removed = await asyncio.to_thread(auth.purge_idle)
+            if removed:
+                logger.info("purged idle sessions", count=removed)
+        except Exception as exc:
+            logger.warning("session reaper sweep failed", error=str(exc))
 
 
 # -- request/response bodies -------------------------------------------------------
@@ -153,6 +197,11 @@ class CredentialStorageIn(BaseModel):
     enabled: bool
 
 
+class LoginIn(BaseModel):
+    username: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+
+
 class ProvisionRequest(BaseModel):
     username: str
     password: str = Field(min_length=1)  # only hashed, never stored or echoed
@@ -176,10 +225,17 @@ class EnvServerIn(BaseModel):
 
 
 def create_app(
-    config: Config | None = None, *, client_factory: ClientFactory | None = None
+    config: Config | None = None,
+    *,
+    client_factory: ClientFactory | None = None,
+    authenticator: Authenticator | None = None,
+    auth_settings: AuthSettings | None = None,
 ) -> FastAPI:
-    """Build the app. Tests pass a custom ``config`` (tmp paths) and a fake
-    ``client_factory``; production uses defaults resolved at startup."""
+    """Build the app. Tests pass a custom ``config`` (tmp paths), a fake
+    ``client_factory``, and — to exercise auth without a live directory — a fake
+    ``authenticator`` (with optional ``auth_settings`` to tune idle/cookie
+    behaviour). Production leaves those ``None`` and resolves LDAP config from the
+    environment at startup (auth stays off when it isn't configured)."""
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -201,6 +257,28 @@ def create_app(
             logger.warning("credential store locked", reason=str(exc))
             app.state.credentials_error = str(exc)
 
+        # Authentication. When a fake authenticator is injected (tests), use it
+        # with the given (or a permissive default) settings. Otherwise resolve
+        # LDAP config from the environment: a valid config builds an LDAP backend,
+        # an absent one leaves auth off (auth-optional), and a half-finished one
+        # raises ConfigError from load_auth_settings and aborts startup.
+        auth: AuthManager | None = None
+        active_auth = authenticator
+        settings = auth_settings
+        if active_auth is None:
+            settings = load_auth_settings()
+            if settings is not None:
+                active_auth = LDAPAuthenticator(settings)
+        if active_auth is not None:
+            if settings is None:
+                # Injected authenticator without explicit settings: permissive
+                # defaults suitable for a test client over plain HTTP.
+                settings = AuthSettings(
+                    url="injected", required_group="injected", cookie_secure=False
+                )
+            auth = AuthManager(store, active_auth, settings)
+        app.state.auth = auth
+
         # Independent management environments — DB-backed and UI-editable. Seeded
         # once from config/inventory files, then the DB is authoritative (see
         # services/environments.py and .claude/memory/patching-web-design.md).
@@ -208,6 +286,19 @@ def create_app(
         env_manager = EnvironmentManager(store, registry, credentials, client_factory)
         env_manager.seed_from_config(cfg)
         env_manager.rebuild()
+
+        # Without authentication, persisting credentials is not permitted. Enabling
+        # storage is blocked at the API, but a pre-existing (e.g. config-seeded)
+        # environment may still have it on — warn loudly rather than silently
+        # exposing secrets. (Non-destructive: the operator decides how to remediate.)
+        if auth is None:
+            open_envs = [e.name for e in store.list_environments() if e.credential_storage_enabled]
+            if open_envs:
+                logger.warning(
+                    "credential storage enabled without authentication configured",
+                    environments=open_envs,
+                    hint="configure LDAP auth (CHKP_CPUSE_LDAP_*) or disable storage for these",
+                )
 
         # Purge a job's in-memory credentials the moment it reaches any terminal
         # state (success/failure/cancel), guaranteed by the runner.
@@ -230,13 +321,18 @@ def create_app(
             logger.warning("jobs interrupted by previous shutdown", count=len(interrupted))
         serve_task = asyncio.create_task(runner.serve())
         reaper_task = asyncio.create_task(_reap_expired_packages(packages))
+        bg_tasks = [reaper_task]
+        if auth is not None:
+            bg_tasks.append(asyncio.create_task(_reap_idle_sessions(auth)))
         try:
             yield
         finally:
             runner.stop()
-            reaper_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await reaper_task
+            for task in bg_tasks:
+                task.cancel()
+            for task in bg_tasks:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
             await serve_task
 
     app = FastAPI(
@@ -245,8 +341,28 @@ def create_app(
         summary="Orchestration API for Check Point CDT/CPUSE deployments.",
         lifespan=lifespan,
     )
+    _register_auth_middleware(app)
     _register_routes(app)
     return app
+
+
+def _register_auth_middleware(app: FastAPI) -> None:
+    """Guard every route (API + static UI) behind a valid session when auth is on.
+    A no-op when ``app.state.auth`` is ``None`` (auth-optional / not configured)."""
+
+    @app.middleware("http")
+    async def _auth_guard(request: Request, call_next: RequestResponseEndpoint) -> Response:
+        auth: AuthManager | None = getattr(request.app.state, "auth", None)
+        if auth is None or request.url.path in _PUBLIC_PATHS:
+            return await call_next(request)
+        token = request.cookies.get(SESSION_COOKIE_NAME)
+        session = await run_in_threadpool(auth.validate, token) if token else None
+        if session is None:
+            if request.url.path.startswith("/api/"):
+                return JSONResponse({"detail": "authentication required"}, status_code=401)
+            return RedirectResponse("/login.html", status_code=302)
+        request.state.user = session.username
+        return await call_next(request)
 
 
 def _service(request: Request) -> PatchingService:
@@ -343,12 +459,72 @@ def _register_routes(app: FastAPI) -> None:
         return {
             "version": __version__,
             "credentials_unlocked": request.app.state.credentials is not None,
+            "auth_enabled": request.app.state.auth is not None,
             "environments": _registry(request).names(),
             "management_servers": sum(
                 len(service.management_servers(env)) for env in _registry(request).names()
             ),
             "packages": len(request.app.state.packages.list()),
         }
+
+    # -- authentication ---------------------------------------------------------
+
+    def _auth(request: Request) -> AuthManager | None:
+        manager: AuthManager | None = request.app.state.auth
+        return manager
+
+    @app.get("/api/auth/config")
+    def auth_config(request: Request) -> dict[str, Any]:
+        """Public: the login page and the client idle-timer read this before a
+        session exists, so it must stay reachable without one."""
+        auth = _auth(request)
+        if auth is None:
+            return {"auth_enabled": False, "idle_minutes": 0}
+        return {"auth_enabled": True, "idle_minutes": auth.settings.idle_minutes}
+
+    @app.get("/api/auth/me")
+    def auth_me(request: Request) -> dict[str, Any]:
+        auth = _auth(request)
+        if auth is None:
+            return {"auth_enabled": False, "authenticated": False, "username": None}
+        # Guarded by the middleware, so a request that reaches here is authenticated.
+        return {
+            "auth_enabled": True,
+            "authenticated": True,
+            "username": getattr(request.state, "user", None),
+        }
+
+    @app.post("/api/auth/login")
+    async def auth_login(body: LoginIn, request: Request, response: Response) -> dict[str, str]:
+        auth = _auth(request)
+        if auth is None:
+            raise HTTPException(status_code=400, detail="authentication is not configured")
+        try:
+            token, user = await run_in_threadpool(auth.login, body.username, body.password)
+        except AuthError as exc:
+            # Deliberately generic — don't disclose which check failed.
+            logger.info("login failed", username=body.username, reason=str(exc))
+            raise HTTPException(
+                status_code=401, detail="invalid credentials or insufficient group membership"
+            ) from exc
+        response.set_cookie(
+            SESSION_COOKIE_NAME,
+            token,
+            httponly=True,
+            samesite="strict",
+            secure=auth.settings.cookie_secure,
+            path="/",
+        )
+        return {"username": user.username, "display_name": user.display_name}
+
+    @app.post("/api/auth/logout")
+    async def auth_logout(request: Request, response: Response) -> dict[str, bool]:
+        auth = _auth(request)
+        token = request.cookies.get(SESSION_COOKIE_NAME)
+        if auth is not None and token:
+            await run_in_threadpool(auth.logout, token)
+        response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+        return {"ok": True}
 
     # -- environments (create/edit; DB-backed, UI-managed) ----------------------
 
@@ -402,6 +578,12 @@ def _register_routes(app: FastAPI) -> None:
         """Enable or disable credential storage. Disabling purges any stored
         credentials for the environment (they'd be unused, and the operator
         opted out of on-disk secrets)."""
+        if body.enabled and request.app.state.auth is None:
+            raise HTTPException(
+                status_code=409,
+                detail="credential storage requires authentication — configure LDAP "
+                "(CHKP_CPUSE_LDAP_*) before enabling storage for any environment",
+            )
         try:
             purged = _envmgr(request).set_credential_storage(env, body.enabled)
         except OrchestratorError as exc:
@@ -576,6 +758,12 @@ def _register_routes(app: FastAPI) -> None:
     @app.put("/api/env/{env}/credentials", status_code=201)
     def put_credential(env: str, body: CredentialIn, request: Request) -> CredentialInfo:
         _require_env(request, env)
+        if request.app.state.auth is None:
+            raise HTTPException(
+                status_code=409,
+                detail="credential storage requires authentication — configure LDAP "
+                "(CHKP_CPUSE_LDAP_*) before storing credentials",
+            )
         if not _registry(request).get(env).credential_storage_enabled:
             raise HTTPException(
                 status_code=409,

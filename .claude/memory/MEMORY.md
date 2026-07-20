@@ -13,3 +13,4 @@ Load this at the start of each session; read a linked file when its hook looks r
 - [Use the documentation-tool MCP](use-documentation-tool-mcp.md) — always prefer it for docs lookups
 - [Keep .env.example in sync](env-example-sync.md) — add every new runtime env var to the tracked example
 - [Optional credential storage](optional-credential-storage.md) — per-env toggle; disabled envs use in-memory-only per-job credentials
+- [Web UI authentication](web-auth.md) — LDAP/AD login, sessions, idle logout; no-auth ⇒ no credential storage

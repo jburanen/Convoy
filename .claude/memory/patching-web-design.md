@@ -69,18 +69,22 @@ plain and file-based:
   outgrows a tab. Header/footer stay in the one main page — plain HTML has no
   include mechanism worth its cost here.
 
-## Web UI authentication (requirement, 2026-07-19 — not yet built)
-The admin UI must support **both**:
-- **Basic auth** — local users; password hashes at rest (never plaintext).
-- **LDAP** — bind against the org directory (likely AD); config for server URL,
-  base DN, bind template/service account, and an allowed group.
-Design so both are backends behind one auth layer (session cookie after login;
-FastAPI dependency guarding all /api routes and the static UI). Until this
-ships, the app is safe only on a trusted network — flagged in the Phase 3
-commit message. The operator also expects **RBAC** after auth (2026-07-19),
-likely **per-environment** — one reason environments are keyed rows in the DB
-rather than config files. Login is a separate static page (see planned split
-above).
+## Web UI authentication (LDAP shipped 2026-07-20 — see [[web-auth]])
+LDAP/AD authentication is **built**: `web/auth.py` (`Authenticator` protocol,
+`LDAPAuthenticator`, `AuthManager`, env-driven `AuthSettings`), server-side
+sessions (migration v7 `sessions` table, hashed tokens), and a middleware guarding
+all `/api/*` + the static UI. Full design in [[web-auth]]. Key facts:
+- **Auth is optional** (operator-chosen): unset LDAP env → app runs open, as before
+  — **but** enabling per-environment credential storage is then rejected (409). No
+  persistent secrets without an auth gate.
+- **Group gate = direct `memberOf`** membership of `CHKP_CPUSE_LDAP_REQUIRED_GROUP`.
+- **Idle logout** (`CHKP_CPUSE_SESSION_IDLE_MINUTES`, default 30) enforced
+  server-side (sliding `last_seen_at`) *and* client-side; logout/idle/401 all wipe
+  the tab's cached credentials via the existing `cacheClearCreds()`.
+- Login is a **separate static page** (`login.html` + `js/login.js`), as planned.
+Still outstanding (unchanged from the original requirement): a **local basic-auth**
+backend (design already fits behind the `Authenticator` protocol) and **per-
+environment RBAC** — environments are DB rows partly for that reason.
 
 ## New core infrastructure (shared by both subsystems)
 - **Credential store, encrypted at rest.** Ciphertext in SQLite; master key supplied

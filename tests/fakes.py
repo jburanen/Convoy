@@ -78,3 +78,22 @@ def make_factory(transport: FakeTransport) -> Callable[..., FakeTransport]:
         return transport
 
     return factory
+
+
+class FakeAuthenticator:
+    """An ``Authenticator`` for web tests — no live directory. Accepts a mapping of
+    username → password; anything else (or an empty password) is rejected, standing
+    in for both bad credentials and missing group membership."""
+
+    def __init__(self, users: dict[str, str]) -> None:
+        self.users = users
+
+    def authenticate(self, username: str, password: str):  # type: ignore[no-untyped-def]
+        from chkp_cpuse_orch.errors import AuthError
+        from chkp_cpuse_orch.web.auth import AuthenticatedUser
+
+        if password and self.users.get(username) == password:
+            return AuthenticatedUser(
+                username=username, display_name=username.title(), dn=f"cn={username}"
+            )
+        raise AuthError("invalid credentials or not in required group")

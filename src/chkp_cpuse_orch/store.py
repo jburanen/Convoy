@@ -132,6 +132,17 @@ class CredentialRecord(BaseModel):
     updated_at: datetime = Field(default_factory=utcnow)
 
 
+class SessionRow(BaseModel):
+    """One authenticated web session. ``token_hash`` is the SHA-256 of the opaque
+    cookie token — the raw token is never persisted."""
+
+    token_hash: str
+    username: str
+    display_name: str | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+    last_seen_at: datetime = Field(default_factory=utcnow)
+
+
 # Append-only: each entry is one schema version, applied in order. Never edit an
 # entry that has shipped — add a new one.
 _MIGRATIONS: tuple[str, ...] = (
@@ -244,6 +255,19 @@ _MIGRATIONS: tuple[str, ...] = (
     # this migration default to 0 (disabled) via insert_environment().
     """
     ALTER TABLE environments ADD COLUMN credential_storage_enabled INTEGER NOT NULL DEFAULT 1;
+    """,
+    # v7: web login sessions. Only the SHA-256 of the opaque session token is
+    # stored, never the token itself — a DB leak must not grant a live session.
+    # last_seen_at drives the sliding idle-timeout enforced by the auth layer.
+    """
+    CREATE TABLE sessions (
+        token_hash   TEXT PRIMARY KEY,
+        username     TEXT NOT NULL,
+        display_name TEXT,
+        created_at   TEXT NOT NULL,
+        last_seen_at TEXT NOT NULL
+    );
+    CREATE INDEX idx_sessions_last_seen ON sessions (last_seen_at);
     """,
 )
 
@@ -643,6 +667,48 @@ class Store:
             for r in rows
         ]
 
+    # -- web sessions ------------------------------------------------------------
+
+    def create_session(self, rec: SessionRow) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO sessions (token_hash, username, display_name, created_at,"
+                " last_seen_at) VALUES (?, ?, ?, ?, ?)",
+                (
+                    rec.token_hash,
+                    rec.username,
+                    rec.display_name,
+                    rec.created_at.isoformat(),
+                    rec.last_seen_at.isoformat(),
+                ),
+            )
+
+    def get_session(self, token_hash: str) -> SessionRow | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM sessions WHERE token_hash = ?", (token_hash,)
+            ).fetchone()
+        return None if row is None else _session_from_row(row)
+
+    def touch_session(self, token_hash: str, now: datetime | None = None) -> None:
+        """Refresh a session's ``last_seen_at`` (sliding idle window)."""
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?",
+                ((now or utcnow()).isoformat(), token_hash),
+            )
+
+    def delete_session(self, token_hash: str) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
+        return cur.rowcount > 0
+
+    def purge_idle_sessions(self, cutoff: datetime) -> int:
+        """Delete sessions not seen since ``cutoff``. Returns the count removed."""
+        with self._connect() as conn:
+            cur = conn.execute("DELETE FROM sessions WHERE last_seen_at < ?", (cutoff.isoformat(),))
+        return cur.rowcount
+
 
 def _iso(dt: datetime | None) -> str | None:
     return None if dt is None else dt.isoformat()
@@ -673,6 +739,16 @@ def _environment_from_row(row: sqlite3.Row) -> EnvironmentRow:
         name=row["name"],
         created_at=datetime.fromisoformat(row["created_at"]),
         credential_storage_enabled=bool(row["credential_storage_enabled"]),
+    )
+
+
+def _session_from_row(row: sqlite3.Row) -> SessionRow:
+    return SessionRow(
+        token_hash=row["token_hash"],
+        username=row["username"],
+        display_name=row["display_name"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+        last_seen_at=datetime.fromisoformat(row["last_seen_at"]),
     )
 
 

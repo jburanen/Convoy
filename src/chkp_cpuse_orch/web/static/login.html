@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<!--
+  chkp-cpuse-orch — login page.
+
+  Deliberately a SEPARATE page from index.html: it shares no tab/live state with
+  the main UI (see .claude/memory/patching-web-design.md). Plain hand-editable
+  HTML/CSS/JS, no build step. Reuses css/app.css; logic lives in js/login.js.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in — chkp-cpuse-orch</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+
+<main>
+  <section id="login-card">
+    <h2>Check Point Patch Management</h2>
+    <p class="hint">Sign in with your directory account to continue.</p>
+
+    <form id="login-form">
+      <label class="login-field">
+        Username
+        <input id="login-username" type="text" autocomplete="username" autofocus required>
+      </label>
+      <label class="login-field">
+        Password
+        <input id="login-password" type="password" autocomplete="current-password" required>
+      </label>
+      <button id="login-submit" type="submit">Sign in</button>
+      <p id="login-error" class="login-error hidden" role="alert"></p>
+    </form>
+  </section>
+</main>
+
+<script src="/js/login.js"></script>
+</body>
+</html>

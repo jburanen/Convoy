@@ -10,8 +10,31 @@ from fastapi.testclient import TestClient
 from chkp_cpuse_orch.config import Config, EnvironmentDef, Paths
 from chkp_cpuse_orch.credentials import MASTER_KEY_ENV
 from chkp_cpuse_orch.web.app import create_app
+from chkp_cpuse_orch.web.auth import AuthSettings
 
-from .fakes import DA_BUILD, SHOW_PACKAGES_ALL, FakeTransport, make_factory
+from .fakes import DA_BUILD, SHOW_PACKAGES_ALL, FakeAuthenticator, FakeTransport, make_factory
+
+# Credential storage requires authentication, so web tests run with a fake LDAP
+# backend enabled and log in before exercising the API (see .claude/memory).
+TEST_USER = "operator"
+TEST_PASS = "correct horse battery"
+AUTH_SETTINGS = AuthSettings(
+    url="ldap://test",
+    required_group="cn=admins",
+    user_dn_template="{username}",
+    cookie_secure=False,  # TestClient talks plain HTTP
+    idle_minutes=30,
+)
+
+
+def _fake_auth() -> FakeAuthenticator:
+    return FakeAuthenticator({TEST_USER: TEST_PASS})
+
+
+def _login(c: TestClient, username: str = TEST_USER, password: str = TEST_PASS) -> None:
+    resp = c.post("/api/auth/login", json={"username": username, "password": password})
+    assert resp.status_code == 200, resp.text
+
 
 INVENTORY_YAML = """\
 sites:
@@ -61,8 +84,14 @@ def client(
     tmp_path: Path, transport: FakeTransport, monkeypatch: pytest.MonkeyPatch
 ) -> Iterator[TestClient]:
     monkeypatch.setenv(MASTER_KEY_ENV, "api test master key")
-    app = create_app(_config(tmp_path), client_factory=make_factory(transport))
+    app = create_app(
+        _config(tmp_path),
+        client_factory=make_factory(transport),
+        authenticator=_fake_auth(),
+        auth_settings=AUTH_SETTINGS,
+    )
     with TestClient(app) as c:
+        _login(c)
         yield c
 
 
@@ -598,8 +627,14 @@ def test_two_environments_are_isolated(
         EnvironmentDef(name="corp", inventory=tmp_path / "corp.yaml"),
         EnvironmentDef(name="dmz", inventory=tmp_path / "dmz.yaml"),
     ]
-    app = create_app(cfg, client_factory=make_factory(transport))
+    app = create_app(
+        cfg,
+        client_factory=make_factory(transport),
+        authenticator=_fake_auth(),
+        auth_settings=AUTH_SETTINGS,
+    )
     with TestClient(app) as c:
+        _login(c)
         # Both environments visible, each with its own inventory.
         envs = {e["name"]: e["management_servers"] for e in c.get("/api/environments").json()}
         assert envs == {"corp": 1, "dmz": 1}

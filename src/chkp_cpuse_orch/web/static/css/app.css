@@ -346,3 +346,24 @@ button.secondary:hover { color: var(--text); filter: none; }
   overflow: auto;
   white-space: pre-wrap;
 }
+
+/* ---- login page (login.html) ---- */
+#login-card {
+  max-width: 22rem;
+  margin: 4rem auto;
+}
+#login-form { flex-direction: column; align-items: stretch; }
+.login-field { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.9rem; }
+.login-field input { width: 100%; }
+#login-submit { margin-top: 0.5rem; }
+.login-error { color: var(--danger); margin: 0.25rem 0 0; font-size: 0.9rem; }
+
+/* ---- header session controls (logout) ---- */
+#session-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+#session-row.hidden { display: none; }

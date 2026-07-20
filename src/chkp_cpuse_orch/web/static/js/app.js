@@ -18,6 +18,12 @@
 
 async function api(path, options = {}) {
   const resp = await fetch(path, options);
+  if (resp.status === 401) {
+    // Session expired (server enforces the idle window). Clear cached creds and
+    // bounce to the login page rather than surfacing a confusing error.
+    handleSessionExpired();
+    throw new Error("session expired");
+  }
   if (!resp.ok) {
     let detail = resp.statusText;
     try { detail = (await resp.json()).detail ?? detail; } catch { /* not json */ }
@@ -45,6 +51,61 @@ function fmtBytes(n) {
 
 function fmtTime(iso) {
   return iso ? new Date(iso).toLocaleString() : "";
+}
+
+/* ---------- 1b. authentication / session ---------- */
+
+// Whether LDAP auth is active (from /api/auth/config). When false the tool runs
+// open and credential storage is not permitted (server-enforced too).
+let authEnabled = false;
+let _redirectingToLogin = false;
+let _idleTimer = null;
+let _idleMs = 30 * 60 * 1000; // overridden by the server's configured window
+
+// End the session locally: wipe any credentials cached in this tab, then go to
+// the login page. Used on explicit logout, idle timeout, and 401 from the API.
+function handleSessionExpired() {
+  if (_redirectingToLogin) return;
+  _redirectingToLogin = true;
+  cacheClearCreds();
+  window.location.replace("/login.html");
+}
+
+async function logout() {
+  cacheClearCreds(); // clear temporarily cached credentials before leaving
+  try {
+    await fetch("/api/auth/logout", { method: "POST" });
+  } catch { /* best effort — the local redirect still ends the session here */ }
+  handleSessionExpired();
+}
+
+function resetIdleTimer() {
+  if (!authEnabled) return;
+  if (_idleTimer) clearTimeout(_idleTimer);
+  _idleTimer = setTimeout(logout, _idleMs);
+}
+
+async function initAuth() {
+  let cfg;
+  try { cfg = await api("/api/auth/config"); } catch { return; }
+  authEnabled = !!cfg.auth_enabled;
+  if (!authEnabled) return;
+  if (cfg.idle_minutes > 0) _idleMs = cfg.idle_minutes * 60 * 1000;
+
+  try {
+    const me = await api("/api/auth/me");
+    if (me.username) {
+      document.getElementById("session-user").textContent = `Signed in as ${me.username}`;
+    }
+  } catch { /* header label is best-effort */ }
+  document.getElementById("session-row").classList.remove("hidden");
+  document.getElementById("logout-btn").addEventListener("click", logout);
+
+  // Any of these gestures counts as activity and restarts the idle countdown.
+  for (const evName of ["mousemove", "keydown", "click", "scroll", "touchstart"]) {
+    document.addEventListener(evName, resetIdleTimer, { passive: true });
+  }
+  resetIdleTimer();
 }
 
 /* ---------- 1a. environments ---------- */
@@ -326,9 +387,15 @@ async function renderEnvManageList() {
     const toggle = row.querySelector(".env-storage-input");
     const note = row.querySelector(".env-storage-note");
     toggle.checked = env.credential_storage_enabled;
-    note.textContent = env.credential_storage_enabled
-      ? "Credentials stored encrypted at rest"
-      : "Credentials entered and cached for duration of session";
+    if (!authEnabled && !env.credential_storage_enabled) {
+      // Storing secrets requires an auth gate — enabling is blocked server-side.
+      toggle.disabled = true;
+      note.textContent = "Configure LDAP authentication to allow credential storage";
+    } else {
+      note.textContent = env.credential_storage_enabled
+        ? "Credentials stored encrypted at rest"
+        : "Credentials entered and cached for duration of session";
+    }
     toggle.addEventListener("change", async () => {
       const enable = toggle.checked;
       if (!enable && !confirm(
@@ -1137,6 +1204,7 @@ async function pollJobs() {
 
 (async function init() {
   initTabs();
+  await initAuth(); // establish session state (logout control, idle timer) first
   const envs = await loadEnvironments(); // must resolve currentEnv before env-scoped loads
   await refreshStatus();
   await Promise.all([loadServers(), loadPackages(), loadCredentials(), loadJobs()]);

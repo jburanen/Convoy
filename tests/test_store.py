@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,9 @@ from chkp_cpuse_orch.store import (
     JobRecord,
     JobStatus,
     PackageRecord,
+    SessionRow,
     Store,
+    utcnow,
 )
 
 
@@ -302,6 +305,30 @@ def test_v3_database_upgrades_to_env_tables(tmp_path: Path) -> None:
     assert store.get_meta("k") == "v"
     store.insert_environment("corp")  # new table works
     assert [e.name for e in store.list_environments()] == ["corp"]
+
+
+def test_session_roundtrip_touch_delete_and_purge(store: Store) -> None:
+    now = utcnow()
+    fresh = SessionRow(token_hash="h-fresh", username="alice", last_seen_at=now)
+    stale = SessionRow(token_hash="h-stale", username="bob", last_seen_at=now - timedelta(hours=2))
+    store.create_session(fresh)
+    store.create_session(stale)
+
+    got = store.get_session("h-fresh")
+    assert got is not None and got.username == "alice"
+
+    # Touch advances last_seen_at.
+    later = now + timedelta(minutes=5)
+    store.touch_session("h-fresh", now=later)
+    assert store.get_session("h-fresh").last_seen_at == later  # type: ignore[union-attr]
+
+    # Purge removes only rows idle past the cutoff.
+    assert store.purge_idle_sessions(now - timedelta(minutes=30)) == 1
+    assert store.get_session("h-stale") is None
+    assert store.get_session("h-fresh") is not None
+
+    assert store.delete_session("h-fresh") is True
+    assert store.get_session("h-fresh") is None
 
 
 def test_future_schema_version_refused(tmp_path: Path) -> None:

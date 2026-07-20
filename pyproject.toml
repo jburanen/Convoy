@@ -35,6 +35,7 @@ web = [
   "fastapi>=0.111",
   "uvicorn[standard]>=0.30",
   "python-multipart>=0.0.9",  # multipart parsing for package uploads
+  "ldap3>=2.9",  # LDAP/Active Directory authentication for the web UI
 ]
 dev = [
   "pytest>=8.0",
@@ -71,6 +72,10 @@ python_version = "3.11"
 strict = true
 warn_unused_ignores = true
 disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = "ldap3.*"  # ldap3 ships no py.typed marker
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
