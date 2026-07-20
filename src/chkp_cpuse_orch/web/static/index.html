@@ -294,17 +294,19 @@
     </div>
     <p class="hint">
       This looks like a new deployment, would you like to rename the default environment? 
-      Environments are analogous to your Check Point management systems. Each related 
-      group of management servers should have an environment defined here. That means any 
-      primary management server and related SmartEvent and backup/HA servers. If you are 
-      connecting to Multi-Domain, you should create one environment for the whole MDS 
-      system, not one per domain.
     </p>
     <form id="welcome-form">
       <input type="text" id="welcome-name" placeholder="new name (e.g. Corp HQ)">
       <button type="submit">Rename</button>
       <button type="button" id="welcome-keep" class="secondary">Keep “default”</button>
     </form>
+    <p class="hint"> 
+      Environments are analogous to your Check Point management systems. Each related 
+      group of management servers should have an environment defined here. That means any 
+      primary management server and related SmartEvent and backup/HA servers. If you are 
+      connecting to Multi-Domain, you should create one environment for the whole MDS 
+      system, not one per domain.
+    </p>
   </div>
 </div>
 
