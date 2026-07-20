@@ -85,6 +85,27 @@ class PackageRecord(BaseModel):
     created_at: datetime = Field(default_factory=utcnow)
 
 
+class EnvironmentRow(BaseModel):
+    """A management environment (name only; its servers live in env_hosts)."""
+
+    name: str
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class EnvHostRow(BaseModel):
+    """One management server belonging to an environment. Gateways are not
+    stored here — CDT discovers them at deploy time."""
+
+    id: str = Field(default_factory=new_id)
+    environment: str
+    name: str
+    address: str
+    role: str  # inventory Role value (management / mds)
+    ssh_port: int = 22
+    ssh_user: str = "admin"
+    notes: str | None = None
+
+
 class CredentialRecord(BaseModel):
     """Ciphertext row — the store never sees plaintext secrets."""
 
@@ -176,6 +197,28 @@ _MIGRATIONS: tuple[str, ...] = (
         FROM credentials;
     DROP TABLE credentials;
     ALTER TABLE credentials_v3 RENAME TO credentials;
+    """,
+    # v4: environments and their management servers become DB-backed so the web
+    # UI can add/edit them. Seeded once from config/inventory files on first run
+    # (see services/environments.py); the DB is authoritative thereafter.
+    """
+    CREATE TABLE environments (
+        name       TEXT PRIMARY KEY,
+        created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE env_hosts (
+        id          TEXT PRIMARY KEY,
+        environment TEXT NOT NULL REFERENCES environments (name) ON DELETE CASCADE,
+        name        TEXT NOT NULL,
+        address     TEXT NOT NULL,
+        role        TEXT NOT NULL,
+        ssh_port    INTEGER NOT NULL DEFAULT 22,
+        ssh_user    TEXT NOT NULL DEFAULT 'admin',
+        notes       TEXT,
+        UNIQUE (environment, name)
+    );
+    CREATE INDEX idx_env_hosts_env ON env_hosts (environment);
     """,
 )
 
@@ -288,6 +331,77 @@ class Store:
             cur = conn.execute(
                 "DELETE FROM credentials WHERE environment = ? AND host = ? AND kind = ?",
                 (environment, host, kind),
+            )
+        return cur.rowcount > 0
+
+    def delete_environment_credentials(self, environment: str) -> int:
+        """Purge every credential in an environment. Operates on ciphertext rows,
+        so it works even when the credential store is locked. Returns the count."""
+        with self._connect() as conn:
+            cur = conn.execute("DELETE FROM credentials WHERE environment = ?", (environment,))
+        return cur.rowcount
+
+    # -- environments + their management servers (DB-backed inventory) ----------
+
+    def list_environments(self) -> list[EnvironmentRow]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT * FROM environments ORDER BY name").fetchall()
+        return [
+            EnvironmentRow(name=r["name"], created_at=datetime.fromisoformat(r["created_at"]))
+            for r in rows
+        ]
+
+    def environment_exists(self, name: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute("SELECT 1 FROM environments WHERE name = ?", (name,)).fetchone()
+        return row is not None
+
+    def insert_environment(self, name: str) -> None:
+        """Raises sqlite3.IntegrityError if the name already exists."""
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO environments (name, created_at) VALUES (?, ?)",
+                (name, utcnow().isoformat()),
+            )
+
+    def delete_environment(self, name: str) -> bool:
+        """Deletes the environment and (via cascade) its env_hosts."""
+        with self._connect() as conn:
+            cur = conn.execute("DELETE FROM environments WHERE name = ?", (name,))
+        return cur.rowcount > 0
+
+    def list_env_hosts(self, environment: str) -> list[EnvHostRow]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM env_hosts WHERE environment = ? ORDER BY name", (environment,)
+            ).fetchall()
+        return [_env_host_from_row(r) for r in rows]
+
+    def upsert_env_host(self, rec: EnvHostRow) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO env_hosts (id, environment, name, address, role, ssh_port,"
+                " ssh_user, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT (environment, name) DO UPDATE SET"
+                " address = excluded.address, role = excluded.role,"
+                " ssh_port = excluded.ssh_port, ssh_user = excluded.ssh_user,"
+                " notes = excluded.notes",
+                (
+                    rec.id,
+                    rec.environment,
+                    rec.name,
+                    rec.address,
+                    rec.role,
+                    rec.ssh_port,
+                    rec.ssh_user,
+                    rec.notes,
+                ),
+            )
+
+    def delete_env_host(self, environment: str, name: str) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM env_hosts WHERE environment = ? AND name = ?", (environment, name)
             )
         return cur.rowcount > 0
 
@@ -467,6 +581,19 @@ def _job_from_row(row: sqlite3.Row) -> JobRecord:
         finished_at=_dt(row["finished_at"]),
         error=row["error"],
         cancel_requested=bool(row["cancel_requested"]),
+    )
+
+
+def _env_host_from_row(row: sqlite3.Row) -> EnvHostRow:
+    return EnvHostRow(
+        id=row["id"],
+        environment=row["environment"],
+        name=row["name"],
+        address=row["address"],
+        role=row["role"],
+        ssh_port=row["ssh_port"],
+        ssh_user=row["ssh_user"],
+        notes=row["notes"],
     )
 
 

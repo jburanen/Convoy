@@ -122,6 +122,90 @@ def test_unknown_environment_is_404(client: TestClient) -> None:
     assert client.get("/api/env/nope/credentials").status_code == 404
 
 
+# -- environment management (create/edit via API) ----------------------------------
+
+
+def test_default_environment_seeded_from_inventory_file(client: TestClient) -> None:
+    # The seed imports management servers from the inventory file into the DB.
+    servers = client.get("/api/environments/default/servers").json()
+    assert [s["name"] for s in servers] == ["mgmt-01"]  # fw-01 gateway not seeded
+    assert servers[0]["role"] == "management"
+
+
+def test_create_environment_and_add_server(client: TestClient) -> None:
+    assert client.post("/api/environments", json={"name": "dmz"}).status_code == 201
+    # It now shows up in the environment list.
+    assert "dmz" in [e["name"] for e in client.get("/api/environments").json()]
+
+    resp = client.post(
+        "/api/environments/dmz/servers",
+        json={"name": "mgmt-dmz", "address": "192.0.2.60", "role": "management"},
+    )
+    assert resp.status_code == 201, resp.text
+    # The new environment is immediately usable operationally (registry rebuilt).
+    servers = client.get("/api/env/dmz/servers").json()
+    assert [s["name"] for s in servers] == ["mgmt-dmz"]
+
+
+def test_duplicate_environment_is_409(client: TestClient) -> None:
+    client.post("/api/environments", json={"name": "dup"})
+    resp = client.post("/api/environments", json={"name": "dup"})
+    assert resp.status_code == 409
+    assert "already exists" in resp.json()["detail"]
+
+
+def test_invalid_environment_name_is_400(client: TestClient) -> None:
+    resp = client.post("/api/environments", json={"name": "Bad Name!"})
+    assert resp.status_code == 400
+    assert "invalid environment name" in resp.json()["detail"]
+
+
+def test_add_gateway_role_server_rejected(client: TestClient) -> None:
+    resp = client.post(
+        "/api/environments/default/servers",
+        json={"name": "fw-x", "address": "192.0.2.70", "role": "gateway"},
+    )
+    assert resp.status_code == 400
+    assert "not a management server role" in resp.json()["detail"]
+
+
+def test_delete_environment_and_its_servers(client: TestClient) -> None:
+    client.post("/api/environments", json={"name": "temp"})
+    client.post(
+        "/api/environments/temp/servers",
+        json={"name": "m1", "address": "192.0.2.80", "role": "mds"},
+    )
+    assert client.delete("/api/environments/temp").json() == {"deleted": True}
+    assert "temp" not in [e["name"] for e in client.get("/api/environments").json()]
+    # Env-scoped access to the deleted environment now 404s.
+    assert client.get("/api/env/temp/servers").status_code == 404
+
+
+def test_delete_environment_purges_its_credentials(client: TestClient) -> None:
+    client.post("/api/environments", json={"name": "corp"})
+    client.put(
+        "/api/env/corp/credentials",
+        json={"host": "m1", "kind": "ssh_password", "secret": "corp-pw"},
+    )
+    assert len(client.get("/api/env/corp/credentials").json()) == 1
+
+    assert client.delete("/api/environments/corp").json() == {"deleted": True}
+    # Recreate the same name — no credentials carry over.
+    client.post("/api/environments", json={"name": "corp"})
+    assert client.get("/api/env/corp/credentials").json() == []
+
+
+def test_remove_server(client: TestClient) -> None:
+    client.post("/api/environments", json={"name": "e1"})
+    client.post(
+        "/api/environments/e1/servers",
+        json={"name": "m1", "address": "192.0.2.90", "role": "management"},
+    )
+    assert client.delete("/api/environments/e1/servers/m1").json() == {"deleted": True}
+    assert client.get("/api/environments/e1/servers").json() == []
+    assert client.delete("/api/environments/e1/servers/m1").status_code == 404
+
+
 # -- servers ---------------------------------------------------------------------
 
 
@@ -194,7 +278,7 @@ def test_package_upload_list_delete(client: TestClient) -> None:
 def test_package_conflict_rejected(client: TestClient) -> None:
     _upload_package(client, content=b"original")
     resp = client.post("/api/packages", files={"file": ("jhf.tgz", b"different")})
-    assert resp.status_code == 400
+    assert resp.status_code == 409  # conflict: same name, different content
     assert "different content" in resp.json()["detail"]
 
 
@@ -237,12 +321,14 @@ def test_install_flow_end_to_end(client: TestClient, transport: FakeTransport) -
     assert any("installer install" in c for c in transport.commands)
 
 
-def test_import_against_gateway_is_rejected(client: TestClient) -> None:
+def test_import_against_gateway_not_in_inventory_is_404(client: TestClient) -> None:
+    # Gateways are not seeded into an environment's management-server inventory
+    # (only management/mds roles are), so a gateway name is simply unknown here.
     _add_ssh_credential(client, host="fw-01")
     _upload_package(client)
     resp = client.post("/api/env/default/servers/fw-01/import", json={"package": "jhf.tgz"})
-    assert resp.status_code == 400
-    assert "patched via CDT" in resp.json()["detail"]
+    assert resp.status_code == 404
+    assert "not found" in resp.json()["detail"]
 
 
 # -- CDT --------------------------------------------------------------------------

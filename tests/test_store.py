@@ -8,6 +8,7 @@ from chkp_cpuse_orch.errors import StoreError
 from chkp_cpuse_orch.store import (
     _MIGRATIONS,
     CredentialRecord,
+    EnvHostRow,
     JobRecord,
     JobStatus,
     PackageRecord,
@@ -183,6 +184,66 @@ def test_v1_database_upgrades_in_place(tmp_path: Path) -> None:
     assert store.get_meta("k") == "v"  # survived the upgrade
     store.insert_package(PackageRecord(filename="p.tgz", sha1="a" * 40, sha256="b" * 64, size=1))
     assert store.get_package("p.tgz") is not None
+
+
+def test_environment_and_env_host_crud(store: Store) -> None:
+    store.insert_environment("corp")
+    assert store.environment_exists("corp") is True
+    assert [e.name for e in store.list_environments()] == ["corp"]
+
+    store.upsert_env_host(
+        EnvHostRow(environment="corp", name="mgmt-01", address="10.0.0.1", role="management")
+    )
+    # Upsert on (environment, name) updates in place.
+    store.upsert_env_host(
+        EnvHostRow(
+            environment="corp",
+            name="mgmt-01",
+            address="10.0.0.9",
+            role="management",
+            ssh_user="svc",
+        )
+    )
+    hosts = store.list_env_hosts("corp")
+    assert len(hosts) == 1
+    assert hosts[0].address == "10.0.0.9"
+    assert hosts[0].ssh_user == "svc"
+
+
+def test_deleting_environment_cascades_to_hosts(store: Store) -> None:
+    store.insert_environment("corp")
+    store.upsert_env_host(EnvHostRow(environment="corp", name="m1", address="10.0.0.1", role="mds"))
+    assert store.delete_environment("corp") is True
+    assert store.list_env_hosts("corp") == []  # cascade removed the host row
+    assert store.environment_exists("corp") is False
+
+
+def test_duplicate_environment_raises(store: Store) -> None:
+    import sqlite3
+
+    store.insert_environment("corp")
+    with pytest.raises(sqlite3.IntegrityError):
+        store.insert_environment("corp")
+
+
+def test_v3_database_upgrades_to_env_tables(tmp_path: Path) -> None:
+    # A v3 DB (as deployed before this feature) must gain the environments +
+    # env_hosts tables on reopen, keeping existing data.
+    import sqlite3
+
+    path = tmp_path / "orch.db"
+    conn = sqlite3.connect(path)
+    for script in _MIGRATIONS[:3]:
+        conn.executescript(script)
+    conn.execute("PRAGMA user_version = 3")
+    conn.execute("INSERT INTO meta (key, value) VALUES ('k', 'v')")
+    conn.commit()
+    conn.close()
+
+    store = Store(path)
+    assert store.get_meta("k") == "v"
+    store.insert_environment("corp")  # new table works
+    assert [e.name for e in store.list_environments()] == ["corp"]
 
 
 def test_future_schema_version_refused(tmp_path: Path) -> None:

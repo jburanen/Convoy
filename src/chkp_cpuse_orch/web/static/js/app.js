@@ -54,6 +54,10 @@ function fmtTime(iso) {
 // and the underlying storage are shared. Selection sticks via localStorage.
 let currentEnv = localStorage.getItem("currentEnv") || null;
 
+// Sentinel picker value that opens the manage-environments modal instead of
+// selecting an environment.
+const ENV_MANAGE = "__manage__";
+
 function envUrl(path) {
   return `/api/env/${encodeURIComponent(currentEnv)}${path}`;
 }
@@ -63,24 +67,160 @@ async function loadEnvironments() {
   const envs = await api("/api/environments");
   picker.replaceChildren();
   for (const env of envs) {
-    picker.appendChild(new Option(`${env.name} (${env.management_servers} server(s))`, env.name));
+    picker.appendChild(new Option(env.name, env.name));
   }
+  // Always-present entry to add/edit environments (kept out of the main tabs).
+  const manage = new Option("Add/Edit Environments…", ENV_MANAGE);
+  picker.appendChild(manage);
+
   if (!envs.some((e) => e.name === currentEnv)) {
     currentEnv = envs.length ? envs[0].name : null;
   }
-  picker.value = currentEnv ?? "";
-  // Hide the picker row entirely when there's just the implicit default env.
-  document.getElementById("env-row").classList.toggle("hidden", envs.length <= 1);
+  picker.value = currentEnv ?? ENV_MANAGE;
+  // Picker is always shown now (it hosts the manage entry even with one env).
+  document.getElementById("env-row").classList.remove("hidden");
 }
 
-document.getElementById("env-picker").addEventListener("change", async (ev) => {
-  currentEnv = ev.target.value;
+async function selectEnvironment(name) {
+  currentEnv = name;
   localStorage.setItem("currentEnv", currentEnv);
+  document.getElementById("env-picker").value = name;
   // Reload everything env-scoped; clear CDT state from the previous env.
   cdtCandidates = null;
   renderCdtCandidates();
   document.getElementById("cdt-status").textContent = "";
   await Promise.all([loadServers(), loadPackages(), loadCredentials(), refreshStatus()]);
+}
+
+document.getElementById("env-picker").addEventListener("change", async (ev) => {
+  if (ev.target.value === ENV_MANAGE) {
+    ev.target.value = currentEnv ?? ""; // don't leave the sentinel selected
+    openEnvModal();
+    return;
+  }
+  await selectEnvironment(ev.target.value);
+});
+
+/* ---------- 1a-modal. add/edit environments ---------- */
+
+// The environment currently expanded in the modal's server editor.
+let envModalSelected = null;
+
+function openEnvModal() {
+  document.getElementById("env-modal").classList.remove("hidden");
+  renderEnvModal();
+}
+function closeEnvModal() {
+  document.getElementById("env-modal").classList.add("hidden");
+}
+
+async function renderEnvModal() {
+  const list = document.getElementById("env-list");
+  const envs = await api("/api/environments");
+  list.replaceChildren();
+
+  if (envModalSelected && !envs.some((e) => e.name === envModalSelected)) {
+    envModalSelected = null;
+  }
+  if (!envModalSelected && envs.length) envModalSelected = envs[0].name;
+
+  for (const env of envs) {
+    const item = el("tpl-env-list-item");
+    const selectBtn = item.querySelector(".env-select");
+    selectBtn.textContent = `${env.name} (${env.management_servers})`;
+    selectBtn.classList.toggle("active", env.name === envModalSelected);
+    selectBtn.addEventListener("click", () => { envModalSelected = env.name; renderEnvModal(); });
+    item.querySelector(".btn-delete").addEventListener("click", async () => {
+      if (!confirm(
+        `Delete environment "${env.name}"?\n\nIts management-server list AND all ` +
+        "stored credentials for it are permanently removed. This cannot be undone."
+      )) return;
+      try {
+        await api(`/api/environments/${encodeURIComponent(env.name)}`, { method: "DELETE" });
+        if (envModalSelected === env.name) envModalSelected = null;
+        await afterEnvChange();
+      } catch (e) { toast("Delete failed: " + e.message); }
+    });
+    list.appendChild(item);
+  }
+  await renderEnvServers();
+}
+
+async function renderEnvServers() {
+  const tbody = document.querySelector("#env-servers-table tbody");
+  document.getElementById("env-servers-name").textContent = envModalSelected ?? "—";
+  tbody.replaceChildren();
+  if (!envModalSelected) return;
+
+  const servers = await api(`/api/environments/${encodeURIComponent(envModalSelected)}/servers`);
+  for (const s of servers) {
+    const row = el("tpl-env-server-row");
+    row.querySelector(".es-name").textContent = s.name;
+    row.querySelector(".es-address").textContent = s.address;
+    row.querySelector(".es-role").textContent = s.role;
+    row.querySelector(".es-user").textContent = s.ssh_user;
+    row.querySelector(".es-port").textContent = s.ssh_port;
+    row.querySelector(".btn-remove").addEventListener("click", async () => {
+      if (!confirm(`Remove server ${s.name} from ${envModalSelected}?`)) return;
+      try {
+        await api(
+          `/api/environments/${encodeURIComponent(envModalSelected)}/servers/${encodeURIComponent(s.name)}`,
+          { method: "DELETE" },
+        );
+        await afterEnvChange();
+      } catch (e) { toast("Remove failed: " + e.message); }
+    });
+    tbody.appendChild(row);
+  }
+}
+
+// After any environment/server mutation: refresh the modal AND the main UI
+// (picker options, server lists, status) since they depend on the same data.
+async function afterEnvChange() {
+  await renderEnvModal();
+  await loadEnvironments();
+  await Promise.all([loadServers(), loadCredentials(), refreshStatus()]);
+}
+
+document.getElementById("env-modal-close").addEventListener("click", closeEnvModal);
+document.getElementById("env-modal").addEventListener("click", (ev) => {
+  if (ev.target.id === "env-modal") closeEnvModal(); // click on backdrop closes
+});
+
+document.getElementById("env-add-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const input = document.getElementById("env-add-name");
+  try {
+    await api("/api/environments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: input.value.trim() }),
+    });
+    envModalSelected = input.value.trim();
+    input.value = "";
+    await afterEnvChange();
+  } catch (e) { toast("Add failed: " + e.message); }
+});
+
+document.getElementById("env-server-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  if (!envModalSelected) { toast("Select or add an environment first."); return; }
+  try {
+    await api(`/api/environments/${encodeURIComponent(envModalSelected)}/servers`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: document.getElementById("es-name").value.trim(),
+        address: document.getElementById("es-address").value.trim(),
+        role: document.getElementById("es-role").value,
+        ssh_user: document.getElementById("es-user").value.trim() || "admin",
+        ssh_port: Number(document.getElementById("es-port").value) || 22,
+      }),
+    });
+    document.getElementById("es-name").value = "";
+    document.getElementById("es-address").value = "";
+    await afterEnvChange();
+  } catch (e) { toast("Save failed: " + e.message); }
 });
 
 /* ---------- 1b. tabs ---------- */
@@ -188,12 +328,25 @@ async function loadServers() {
   const tbody = document.querySelector("#servers-table tbody");
   const infoTbody = document.querySelector("#servers-info-table tbody");
   const namelist = document.getElementById("server-names");
-  const servers = await api(envUrl("/servers"));
-  const packages = await api("/api/packages");
 
   tbody.replaceChildren();
   infoTbody.replaceChildren();
   namelist.replaceChildren();
+
+  if (!currentEnv) {
+    // No environments defined yet — prompt the operator toward the manage dialog.
+    const msg = "No environments. Use the Environment picker → Add/Edit Environments.";
+    for (const target of [tbody, infoTbody]) {
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = 5; td.className = "muted"; td.textContent = msg;
+      tr.appendChild(td); target.appendChild(tr);
+    }
+    return;
+  }
+
+  const servers = await api(envUrl("/servers"));
+  const packages = await api("/api/packages");
 
   for (const srv of servers) {
     // Provisioning tab: informational row, no actions.
@@ -517,6 +670,7 @@ document.getElementById("upload-form").addEventListener("submit", async (ev) => 
 async function loadCredentials() {
   const tbody = document.querySelector("#credentials-table tbody");
   tbody.replaceChildren();
+  if (!currentEnv) return;
   let creds;
   try {
     creds = await api(envUrl("/credentials"));

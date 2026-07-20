@@ -24,6 +24,17 @@ UI is the primary interface (see [[architecture]]); the CLI is secondary.
   privileged installer/expert steps. The credential store holds both per host.
 - **Web-primary, CLI-secondary.** Invest in the web + job-runner model as the main
   experience; CLI is a thin secondary caller of the same `services/` core.
+- **Environments are DB-backed and UI-editable** (v0.4.0). `environments` +
+  `env_hosts` tables (migration v4); managed by `services/environments.py`
+  (`EnvironmentManager`). **Seeded once** from config.yaml + inventory files on
+  first run (meta flag `environments_seeded`), then the DB is authoritative and
+  config files are ignored. Only management/mds hosts are stored (gateways come
+  from CDT). The UI "Add/Edit Environments" picker entry opens a **modal** (not a
+  tab). `EnvironmentRegistry.rebuild()` refreshes the live registry after each
+  mutation so long-lived services see changes without reconstruction. Deleting an
+  environment drops its `env_hosts` (cascade) **and purges its credentials** — a
+  later same-named environment must not inherit old secrets (credential-leak
+  guard, operator-flagged). Credential purge works even when the store is locked.
 - **Persistence = SQLite on `/data`** (the bind-mounted, git-ignored volume) via
   **stdlib `sqlite3`** (connection-per-call + WAL in `store.py` — chose it over
   SQLModel/SQLAlchemy: 4 small tables, zero extra deps, cleaner under mypy strict).

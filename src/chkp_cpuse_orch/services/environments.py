@@ -1,0 +1,200 @@
+"""Environment manager — DB-backed, UI-editable management environments.
+
+Environments and their management-server inventories live in the database so the
+web UI can add/edit them at runtime (see .claude/memory/patching-web-design.md).
+On first startup they are **seeded once** from config.yaml + inventory files;
+after that the database is authoritative and the config files are ignored.
+
+Gateways are not stored here — CDT discovers them at deploy time. Credentials
+stay in their own per-environment namespace (credentials.py); deleting an
+environment also **purges its credentials** so a later same-named environment
+can't inherit the old secrets.
+"""
+
+from __future__ import annotations
+
+import re
+import sqlite3
+
+from ..config import Config
+from ..credentials import CredentialStore
+from ..errors import InventoryError
+from ..inventory import Host, Inventory, Role, Site
+from ..reporting import get_logger
+from ..store import EnvHostRow, Store
+from .common import ClientFactory, EnvironmentRegistry, HostConnector
+
+logger = get_logger(__name__)
+
+_ENV_NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
+_SEEDED_META_KEY = "environments_seeded"
+
+# Roles a management environment's inventory may hold (what this tool connects to).
+MANAGEMENT_ROLES = (Role.MANAGEMENT, Role.MDS)
+
+
+class EnvironmentManager:
+    """Owns environment/server persistence and keeps the live registry in sync."""
+
+    def __init__(
+        self,
+        store: Store,
+        registry: EnvironmentRegistry,
+        credentials: CredentialStore | None,
+        client_factory: ClientFactory | None = None,
+    ) -> None:
+        self._store = store
+        self._registry = registry
+        self._credentials = credentials
+        self._client_factory = client_factory
+
+    # -- startup ----------------------------------------------------------------
+
+    def seed_from_config(self, config: Config) -> None:
+        """First-run only: import config-defined environments + their inventory
+        files into the DB. A meta flag makes this idempotent, so deleting every
+        environment in the UI stays deleted across restarts."""
+        if self._store.get_meta(_SEEDED_META_KEY):
+            return
+        for env_def in config.resolved_environments():
+            self._store.insert_environment(env_def.name)
+            if env_def.inventory.is_file():
+                inventory = Inventory.load(env_def.inventory)
+                for host in _all_hosts(inventory):
+                    if host.role in MANAGEMENT_ROLES:
+                        self._store.upsert_env_host(_row_from_host(env_def.name, host))
+            else:
+                logger.warning(
+                    "seed: no inventory file for environment",
+                    environment=env_def.name,
+                    path=str(env_def.inventory),
+                )
+        self._store.set_meta(_SEEDED_META_KEY, "1")
+        logger.info("environments seeded from config")
+
+    def rebuild(self) -> None:
+        """Rebuild the live registry from the database (call after any change)."""
+        connectors: dict[str, HostConnector] = {}
+        for env in self._store.list_environments():
+            hosts = [_host_from_row(r) for r in self._store.list_env_hosts(env.name)]
+            inventory = Inventory(sites=[Site(name=env.name, hosts=hosts)])
+            connectors[env.name] = HostConnector(
+                inventory, self._credentials, self._client_factory, environment=env.name
+            )
+        self._registry.rebuild(connectors)
+
+    # -- environment CRUD --------------------------------------------------------
+
+    def create_environment(self, name: str) -> None:
+        if not _ENV_NAME_RE.fullmatch(name):
+            raise InventoryError(
+                f"invalid environment name {name!r}: lowercase letters, digits, "
+                "'_' and '-', starting with a letter or digit, max 32 chars"
+            )
+        try:
+            self._store.insert_environment(name)
+        except sqlite3.IntegrityError:
+            raise InventoryError(f"environment {name!r} already exists") from None
+        self.rebuild()
+
+    def delete_environment(self, name: str) -> None:
+        if not self._store.delete_environment(name):
+            raise InventoryError(f"unknown environment: {name!r}")
+        # Purge credentials too: a same-named environment created later must NOT
+        # inherit the deleted one's secrets. env_hosts go via FK cascade.
+        purged = self._store.delete_environment_credentials(name)
+        if purged:
+            logger.info("purged credentials on environment delete", environment=name, count=purged)
+        self.rebuild()
+
+    # -- management-server CRUD --------------------------------------------------
+
+    def list_servers(self, environment: str) -> list[EnvHostRow]:
+        self._require_env(environment)
+        return self._store.list_env_hosts(environment)
+
+    def add_server(
+        self,
+        environment: str,
+        *,
+        name: str,
+        address: str,
+        role: str,
+        ssh_user: str,
+        ssh_port: int = 22,
+        notes: str | None = None,
+    ) -> None:
+        """Add or update a management server. Validates via the Host model."""
+        self._require_env(environment)
+        parsed_role = _parse_management_role(role)
+        # Reuse Host for field validation (name/address non-empty, port range).
+        host = Host(
+            name=name, address=address, role=parsed_role, ssh_port=ssh_port, ssh_user=ssh_user
+        )
+        self._store.upsert_env_host(
+            EnvHostRow(
+                environment=environment,
+                name=host.name,
+                address=host.address,
+                role=host.role.value,
+                ssh_port=host.ssh_port,
+                ssh_user=host.ssh_user,
+                notes=notes,
+            )
+        )
+        self.rebuild()
+
+    def remove_server(self, environment: str, name: str) -> None:
+        self._require_env(environment)
+        if not self._store.delete_env_host(environment, name):
+            raise InventoryError(f"server {name!r} not found in environment {environment!r}")
+        self.rebuild()
+
+    # -- helpers -----------------------------------------------------------------
+
+    def _require_env(self, environment: str) -> None:
+        if not self._store.environment_exists(environment):
+            raise InventoryError(f"unknown environment: {environment!r}")
+
+
+def _all_hosts(inventory: Inventory) -> list[Host]:
+    return [h for site in inventory.sites for h in site.hosts]
+
+
+def _row_from_host(environment: str, host: Host) -> EnvHostRow:
+    return EnvHostRow(
+        environment=environment,
+        name=host.name,
+        address=host.address,
+        role=host.role.value,
+        ssh_port=host.ssh_port,
+        ssh_user=host.ssh_user,
+        notes=host.notes,
+    )
+
+
+def _host_from_row(row: EnvHostRow) -> Host:
+    return Host(
+        name=row.name,
+        address=row.address,
+        role=Role(row.role),
+        ssh_port=row.ssh_port,
+        ssh_user=row.ssh_user,
+        notes=row.notes,
+    )
+
+
+def _parse_management_role(role: str) -> Role:
+    try:
+        parsed = Role(role)
+    except ValueError:
+        raise InventoryError(
+            f"invalid role {role!r}: management environments hold "
+            f"{' or '.join(r.value for r in MANAGEMENT_ROLES)} servers"
+        ) from None
+    if parsed not in MANAGEMENT_ROLES:
+        raise InventoryError(
+            f"role {role!r} is not a management server role — gateways are "
+            "discovered by CDT, not added here"
+        )
+    return parsed

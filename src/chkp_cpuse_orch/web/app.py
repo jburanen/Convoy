@@ -44,12 +44,12 @@ from ..errors import (
     StoreError,
     TransportError,
 )
-from ..inventory import Inventory
 from ..jobs import JobRunner
 from ..packages import PackageStore
 from ..reporting import configure_logging, get_logger
 from ..services.cdt_ops import CDTService
-from ..services.common import ClientFactory, EnvironmentRegistry, HostConnector
+from ..services.common import ClientFactory, EnvironmentRegistry
+from ..services.environments import EnvironmentManager
 from ..services.patching import PatchingService
 from ..services.provisioning import (
     DEFAULT_UID,
@@ -106,6 +106,19 @@ class ProvisionRequest(BaseModel):
     uid: int = DEFAULT_UID
 
 
+class EnvironmentIn(BaseModel):
+    name: str
+
+
+class EnvServerIn(BaseModel):
+    name: str
+    address: str
+    role: str = "management"  # management | mds
+    ssh_user: str = "admin"
+    ssh_port: int = 22
+    notes: str | None = None
+
+
 # -- app factory -------------------------------------------------------------------
 
 
@@ -131,23 +144,13 @@ def create_app(
             logger.warning("credential store locked", reason=str(exc))
             app.state.credentials_error = str(exc)
 
-        # Independent management environments: each gets its own inventory and
-        # credential namespace (see .claude/memory/patching-web-design.md).
+        # Independent management environments — DB-backed and UI-editable. Seeded
+        # once from config/inventory files, then the DB is authoritative (see
+        # services/environments.py and .claude/memory/patching-web-design.md).
         registry = EnvironmentRegistry()
-        for env_def in cfg.resolved_environments():
-            inventory = Inventory()
-            if env_def.inventory.is_file():
-                inventory = Inventory.load(env_def.inventory)
-            else:
-                logger.warning(
-                    "no inventory file for environment",
-                    environment=env_def.name,
-                    path=str(env_def.inventory),
-                )
-            registry.add(
-                env_def.name,
-                HostConnector(inventory, credentials, client_factory, environment=env_def.name),
-            )
+        env_manager = EnvironmentManager(store, registry, credentials, client_factory)
+        env_manager.seed_from_config(cfg)
+        env_manager.rebuild()
 
         runner = JobRunner(store)
         service = PatchingService(registry=registry, packages=packages, runner=runner)
@@ -157,6 +160,7 @@ def create_app(
         app.state.packages = packages
         app.state.credentials = credentials
         app.state.registry = registry
+        app.state.env_manager = env_manager
         app.state.runner = runner
         app.state.service = service
         app.state.cdt = cdt_service
@@ -212,8 +216,13 @@ def _map_error(exc: OrchestratorError) -> HTTPException:
     an internal operator tool, not a public API."""
     status = 400
     if isinstance(exc, InventoryError | PackageError):
-        missing = any(s in str(exc) for s in ("not found", "no such", "unknown environment"))
-        status = 404 if missing else 400
+        text = str(exc)
+        if "already exists" in text:
+            status = 409
+        elif any(s in text for s in ("not found", "no such", "unknown environment")):
+            status = 404
+        else:
+            status = 400
     elif isinstance(exc, CredentialError):
         status = 503 if "locked" in str(exc) else 409
     elif isinstance(exc, CDTError):
@@ -246,7 +255,11 @@ def _register_routes(app: FastAPI) -> None:
             "packages": len(request.app.state.packages.list()),
         }
 
-    # -- environments ----------------------------------------------------------
+    # -- environments (create/edit; DB-backed, UI-managed) ----------------------
+
+    def _envmgr(request: Request) -> EnvironmentManager:
+        manager: EnvironmentManager = request.app.state.env_manager
+        return manager
 
     @app.get("/api/environments")
     def environments(request: Request) -> list[dict[str, Any]]:
@@ -255,6 +268,63 @@ def _register_routes(app: FastAPI) -> None:
             {"name": env, "management_servers": len(service.management_servers(env))}
             for env in _registry(request).names()
         ]
+
+    @app.post("/api/environments", status_code=201)
+    def create_environment(body: EnvironmentIn, request: Request) -> dict[str, str]:
+        try:
+            _envmgr(request).create_environment(body.name)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        return {"name": body.name}
+
+    @app.delete("/api/environments/{env}")
+    def delete_environment(env: str, request: Request) -> dict[str, bool]:
+        try:
+            _envmgr(request).delete_environment(env)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        return {"deleted": True}
+
+    @app.get("/api/environments/{env}/servers")
+    def env_servers(env: str, request: Request) -> list[dict[str, Any]]:
+        """Full editable server list for the environment editor."""
+        try:
+            return [
+                {
+                    "name": h.name,
+                    "address": h.address,
+                    "role": h.role,
+                    "ssh_user": h.ssh_user,
+                    "ssh_port": h.ssh_port,
+                }
+                for h in _envmgr(request).list_servers(env)
+            ]
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+
+    @app.post("/api/environments/{env}/servers", status_code=201)
+    def add_env_server(env: str, body: EnvServerIn, request: Request) -> dict[str, str]:
+        try:
+            _envmgr(request).add_server(
+                env,
+                name=body.name,
+                address=body.address,
+                role=body.role,
+                ssh_user=body.ssh_user,
+                ssh_port=body.ssh_port,
+                notes=body.notes,
+            )
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        return {"name": body.name}
+
+    @app.delete("/api/environments/{env}/servers/{name}")
+    def remove_env_server(env: str, name: str, request: Request) -> dict[str, bool]:
+        try:
+            _envmgr(request).remove_server(env, name)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        return {"deleted": True}
 
     # -- service-account provisioning (pure rendering; nothing stored) ---------
 

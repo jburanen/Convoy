@@ -47,7 +47,7 @@
   <div class="tab-panel" id="tab-provisioning">
 
     <section id="provision">
-      <h2>Provision access user</h2>
+      <h2>Provision management server access</h2>
       <p class="hint">
         Generates the clish commands that create this tool's service account on a
         management server — paste them into clish on <strong>each</strong> server.
@@ -239,6 +239,57 @@
 
 </main>
 
+<!-- ============ Add/Edit Environments modal (opened from the picker) ========= -->
+<!-- Not a tab: an overlay dialog. Hidden until the picker's manage entry is chosen. -->
+<div id="env-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="env-modal-title">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2 id="env-modal-title">Add / edit environments</h2>
+      <button id="env-modal-close" class="small" title="Close">✕</button>
+    </div>
+    <p class="hint">
+      Environments are independent management estates — each has its own inventory
+      of management servers and its own credentials. Gateways are discovered by CDT,
+      not listed here. Credentials are set per environment in the
+      <strong>Packages and Credentials</strong> tab.
+    </p>
+
+    <div class="modal-body">
+      <!-- left: environment list + add -->
+      <div class="env-list-col">
+        <h3>Environments</h3>
+        <ul id="env-list"><!-- tpl-env-list-item instances --></ul>
+        <form id="env-add-form" class="stack">
+          <input type="text" id="env-add-name" placeholder="new environment name" required>
+          <button type="submit" class="small">Add environment</button>
+        </form>
+      </div>
+
+      <!-- right: selected environment's management servers -->
+      <div class="env-servers-col">
+        <h3>Management servers in <span id="env-servers-name" class="mono"></span></h3>
+        <table id="env-servers-table">
+          <thead>
+            <tr><th>Name</th><th>Address</th><th>Role</th><th>SSH user</th><th>Port</th><th></th></tr>
+          </thead>
+          <tbody><!-- tpl-env-server-row instances --></tbody>
+        </table>
+        <form id="env-server-form" class="wrap">
+          <input type="text" id="es-name" placeholder="name" required>
+          <input type="text" id="es-address" placeholder="address / IP" required>
+          <select id="es-role">
+            <option value="management">management</option>
+            <option value="mds">mds</option>
+          </select>
+          <input type="text" id="es-user" placeholder="ssh user" value="admin">
+          <input type="number" id="es-port" value="22" min="1" max="65535" title="ssh port">
+          <button type="submit" class="small">Add / update server</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
 <footer>
   <a id="footer-repo" href="https://github.com/jburanen/chkp-cpuse-orch" target="_blank" rel="noopener">
     <!-- GitHub mark, inline SVG so the page stays self-contained -->
@@ -333,6 +384,24 @@
     <td class="job-started muted"></td>
     <td class="job-error"></td>
     <td><button class="btn-cancel small hidden">Cancel</button></td>
+  </tr>
+</template>
+
+<template id="tpl-env-list-item">
+  <li class="env-list-item">
+    <button class="env-select"></button>
+    <button class="btn-delete small danger" title="delete environment">✕</button>
+  </li>
+</template>
+
+<template id="tpl-env-server-row">
+  <tr>
+    <td class="es-name mono"></td>
+    <td class="es-address mono"></td>
+    <td class="es-role"></td>
+    <td class="es-user mono"></td>
+    <td class="es-port"></td>
+    <td><button class="btn-remove small danger">Remove</button></td>
   </tr>
 </template>
 

@@ -60,6 +60,8 @@ footer {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  font-size: 0.85rem; /* same size as .muted (the version text); the GitHub
+                         logo keeps its fixed 16px width/height attributes */
 }
 #footer-repo {
   display: inline-flex;
@@ -206,6 +208,59 @@ button.danger { background: var(--danger); color: #fff; }
   margin: 0.5rem 0;
 }
 .cdt-row-actions { white-space: nowrap; }
+
+/* ---- modal (add/edit environments) ---- */
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 3rem 1rem;
+  z-index: 100;
+  overflow: auto;
+}
+.modal-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.25rem 1.5rem;
+  width: min(880px, 100%);
+}
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.modal-head h2 { margin: 0; }
+.modal-head button { background: transparent; color: var(--muted); }
+.modal-head button:hover { color: var(--text); filter: none; }
+
+.modal-body {
+  display: flex;
+  gap: 1.5rem;
+  margin-top: 0.5rem;
+  flex-wrap: wrap;
+}
+.env-list-col { flex: 1 1 200px; }
+.env-servers-col { flex: 3 1 420px; min-width: 0; }
+.env-servers-col table { display: block; overflow-x: auto; }
+
+#env-list { list-style: none; margin: 0 0 0.75rem; padding: 0; }
+.env-list-item { display: flex; gap: 0.35rem; margin-bottom: 0.35rem; }
+.env-select {
+  flex: 1;
+  text-align: left;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.env-select:hover { filter: none; background: var(--badge-bg); }
+.env-select.active { border-color: var(--accent); color: var(--accent); }
+
+form.stack { flex-direction: column; align-items: stretch; }
+form.wrap { flex-wrap: wrap; }
 
 /* ---- per-job progress log ---- */
 .job-events {

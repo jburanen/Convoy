@@ -114,7 +114,11 @@ class HostConnector:
 
 
 class EnvironmentRegistry:
-    """Named, independent management environments → their connectors."""
+    """Named, independent management environments → their connectors.
+
+    Mutable so the web UI can add/edit environments at runtime: services hold a
+    long-lived reference and call ``get()`` per request, so a ``rebuild()`` from
+    the database is seen immediately without reconstructing the services."""
 
     def __init__(self) -> None:
         self._envs: dict[str, HostConnector] = {}
@@ -123,6 +127,10 @@ class EnvironmentRegistry:
         if name in self._envs:
             raise InventoryError(f"environment {name!r} registered twice")
         self._envs[name] = connector
+
+    def rebuild(self, connectors: dict[str, HostConnector]) -> None:
+        """Atomically replace all environments (after a DB mutation)."""
+        self._envs = dict(connectors)
 
     def get(self, name: str) -> HostConnector:
         connector = self._envs.get(name)
