@@ -266,6 +266,15 @@ class LDAPAuthenticator:
             u.lower().startswith("ldaps") for u in self.settings.urls
         ):
             validate = ssl.CERT_REQUIRED if self.settings.tls_verify else ssl.CERT_NONE
+            if not self.settings.tls_verify:
+                # Deliberately auditable: disabling verification exposes the bind
+                # (which carries the user's password) to MITM. Prefer trusting the
+                # directory's CA via CHKP_CPUSE_LDAP_CA_CERT.
+                logger.warning(
+                    "LDAPS certificate verification DISABLED "
+                    "(CHKP_CPUSE_LDAP_TLS_VERIFY=false) — connection is not MITM-safe",
+                    urls=self.settings.urls,
+                )
             tls = Tls(validate=validate, ca_certs_file=self.settings.ca_cert or None)
         servers = [Server(u, tls=tls, get_info=ALL) for u in self.settings.urls]
         if len(servers) == 1:
