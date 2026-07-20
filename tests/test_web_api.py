@@ -195,6 +195,36 @@ def test_delete_environment_purges_its_credentials(client: TestClient) -> None:
     assert client.get("/api/env/corp/credentials").json() == []
 
 
+def test_rename_environment_moves_servers_and_credentials(client: TestClient) -> None:
+    client.post("/api/environments", json={"name": "old name"})
+    client.post(
+        "/api/environments/old name/servers",
+        json={"name": "m1", "address": "192.0.2.85", "role": "management"},
+    )
+    client.put(
+        "/api/env/old name/credentials",
+        json={"host": "m1", "kind": "ssh_password", "secret": "pw"},
+    )
+
+    resp = client.post("/api/environments/old name/rename", json={"name": "New Name"})
+    assert resp.status_code == 200
+    assert resp.json() == {"name": "New Name"}
+
+    names = [e["name"] for e in client.get("/api/environments").json()]
+    assert "New Name" in names and "old name" not in names
+    assert [s["name"] for s in client.get("/api/env/New Name/servers").json()] == ["m1"]
+    assert len(client.get("/api/env/New Name/credentials").json()) == 1
+    assert client.get("/api/env/old name/servers").status_code == 404
+
+
+def test_rename_environment_errors(client: TestClient) -> None:
+    client.post("/api/environments", json={"name": "r1"})
+    client.post("/api/environments", json={"name": "r2"})
+    assert client.post("/api/environments/ghost/rename", json={"name": "x"}).status_code == 404
+    assert client.post("/api/environments/r1/rename", json={"name": "r2"}).status_code == 409
+    assert client.post("/api/environments/r1/rename", json={"name": "x!"}).status_code == 400
+
+
 def test_remove_server(client: TestClient) -> None:
     client.post("/api/environments", json={"name": "e1"})
     client.post(

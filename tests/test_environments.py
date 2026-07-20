@@ -142,6 +142,38 @@ def test_delete_environment_purges_credentials(store: Store) -> None:
     assert store.list_credentials(environment="corp") == []
 
 
+def test_rename_environment_moves_everything(store: Store) -> None:
+    registry = EnvironmentRegistry()
+    mgr = _manager(store, registry)
+    mgr.create_environment("corp")
+    mgr.add_server("corp", name="m1", address="10.0.0.1", role="management", ssh_user="admin")
+    store.upsert_credential(
+        CredentialRecord(environment="corp", host="m1", kind="ssh_password", ciphertext=b"x")
+    )
+
+    assert mgr.rename_environment("corp", "  Corp HQ ") == "Corp HQ"
+
+    assert [e.name for e in store.list_environments()] == ["Corp HQ"]
+    assert [h.name for h in store.list_env_hosts("Corp HQ")] == ["m1"]
+    assert len(store.list_credentials(environment="Corp HQ")) == 1
+    assert store.list_credentials(environment="corp") == []
+    assert registry.names() == ["Corp HQ"]
+    assert [h.name for h in registry.get("Corp HQ").management_servers()] == ["m1"]
+
+
+def test_rename_environment_errors(store: Store) -> None:
+    mgr = _manager(store, EnvironmentRegistry())
+    mgr.create_environment("a")
+    mgr.create_environment("b")
+    with pytest.raises(InventoryError, match="unknown environment"):
+        mgr.rename_environment("ghost", "x")
+    with pytest.raises(InventoryError, match="already exists"):
+        mgr.rename_environment("a", "b")
+    with pytest.raises(InventoryError, match="invalid environment name"):
+        mgr.rename_environment("a", "x!")
+    assert mgr.rename_environment("a", "a") == "a"  # no-op
+
+
 def test_remove_server(store: Store) -> None:
     mgr = _manager(store, EnvironmentRegistry())
     mgr.create_environment("corp")

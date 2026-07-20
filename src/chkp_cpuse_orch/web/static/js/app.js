@@ -77,9 +77,9 @@ async function loadEnvironments() {
   for (const env of envs) {
     picker.appendChild(new Option(env.name, env.name));
   }
-  // Always-present entry to create an environment (opens the modal; servers
+  // Always-present entry opening the manage modal (create + rename; servers
   // and deletion are managed on the Provisioning tab).
-  const manage = new Option("New Environment…", ENV_MANAGE);
+  const manage = new Option("Manage Environments…", ENV_MANAGE);
   picker.appendChild(manage);
 
   if (!envs.some((e) => e.name === currentEnv)) {
@@ -116,9 +116,8 @@ document.getElementById("env-picker").addEventListener("change", async (ev) => {
 
 // On a brand-new deployment — exactly one environment named "default" with no
 // servers, and no credentials or packages anywhere — offer renaming the default
-// environment before any data gets attached to its name. Renaming at this point
-// is safely done as create-new + delete-old: the emptiness check guarantees
-// there is nothing to migrate.
+// environment before any data gets attached to its name (uses the real rename
+// endpoint, same as the Manage Environments modal).
 //
 // Only an EXPLICIT choice (Rename / Keep "default") is remembered in
 // localStorage; closing via ✕, backdrop, or Escape merely hides the dialog for
@@ -152,15 +151,14 @@ document.getElementById("welcome-form").addEventListener("submit", async (ev) =>
   const name = document.getElementById("welcome-name").value.trim();
   if (!name || name === "default") { dismissWelcome(); return; }
   try {
-    const created = await api("/api/environments", {
+    const renamed = await api("/api/environments/default/rename", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }),
     });
-    await api("/api/environments/default", { method: "DELETE" });
     dismissWelcome();
     await loadEnvironments();
-    await selectEnvironment(created.name);
+    await selectEnvironment(renamed.name);
   } catch (e) { toast("Rename failed: " + e.message); }
 });
 document.getElementById("welcome-keep").addEventListener("click", dismissWelcome);
@@ -169,17 +167,48 @@ document.getElementById("welcome-modal").addEventListener("click", (ev) => {
   if (ev.target.id === "welcome-modal") hideWelcome(); // backdrop click
 });
 
-/* ---------- 1a-modal. new environment (create-only) ---------- */
+/* ---------- 1a-modal. manage environments (create + rename) ---------- */
 
-// The modal only CREATES environments; servers and deletion are managed on the
-// Provisioning tab (section 1a-prov below), scoped to the picker's selection.
+// The modal creates and renames environments; servers and deletion are managed
+// on the Provisioning tab (section 1a-prov below), scoped to the picker's
+// selection. A rename moves servers, credentials, and job history atomically.
 
 function openEnvModal() {
   document.getElementById("env-modal").classList.remove("hidden");
-  document.getElementById("env-add-name").focus();
+  renderEnvManageList();
 }
 function closeEnvModal() {
   document.getElementById("env-modal").classList.add("hidden");
+}
+
+async function renderEnvManageList() {
+  const list = document.getElementById("env-manage-list");
+  const envs = await api("/api/environments");
+  list.replaceChildren();
+  for (const env of envs) {
+    const row = el("tpl-env-manage-row");
+    const input = row.querySelector(".env-rename-input");
+    input.value = env.name;
+    row.querySelector(".env-rename-btn").addEventListener("click", async () => {
+      const newName = input.value.trim();
+      if (!newName || newName === env.name) return;
+      try {
+        const resp = await api(`/api/environments/${encodeURIComponent(env.name)}/rename`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: newName }),
+        });
+        const wasCurrent = currentEnv === env.name;
+        await loadEnvironments();
+        if (wasCurrent) await selectEnvironment(resp.name); // refresh env-scoped views
+        await renderEnvManageList();
+      } catch (e) { toast("Rename failed: " + e.message); }
+    });
+    list.appendChild(row);
+  }
+  if (!envs.length) {
+    document.getElementById("env-add-name").focus();
+  }
 }
 
 document.getElementById("env-modal-close").addEventListener("click", closeEnvModal);

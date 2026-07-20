@@ -226,6 +226,36 @@ def test_duplicate_environment_raises(store: Store) -> None:
         store.insert_environment("corp")
 
 
+def test_rename_environment_moves_children(store: Store) -> None:
+    store.insert_environment("corp")
+    store.upsert_env_host(EnvHostRow(environment="corp", name="m1", address="10.0.0.1", role="mds"))
+    store.upsert_credential(
+        CredentialRecord(environment="corp", host="m1", kind="ssh_password", ciphertext=b"x")
+    )
+    store.insert_job(JobRecord(kind="cpuse.import", target="m1", environment="corp"))
+
+    assert store.rename_environment("corp", "Corp HQ") is True
+
+    assert store.environment_exists("corp") is False
+    assert [h.name for h in store.list_env_hosts("Corp HQ")] == ["m1"]
+    assert len(store.list_credentials(environment="Corp HQ")) == 1
+    assert store.list_credentials(environment="corp") == []
+    jobs = store.list_jobs()
+    assert jobs and all(j.environment == "Corp HQ" for j in jobs)
+
+
+def test_rename_environment_errors(store: Store) -> None:
+    import sqlite3
+
+    assert store.rename_environment("ghost", "x") is False
+    store.insert_environment("a")
+    store.insert_environment("b")
+    with pytest.raises(sqlite3.IntegrityError):
+        store.rename_environment("a", "b")
+    # The failed rename rolled back atomically — "a" is intact.
+    assert store.environment_exists("a") is True
+
+
 def test_v3_database_upgrades_to_env_tables(tmp_path: Path) -> None:
     # A v3 DB (as deployed before this feature) must gain the environments +
     # env_hosts tables on reopen, keeping existing data.

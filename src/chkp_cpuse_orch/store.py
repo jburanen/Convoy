@@ -370,6 +370,32 @@ class Store:
             cur = conn.execute("DELETE FROM environments WHERE name = ?", (name,))
         return cur.rowcount > 0
 
+    def rename_environment(self, old: str, new: str) -> bool:
+        """Rename an environment, moving its servers, credentials, and job
+        history along in ONE transaction (the FK is ON DELETE CASCADE only, so
+        this is insert-new / move-children / delete-old rather than a PK
+        update). Returns False if ``old`` doesn't exist; raises
+        sqlite3.IntegrityError if ``new`` is already taken."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT created_at FROM environments WHERE name = ?", (old,)
+            ).fetchone()
+            if row is None:
+                return False
+            conn.execute(
+                "INSERT INTO environments (name, created_at) VALUES (?, ?)",
+                (new, row["created_at"]),
+            )
+            conn.execute(
+                "UPDATE env_hosts SET environment = ? WHERE environment = ?", (new, old)
+            )
+            conn.execute(
+                "UPDATE credentials SET environment = ? WHERE environment = ?", (new, old)
+            )
+            conn.execute("UPDATE jobs SET environment = ? WHERE environment = ?", (new, old))
+            conn.execute("DELETE FROM environments WHERE name = ?", (old,))
+        return True
+
     def list_env_hosts(self, environment: str) -> list[EnvHostRow]:
         with self._connect() as conn:
             rows = conn.execute(

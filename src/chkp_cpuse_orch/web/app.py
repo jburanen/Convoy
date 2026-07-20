@@ -277,6 +277,15 @@ def _register_routes(app: FastAPI) -> None:
             raise _map_error(exc) from exc
         return {"name": name}
 
+    @app.post("/api/environments/{env}/rename")
+    def rename_environment(env: str, body: EnvironmentIn, request: Request) -> dict[str, str]:
+        """Servers, credentials, and job history move with the new name."""
+        try:
+            name = _envmgr(request).rename_environment(env, body.name)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        return {"name": name}
+
     @app.delete("/api/environments/{env}")
     def delete_environment(env: str, request: Request) -> dict[str, bool]:
         try:

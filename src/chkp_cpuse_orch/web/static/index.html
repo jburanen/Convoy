@@ -286,23 +286,25 @@
   </div>
 </div>
 
-<!-- ============ New Environment modal (opened from the picker) ============== -->
-<!-- Create-only: everything else about an environment (its servers, deletion) is
-     managed on the Provisioning tab; credentials on Packages and Credentials. -->
+<!-- ============ Manage Environments modal (opened from the picker) ========== -->
+<!-- Create + rename only: a rename moves the environment's servers, credentials,
+     and job history to the new name atomically. Server add/remove and deletion
+     stay on the Provisioning tab; credentials on Packages and Credentials. -->
 <div id="env-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="env-modal-title">
   <div class="modal-card narrow">
     <div class="modal-head">
-      <h2 id="env-modal-title">New environment</h2>
+      <h2 id="env-modal-title">Manage environments</h2>
       <button id="env-modal-close" class="small" title="Close">✕</button>
     </div>
     <p class="hint">
       Environments are independent management estates — each has its own inventory
-      of management servers and its own credentials. After creating one, add its
-      servers on the <strong>Provisioning</strong> tab and its credentials on
-      <strong>Packages and Credentials</strong>.
+      of management servers and its own credentials. Edit a name and click
+      <strong>Rename</strong>: servers, credentials, and job history move with it.
+      Servers and deletion are managed on the <strong>Provisioning</strong> tab.
     </p>
+    <ul id="env-manage-list"><!-- tpl-env-manage-row instances --></ul>
     <form id="env-add-form">
-      <input type="text" id="env-add-name" placeholder="environment name (e.g. Corp HQ)" required>
+      <input type="text" id="env-add-name" placeholder="new environment name (e.g. Corp HQ)" required>
       <button type="submit">Create</button>
     </form>
   </div>
@@ -405,6 +407,14 @@
     <td class="job-error"></td>
     <td><button class="btn-cancel small hidden">Cancel</button></td>
   </tr>
+</template>
+
+<!-- one row in the Manage Environments modal: editable name + Rename -->
+<template id="tpl-env-manage-row">
+  <li class="env-manage-row">
+    <input type="text" class="env-rename-input">
+    <button class="env-rename-btn small">Rename</button>
+  </li>
 </template>
 
 <!-- expandable per-job progress log; inserted after the clicked job row -->

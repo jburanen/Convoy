@@ -105,6 +105,30 @@ class EnvironmentManager:
         self.rebuild()
         return name
 
+    def rename_environment(self, old: str, new: str) -> str:
+        """Rename an environment; its servers, credentials, and job history move
+        with it atomically. Returns the normalized new name.
+
+        A job already RUNNING against the old name keeps its in-memory name and
+        will fail its next registry lookup — acceptable: renames are an
+        operator action taken outside patching windows."""
+        new = new.strip()
+        if not _ENV_NAME_RE.fullmatch(new):
+            raise InventoryError(
+                f"invalid environment name {new!r}: letters, digits, spaces, "
+                "'_' and '-', starting with a letter or digit, max 32 chars"
+            )
+        if new == old:
+            return new
+        try:
+            if not self._store.rename_environment(old, new):
+                raise InventoryError(f"unknown environment: {old!r}")
+        except sqlite3.IntegrityError:
+            raise InventoryError(f"environment {new!r} already exists") from None
+        logger.info("renamed environment", old=old, new=new)
+        self.rebuild()
+        return new
+
     def delete_environment(self, name: str) -> None:
         if not self._store.delete_environment(name):
             raise InventoryError(f"unknown environment: {name!r}")
