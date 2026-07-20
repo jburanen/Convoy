@@ -327,8 +327,8 @@ async function renderEnvManageList() {
     const note = row.querySelector(".env-storage-note");
     toggle.checked = env.credential_storage_enabled;
     note.textContent = env.credential_storage_enabled
-      ? "— credentials saved encrypted at rest"
-      : "— credentials entered per action, kept in memory only";
+      ? "Credentials stored encrypted at rest"
+      : "Credentials entered and cached for duration of session";
     toggle.addEventListener("change", async () => {
       const enable = toggle.checked;
       if (!enable && !confirm(
