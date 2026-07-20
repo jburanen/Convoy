@@ -146,6 +146,24 @@ Dockerfile docker-compose.yml scripts/deploy.sh
 CLAUDE.md         project instructions
 ```
 
+## To-do List
+
+- Provisioning: Collapse new credential set creating into a modal and a new Add Credential Set button
+- CPUSE: Management tab name change to "Direct Patching (CPUSE)"
+- CPUSE: Add concept of direct patching for gateways as well with a separate panel from mgmt servers
+- CPUSE: Gateways to direct patch should be added by admin on the CPUSE tab with a similar UI to adding mgmt servers on the provisioning tab. Management servers should be inherited from Prov tab
+- CPUSE: Add ability to edit existing direct patching targets
+- Provisioning: Conceptually adopt the terminology of patching targets for CPUSE patching screens
+- Provisioning: Move Delete Environment button to Manage Environments modal - make that modal physically larger
+- Environments: Stack enable credential and hint text on manage environments modal
+- Environments: Add enable credential storage option and hint to new deployment rename prompt modal
+- Jobs: tab "flickers" when a job is selected (because of the live view?)
+- Jobs: Collapse output, collapse all rows
+- Provisioning: discover other management servers after connecting to primary
+- CPUSE: display deployment agent version, major version, and JHF and time of data refresh. maybe make each entry two lines?
+- CPUSE: add muted explanatory text above first panel to talk about how direct patching is mostly for management servers and small numbers of gateways. gateways can also be patched from SmartConsole and Web SmartConsole (generate a link). Large numbers of gateways can be patched with the CDT tab (future).
+- Packages: can I extract and display meta data like compatible major version from the package file?
+
 ## Disclaimer
 
 Not affiliated with or endorsed by Check Point Software Technologies. "Check Point",
