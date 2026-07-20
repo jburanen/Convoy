@@ -57,6 +57,13 @@ plain and file-based:
   elements in the page — never in Python strings, never in JS string literals.
 - Avoid Jinja; if templating ever becomes unavoidable, keep it to a minimal base
   layout. Never generate HTML from Python.
+- **Planned split (operator-directed, 2026-07-19):** when auth + RBAC land, do NOT
+  split index.html into per-tab pages (tabs share live state: env selection, jobs
+  polling, cross-tab refreshes). Instead split **app.js into per-section files**
+  loaded via multiple plain `<script>` tags — no tooling needed. The **login screen
+  becomes a separate page** (it shares no tab state); RBAC admin likewise if it
+  outgrows a tab. Header/footer stay in the one main page — plain HTML has no
+  include mechanism worth its cost here.
 
 ## Web UI authentication (requirement, 2026-07-19 — not yet built)
 The admin UI must support **both**:
@@ -66,7 +73,10 @@ The admin UI must support **both**:
 Design so both are backends behind one auth layer (session cookie after login;
 FastAPI dependency guarding all /api routes and the static UI). Until this
 ships, the app is safe only on a trusted network — flagged in the Phase 3
-commit message.
+commit message. The operator also expects **RBAC** after auth (2026-07-19),
+likely **per-environment** — one reason environments are keyed rows in the DB
+rather than config files. Login is a separate static page (see planned split
+above).
 
 ## New core infrastructure (shared by both subsystems)
 - **Credential store, encrypted at rest.** Ciphertext in SQLite; master key supplied
