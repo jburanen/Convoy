@@ -56,7 +56,13 @@ class JobRunner:
     """Claims PENDING jobs from the store and runs them, ``max_concurrent`` at a
     time. Instantiate once per process; share the ``Store`` with the web app."""
 
-    def __init__(self, store: Store, *, max_concurrent: int = 2) -> None:
+    def __init__(
+        self,
+        store: Store,
+        *,
+        max_concurrent: int = 2,
+        on_job_finished: Callable[[str], None] | None = None,
+    ) -> None:
         if max_concurrent < 1:
             raise JobError("max_concurrent must be >= 1")
         self._store = store
@@ -64,6 +70,9 @@ class JobRunner:
         self._handlers: dict[str, Handler] = {}
         self._wake = asyncio.Event()
         self._stopping = False
+        # Called with the job id after every job reaches a terminal state, for
+        # any status. Used to purge in-memory job credentials; must not raise.
+        self._on_job_finished = on_job_finished
 
     def register(self, kind: str, handler: Handler) -> Handler:
         """Bind a handler to a job kind (usable as ``runner.register("x", fn)``)."""
@@ -88,11 +97,21 @@ class JobRunner:
         target: str | None = None,
         params: dict[str, Any] | None = None,
         environment: str = "default",
+        job_id: str | None = None,
     ) -> JobRecord:
-        """Persist a PENDING job and wake the runner. Returns immediately."""
+        """Persist a PENDING job and wake the runner. Returns immediately.
+
+        ``job_id`` lets the caller pre-register per-job state (e.g. in-memory
+        credentials) *before* the job becomes claimable, closing the race where
+        the runner would start it before that state exists."""
         if kind not in self._handlers:
             raise JobError(f"no handler registered for job kind {kind!r}")
-        job = JobRecord(kind=kind, target=target, params=params or {}, environment=environment)
+        fields: dict[str, Any] = dict(
+            kind=kind, target=target, params=params or {}, environment=environment
+        )
+        if job_id is not None:
+            fields["id"] = job_id
+        job = JobRecord(**fields)
         self._store.insert_job(job)
         self._wake.set()
         logger.info(
@@ -136,15 +155,24 @@ class JobRunner:
     async def _run(self, job: JobRecord) -> None:
         ctx = JobContext(self._store, job)
         try:
-            ctx.raise_if_cancelled()  # cancelled while still queued
-            await self._handlers[job.kind](ctx)
-        except JobCancelled:
-            self._store.finish_job(job.id, JobStatus.CANCELLED)
-            ctx.log("job cancelled", level="warning")
-        except Exception as exc:  # job boundary: record the failure, don't crash the runner
-            error = f"{type(exc).__name__}: {exc}"
-            self._store.finish_job(job.id, JobStatus.FAILED, error=error)
-            ctx.log(f"job failed: {error}", level="error")
-        else:
-            self._store.finish_job(job.id, JobStatus.SUCCEEDED)
-            ctx.log("job succeeded")
+            try:
+                ctx.raise_if_cancelled()  # cancelled while still queued
+                await self._handlers[job.kind](ctx)
+            except JobCancelled:
+                self._store.finish_job(job.id, JobStatus.CANCELLED)
+                ctx.log("job cancelled", level="warning")
+            except Exception as exc:  # job boundary: record failure, don't crash the runner
+                error = f"{type(exc).__name__}: {exc}"
+                self._store.finish_job(job.id, JobStatus.FAILED, error=error)
+                ctx.log(f"job failed: {error}", level="error")
+            else:
+                self._store.finish_job(job.id, JobStatus.SUCCEEDED)
+                ctx.log("job succeeded")
+        finally:
+            # Always drop any in-memory per-job state, whatever the outcome —
+            # including cancellation while still queued (handler never ran).
+            if self._on_job_finished is not None:
+                try:
+                    self._on_job_finished(job.id)
+                except Exception as exc:  # never let cleanup crash the runner
+                    logger.warning("job finalizer failed", job_id=job.id, error=str(exc))

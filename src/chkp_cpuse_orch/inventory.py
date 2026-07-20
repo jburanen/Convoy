@@ -29,10 +29,9 @@ class Host(BaseModel):
     address: str  # hostname or IP; resolved at connect time
     role: Role
     ssh_port: int = 22
-    # Credential *reference* only — the actual secret is resolved at runtime by
-    # name from the environment / secrets store. Never inline a secret here.
     ssh_user: str = "admin"
-    secret_ref: str | None = None  # env var / secrets-store key name
+    # Credentials are never stored in inventory — they live in the encrypted
+    # CredentialStore (added via the web UI), keyed by host + environment.
     notes: str | None = None
 
 

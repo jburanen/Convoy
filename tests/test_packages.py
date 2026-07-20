@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import io
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
 from chkp_cpuse_orch.errors import PackageError
 from chkp_cpuse_orch.packages import PackageStore
-from chkp_cpuse_orch.store import Store
+from chkp_cpuse_orch.store import Store, utcnow
 
 CONTENT = b"pretend this is a multi-gigabyte JHF bundle"
 
@@ -90,3 +91,54 @@ def test_verify_detects_corruption(pkg_store: PackageStore) -> None:
     (pkg_store.directory / "jhf.tgz").write_bytes(b"bitrot")
     with pytest.raises(PackageError, match="no longer matches"):
         pkg_store.verify("jhf.tgz")
+
+
+# -- retention --------------------------------------------------------------------
+
+
+def test_upload_sets_retention_deadline(pkg_store: PackageStore) -> None:
+    rec = pkg_store.add_stream("jhf.tgz", io.BytesIO(CONTENT))
+    assert rec.expires_at is not None
+    assert rec.pinned is False
+    # ~30 days out (the fixture uses the default retention window).
+    assert timedelta(days=29) < rec.expires_at - rec.created_at <= timedelta(days=30)
+
+
+def test_retention_disabled_keeps_indefinitely(tmp_path: Path) -> None:
+    store = Store(tmp_path / "orch.db")
+    pkg_store = PackageStore(store, tmp_path / "packages", retention_days=0)
+    rec = pkg_store.add_stream("jhf.tgz", io.BytesIO(CONTENT))
+    assert rec.expires_at is None
+    assert rec.pinned is True
+
+
+def test_pin_and_unpin_toggle_deadline(pkg_store: PackageStore) -> None:
+    pkg_store.add_stream("jhf.tgz", io.BytesIO(CONTENT))
+    pinned = pkg_store.set_pinned("jhf.tgz", True)
+    assert pinned.expires_at is None
+    unpinned = pkg_store.set_pinned("jhf.tgz", False)
+    assert unpinned.expires_at is not None  # window reapplied from now
+
+
+def test_set_pinned_missing_raises(pkg_store: PackageStore) -> None:
+    with pytest.raises(PackageError, match="no such package"):
+        pkg_store.set_pinned("ghost.tgz", True)
+
+
+def test_purge_expired_deletes_only_past_deadline(pkg_store: PackageStore) -> None:
+    pkg_store.add_stream("old.tgz", io.BytesIO(CONTENT))
+    pkg_store.add_stream("kept.tgz", io.BytesIO(b"different content"))
+    pkg_store.set_pinned("kept.tgz", True)  # pinned — must survive any sweep
+
+    # Sweep as if well past the ~30-day deadline of old.tgz.
+    purged = pkg_store.purge_expired(now=utcnow() + timedelta(days=40))
+
+    assert purged == ["old.tgz"]
+    assert [p.filename for p in pkg_store.list()] == ["kept.tgz"]
+    assert not (pkg_store.directory / "old.tgz").exists()
+
+
+def test_purge_expired_noop_before_deadline(pkg_store: PackageStore) -> None:
+    pkg_store.add_stream("jhf.tgz", io.BytesIO(CONTENT))
+    assert pkg_store.purge_expired() == []  # deadline is ~30 days out
+    assert [p.filename for p in pkg_store.list()] == ["jhf.tgz"]

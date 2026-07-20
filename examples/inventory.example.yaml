@@ -4,8 +4,8 @@
 # real inventory: it names production management servers and gateways.
 # See .claude/memory/security-hygiene.md.
 #
-# Credentials are NOT stored here — `secret_ref` names an environment variable /
-# secrets-store key that is resolved at runtime.
+# Credentials are NOT stored here — add per-host SSH credentials in the web UI;
+# they are encrypted at rest in the credential store.
 
 sites:
   - name: example-dc
@@ -14,25 +14,21 @@ sites:
         address: 192.0.2.10          # RFC 5737 documentation address
         role: management
         ssh_user: admin
-        secret_ref: CHKP_MGMT01_SSH_PASSWORD
 
       - name: fw-standalone-01
         address: 192.0.2.20
         role: gateway
         ssh_user: admin
-        secret_ref: CHKP_FW01_SSH_PASSWORD
 
       - name: fw-cluster-a-member-1
         address: 192.0.2.31
         role: cluster_member
         ssh_user: admin
-        secret_ref: CHKP_CLUSTERA_M1_SSH_PASSWORD
 
       - name: fw-cluster-a-member-2
         address: 192.0.2.32
         role: cluster_member
         ssh_user: admin
-        secret_ref: CHKP_CLUSTERA_M2_SSH_PASSWORD
 
     clusters:
       - name: cluster-a

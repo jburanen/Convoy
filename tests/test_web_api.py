@@ -66,12 +66,21 @@ def client(
         yield c
 
 
+def _enable_storage(client: TestClient, env: str) -> None:
+    resp = client.post(f"/api/environments/{env}/credential-storage", json={"enabled": True})
+    assert resp.status_code == 200, resp.text
+
+
 def _add_ssh_credential(client: TestClient, host: str = "mgmt-01") -> None:
     resp = client.put(
         "/api/env/default/credentials",
         json={"host": host, "kind": "ssh_password", "username": "admin", "secret": "pw"},
     )
     assert resp.status_code == 201, resp.text
+
+
+# Inline credentials for a storage-disabled environment (one-shot per request).
+_SSH_CREDS = [{"kind": "ssh_password", "username": "admin", "secret": "pw"}]
 
 
 def _upload_package(client: TestClient, name: str = "jhf.tgz", content: bytes = b"x" * 64) -> None:
@@ -114,7 +123,43 @@ def test_status_reports_unlocked_and_counts(client: TestClient) -> None:
 
 def test_environments_endpoint(client: TestClient) -> None:
     envs = client.get("/api/environments").json()
-    assert envs == [{"name": "default", "management_servers": 1}]
+    assert envs == [
+        {"name": "default", "management_servers": 1, "credential_storage_enabled": True}
+    ]
+
+
+def test_new_environment_defaults_to_storage_disabled(client: TestClient) -> None:
+    client.post("/api/environments", json={"name": "dmz"})
+    envs = {
+        e["name"]: e["credential_storage_enabled"] for e in client.get("/api/environments").json()
+    }
+    assert envs["dmz"] is False  # UI-created environments don't store credentials
+    assert envs["default"] is True  # config-seeded ones keep the old behaviour
+
+
+def test_storage_disabled_env_rejects_stored_credentials(client: TestClient) -> None:
+    client.post("/api/environments", json={"name": "dmz"})
+    resp = client.put(
+        "/api/env/dmz/credentials",
+        json={"host": "m1", "kind": "ssh_password", "secret": "pw"},
+    )
+    assert resp.status_code == 409
+    assert "storage is disabled" in resp.json()["detail"]
+
+
+def test_toggle_credential_storage_purges_on_disable(client: TestClient) -> None:
+    client.post("/api/environments", json={"name": "corp"})
+    _enable_storage(client, "corp")
+    client.put(
+        "/api/env/corp/credentials",
+        json={"host": "m1", "kind": "ssh_password", "secret": "corp-pw"},
+    )
+    assert len(client.get("/api/env/corp/credentials").json()) == 1
+
+    resp = client.post("/api/environments/corp/credential-storage", json={"enabled": False})
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"enabled": False, "purged_credentials": 1}
+    assert client.get("/api/env/corp/credentials").json() == []
 
 
 def test_unknown_environment_is_404(client: TestClient) -> None:
@@ -183,6 +228,7 @@ def test_delete_environment_and_its_servers(client: TestClient) -> None:
 
 def test_delete_environment_purges_its_credentials(client: TestClient) -> None:
     client.post("/api/environments", json={"name": "corp"})
+    _enable_storage(client, "corp")
     client.put(
         "/api/env/corp/credentials",
         json={"host": "m1", "kind": "ssh_password", "secret": "corp-pw"},
@@ -197,6 +243,7 @@ def test_delete_environment_purges_its_credentials(client: TestClient) -> None:
 
 def test_rename_environment_moves_servers_and_credentials(client: TestClient) -> None:
     client.post("/api/environments", json={"name": "old name"})
+    _enable_storage(client, "old name")
     client.post(
         "/api/environments/old name/servers",
         json={"name": "m1", "address": "192.0.2.85", "role": "management"},
@@ -250,7 +297,7 @@ def test_servers_lists_management_only_with_credential_summary(client: TestClien
 
 def test_server_state_detects_live_packages(client: TestClient) -> None:
     _add_ssh_credential(client)
-    state = client.get("/api/env/default/servers/mgmt-01/state")
+    state = client.post("/api/env/default/servers/mgmt-01/state")
     assert state.status_code == 200, state.text
     body = state.json()
     assert body["agent_build"] == DA_BUILD
@@ -259,7 +306,7 @@ def test_server_state_detects_live_packages(client: TestClient) -> None:
 
 
 def test_server_state_without_credentials_is_409(client: TestClient) -> None:
-    resp = client.get("/api/env/default/servers/mgmt-01/state")
+    resp = client.post("/api/env/default/servers/mgmt-01/state")
     assert resp.status_code == 409
     assert "no SSH credential" in resp.json()["detail"]
 
@@ -310,6 +357,29 @@ def test_package_conflict_rejected(client: TestClient) -> None:
     resp = client.post("/api/packages", files={"file": ("jhf.tgz", b"different")})
     assert resp.status_code == 409  # conflict: same name, different content
     assert "different content" in resp.json()["detail"]
+
+
+def test_uploaded_package_gets_default_expiry(client: TestClient) -> None:
+    _upload_package(client)
+    rec = client.get("/api/packages").json()[0]
+    assert rec["expires_at"] is not None  # retention window applied by default
+
+
+def test_package_retention_pin_and_unpin(client: TestClient) -> None:
+    _upload_package(client)
+
+    pinned = client.post("/api/packages/jhf.tgz/retention", json={"pinned": True})
+    assert pinned.status_code == 200, pinned.text
+    assert pinned.json()["expires_at"] is None  # kept indefinitely
+
+    unpinned = client.post("/api/packages/jhf.tgz/retention", json={"pinned": False})
+    assert unpinned.status_code == 200, unpinned.text
+    assert unpinned.json()["expires_at"] is not None  # window reapplied
+
+
+def test_package_retention_missing_is_404(client: TestClient) -> None:
+    resp = client.post("/api/packages/ghost.tgz/retention", json={"pinned": True})
+    assert resp.status_code == 404
 
 
 # -- import / install jobs through the API ----------------------------------------
@@ -366,13 +436,13 @@ def test_import_against_gateway_not_in_inventory_is_404(client: TestClient) -> N
 
 def test_cdt_status_endpoint(client: TestClient) -> None:
     _add_ssh_credential(client)
-    body = client.get("/api/env/default/cdt/mgmt-01/status").json()
+    body = client.post("/api/env/default/cdt/mgmt-01/status").json()
     assert body == {"available": True, "running": False, "brief": ""}
 
 
 def test_cdt_candidates_get_and_put(client: TestClient, transport: FakeTransport) -> None:
     _add_ssh_credential(client)
-    cands = client.get("/api/env/default/cdt/mgmt-01/candidates").json()
+    cands = client.post("/api/env/default/cdt/mgmt-01/candidates/read").json()
     assert cands["header"][0] == "Object Name"
     assert len(cands["rows"]) == 2
 
@@ -413,9 +483,71 @@ def test_cdt_stage_and_generate_flow(client: TestClient, transport: FakeTranspor
 
 def test_cdt_endpoints_locked_without_credentials(client: TestClient) -> None:
     # No SSH credential stored for the host → 409 with a clear message.
-    resp = client.get("/api/env/default/cdt/mgmt-01/status")
+    resp = client.post("/api/env/default/cdt/mgmt-01/status")
     assert resp.status_code == 409
     assert "no SSH credential" in resp.json()["detail"]
+
+
+# -- storage-disabled environments (inline credentials per operation) --------------
+
+
+def _disabled_env_with_server(
+    client: TestClient, env: str = "dmz", server: str = "mgmt-01"
+) -> None:
+    assert client.post("/api/environments", json={"name": env}).status_code == 201
+    resp = client.post(
+        f"/api/environments/{env}/servers",
+        json={"name": server, "address": "192.0.2.10", "role": "management"},
+    )
+    assert resp.status_code == 201, resp.text
+
+
+def test_storage_disabled_job_requires_inline_credentials(client: TestClient) -> None:
+    _disabled_env_with_server(client)
+    _upload_package(client)
+
+    # No credentials in the body → 400 with a clear message.
+    resp = client.post("/api/env/dmz/servers/mgmt-01/import", json={"package": "jhf.tgz"})
+    assert resp.status_code == 400
+    assert "does not store credentials" in resp.json()["detail"]
+
+    # Inline credentials → the job runs to completion.
+    resp = client.post(
+        "/api/env/dmz/servers/mgmt-01/import",
+        json={"package": "jhf.tgz", "credentials": _SSH_CREDS},
+    )
+    assert resp.status_code == 202, resp.text
+    job = _wait_for_job(client, resp.json()["id"])
+    assert job["status"] == "succeeded", job["error"]
+
+
+def test_storage_disabled_state_query_requires_inline_credentials(client: TestClient) -> None:
+    _disabled_env_with_server(client)
+    # Live-state query with no credentials → 400.
+    assert client.post("/api/env/dmz/servers/mgmt-01/state").status_code == 400
+    # With inline credentials it works, one-shot.
+    resp = client.post("/api/env/dmz/servers/mgmt-01/state", json={"credentials": _SSH_CREDS})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["agent_build"] == DA_BUILD
+
+
+def test_storage_disabled_env_works_without_master_key(
+    tmp_path: Path, transport: FakeTransport, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A storage-disabled environment never touches the credential store, so it
+    # operates even with no master key set (the store stays locked).
+    monkeypatch.delenv(MASTER_KEY_ENV, raising=False)
+    app = create_app(_config(tmp_path), client_factory=make_factory(transport))
+    with TestClient(app) as c:
+        assert c.get("/api/status").json()["credentials_unlocked"] is False
+        c.post("/api/environments", json={"name": "dmz"})
+        c.post(
+            "/api/environments/dmz/servers",
+            json={"name": "mgmt-01", "address": "192.0.2.10", "role": "management"},
+        )
+        resp = c.post("/api/env/dmz/servers/mgmt-01/state", json={"credentials": _SSH_CREDS})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["agent_build"] == DA_BUILD
 
 
 # -- provisioning -----------------------------------------------------------------
@@ -484,7 +616,7 @@ def test_two_environments_are_isolated(
         assert len(c.get("/api/env/corp/credentials").json()) == 1
         assert c.get("/api/env/dmz/credentials").json() == []
 
-        state = c.get("/api/env/dmz/servers/mgmt-b1/state")
+        state = c.post("/api/env/dmz/servers/mgmt-b1/state")
         assert state.status_code == 409  # no credential in dmz
         assert "no SSH credential" in state.json()["detail"]
 

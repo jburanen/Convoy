@@ -13,11 +13,13 @@ import hashlib
 import re
 import uuid
 from collections.abc import Iterator
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import BinaryIO
 
+from .config import DEFAULT_PACKAGE_RETENTION_DAYS
 from .errors import PackageError
-from .store import PackageRecord, Store
+from .store import PackageRecord, Store, utcnow
 
 # Package filenames feed remote shell commands and filesystem paths — keep them
 # boring. Check Point package names all fit this comfortably.
@@ -29,10 +31,19 @@ _CHUNK = 1024 * 1024  # 1 MiB
 class PackageStore:
     """Content on disk + metadata in the Store, kept consistent."""
 
-    def __init__(self, store: Store, directory: str | Path) -> None:
+    def __init__(
+        self,
+        store: Store,
+        directory: str | Path,
+        *,
+        retention_days: int = DEFAULT_PACKAGE_RETENTION_DAYS,
+    ) -> None:
         self._store = store
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
+        # New uploads expire this many days after upload unless pinned; 0 (or
+        # less) disables automatic expiry so everything is kept indefinitely.
+        self.retention_days = retention_days
 
     # -- write ------------------------------------------------------------------
 
@@ -69,7 +80,13 @@ class PackageStore:
                     "Delete it first if you really mean to replace it."
                 )
 
-            rec = PackageRecord(filename=name, sha1=sha1.hexdigest(), sha256=digest256, size=size)
+            rec = PackageRecord(
+                filename=name,
+                sha1=sha1.hexdigest(),
+                sha256=digest256,
+                size=size,
+                expires_at=self._default_expiry(),
+            )
             tmp_path.replace(self.directory / name)
             self._store.insert_package(rec)
             return rec
@@ -90,6 +107,31 @@ class PackageStore:
         existed = self._store.delete_package(name)
         (self.directory / name).unlink(missing_ok=True)
         return existed
+
+    # -- retention --------------------------------------------------------------
+
+    def set_pinned(self, filename: str, pinned: bool) -> PackageRecord:
+        """Pin a package to keep it indefinitely, or un-pin it so the retention
+        window applies again (recomputed from now). Raises if it doesn't exist."""
+        rec = self.get(filename)  # 404s via PackageError if missing
+        expires_at = None if pinned else self._default_expiry()
+        self._store.set_package_expiry(rec.filename, expires_at)
+        return self.get(filename)
+
+    def purge_expired(self, now: datetime | None = None) -> list[str]:
+        """Delete packages whose retention deadline has passed. Pinned packages
+        (no deadline) are never touched. Returns the filenames purged."""
+        moment = now or utcnow()
+        purged: list[str] = []
+        for rec in self._store.list_expired_packages(moment):
+            self.delete(rec.filename)
+            purged.append(rec.filename)
+        return purged
+
+    def _default_expiry(self) -> datetime | None:
+        if self.retention_days <= 0:
+            return None
+        return utcnow() + timedelta(days=self.retention_days)
 
     # -- read -------------------------------------------------------------------
 

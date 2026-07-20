@@ -62,7 +62,9 @@ class EnvironmentManager:
         if self._store.get_meta(_SEEDED_META_KEY):
             return
         for env_def in config.resolved_environments():
-            self._store.insert_environment(env_def.name)
+            # Config-seeded environments preserve the pre-feature behaviour of
+            # storing credentials; only UI-created environments default to off.
+            self._store.insert_environment(env_def.name, credential_storage_enabled=True)
             if env_def.inventory.is_file():
                 inventory = Inventory.load(env_def.inventory)
                 for host in _all_hosts(inventory):
@@ -84,7 +86,11 @@ class EnvironmentManager:
             hosts = [_host_from_row(r) for r in self._store.list_env_hosts(env.name)]
             inventory = Inventory(sites=[Site(name=env.name, hosts=hosts)])
             connectors[env.name] = HostConnector(
-                inventory, self._credentials, self._client_factory, environment=env.name
+                inventory,
+                self._credentials,
+                self._client_factory,
+                environment=env.name,
+                credential_storage_enabled=env.credential_storage_enabled,
             )
         self._registry.rebuild(connectors)
 
@@ -99,11 +105,29 @@ class EnvironmentManager:
                 "'_' and '-', starting with a letter or digit, max 32 chars"
             )
         try:
-            self._store.insert_environment(name)
+            self._store.insert_environment(name, credential_storage_enabled=False)
         except sqlite3.IntegrityError:
             raise InventoryError(f"environment {name!r} already exists") from None
         self.rebuild()
         return name
+
+    def set_credential_storage(self, name: str, enabled: bool) -> int:
+        """Enable or disable credential storage for an environment.
+
+        Disabling **purges** any stored credentials for it — the operator opted
+        out of keeping secrets on disk, so we don't leave them lying around (and
+        they would be unused anyway). Returns the number of credentials purged."""
+        if not self._store.set_environment_credential_storage(name, enabled):
+            raise InventoryError(f"unknown environment: {name!r}")
+        purged = 0
+        if not enabled:
+            purged = self._store.delete_environment_credentials(name)
+            if purged:
+                logger.info(
+                    "purged credentials on disabling storage", environment=name, count=purged
+                )
+        self.rebuild()
+        return purged
 
     def rename_environment(self, old: str, new: str) -> str:
         """Rename an environment; its servers, credentials, and job history move

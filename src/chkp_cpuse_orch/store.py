@@ -83,6 +83,15 @@ class PackageRecord(BaseModel):
     sha256: str  # shows both so the operator can compare before distributing
     size: int
     created_at: datetime = Field(default_factory=utcnow)
+    # When this package is auto-deleted. ``None`` means "keep indefinitely"
+    # (pinned by the operator, or expiry disabled). Set at upload time from the
+    # configured retention window.
+    expires_at: datetime | None = None
+
+    @property
+    def pinned(self) -> bool:
+        """Kept indefinitely — no retention deadline set."""
+        return self.expires_at is None
 
 
 class EnvironmentRow(BaseModel):
@@ -90,6 +99,10 @@ class EnvironmentRow(BaseModel):
 
     name: str
     created_at: datetime = Field(default_factory=utcnow)
+    # When False, credentials are NOT persisted for this environment: each job
+    # (and live-state query) supplies them at request time and they live only in
+    # memory until the operation finishes. New environments default to False.
+    credential_storage_enabled: bool = False
 
 
 class EnvHostRow(BaseModel):
@@ -220,6 +233,18 @@ _MIGRATIONS: tuple[str, ...] = (
     );
     CREATE INDEX idx_env_hosts_env ON env_hosts (environment);
     """,
+    # v5: per-package retention. NULL expires_at == keep indefinitely; existing
+    # rows default to NULL so nothing already uploaded is retroactively expired.
+    # New uploads get a deadline from the configured retention window.
+    """
+    ALTER TABLE packages ADD COLUMN expires_at TEXT;
+    """,
+    # v6: optional per-environment credential storage. Existing environments
+    # default to 1 (enabled) to preserve behaviour; environments created after
+    # this migration default to 0 (disabled) via insert_environment().
+    """
+    ALTER TABLE environments ADD COLUMN credential_storage_enabled INTEGER NOT NULL DEFAULT 1;
+    """,
 )
 
 
@@ -346,23 +371,36 @@ class Store:
     def list_environments(self) -> list[EnvironmentRow]:
         with self._connect() as conn:
             rows = conn.execute("SELECT * FROM environments ORDER BY name").fetchall()
-        return [
-            EnvironmentRow(name=r["name"], created_at=datetime.fromisoformat(r["created_at"]))
-            for r in rows
-        ]
+        return [_environment_from_row(r) for r in rows]
+
+    def get_environment(self, name: str) -> EnvironmentRow | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM environments WHERE name = ?", (name,)).fetchone()
+        return None if row is None else _environment_from_row(row)
 
     def environment_exists(self, name: str) -> bool:
         with self._connect() as conn:
             row = conn.execute("SELECT 1 FROM environments WHERE name = ?", (name,)).fetchone()
         return row is not None
 
-    def insert_environment(self, name: str) -> None:
-        """Raises sqlite3.IntegrityError if the name already exists."""
+    def insert_environment(self, name: str, *, credential_storage_enabled: bool = False) -> None:
+        """Raises sqlite3.IntegrityError if the name already exists. New
+        environments default to credential storage *disabled*."""
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO environments (name, created_at) VALUES (?, ?)",
-                (name, utcnow().isoformat()),
+                "INSERT INTO environments (name, created_at, credential_storage_enabled)"
+                " VALUES (?, ?, ?)",
+                (name, utcnow().isoformat(), int(credential_storage_enabled)),
             )
+
+    def set_environment_credential_storage(self, name: str, enabled: bool) -> bool:
+        """Toggle credential storage for an environment. Returns False if unknown."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE environments SET credential_storage_enabled = ? WHERE name = ?",
+                (int(enabled), name),
+            )
+        return cur.rowcount > 0
 
     def delete_environment(self, name: str) -> bool:
         """Deletes the environment and (via cascade) its env_hosts."""
@@ -378,20 +416,18 @@ class Store:
         sqlite3.IntegrityError if ``new`` is already taken."""
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT created_at FROM environments WHERE name = ?", (old,)
+                "SELECT created_at, credential_storage_enabled FROM environments WHERE name = ?",
+                (old,),
             ).fetchone()
             if row is None:
                 return False
             conn.execute(
-                "INSERT INTO environments (name, created_at) VALUES (?, ?)",
-                (new, row["created_at"]),
+                "INSERT INTO environments (name, created_at, credential_storage_enabled)"
+                " VALUES (?, ?, ?)",
+                (new, row["created_at"], row["credential_storage_enabled"]),
             )
-            conn.execute(
-                "UPDATE env_hosts SET environment = ? WHERE environment = ?", (new, old)
-            )
-            conn.execute(
-                "UPDATE credentials SET environment = ? WHERE environment = ?", (new, old)
-            )
+            conn.execute("UPDATE env_hosts SET environment = ? WHERE environment = ?", (new, old))
+            conn.execute("UPDATE credentials SET environment = ? WHERE environment = ?", (new, old))
             conn.execute("UPDATE jobs SET environment = ? WHERE environment = ?", (new, old))
             conn.execute("DELETE FROM environments WHERE name = ?", (old,))
         return True
@@ -436,8 +472,8 @@ class Store:
     def insert_package(self, rec: PackageRecord) -> None:
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO packages (id, filename, sha1, sha256, size, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO packages (id, filename, sha1, sha256, size, created_at, expires_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     rec.id,
                     rec.filename,
@@ -445,8 +481,30 @@ class Store:
                     rec.sha256,
                     rec.size,
                     rec.created_at.isoformat(),
+                    _iso(rec.expires_at),
                 ),
             )
+
+    def set_package_expiry(self, filename: str, expires_at: datetime | None) -> bool:
+        """Set (or clear, with ``None``) a package's retention deadline.
+        Returns False if no such package."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE packages SET expires_at = ? WHERE filename = ?",
+                (_iso(expires_at), filename),
+            )
+        return cur.rowcount > 0
+
+    def list_expired_packages(self, now: datetime) -> list[PackageRecord]:
+        """Packages whose retention deadline has passed (pinned ones excluded).
+        ISO-8601 UTC timestamps compare correctly as strings."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM packages WHERE expires_at IS NOT NULL AND expires_at <= ?"
+                " ORDER BY expires_at",
+                (now.isoformat(),),
+            ).fetchall()
+        return [_package_from_row(r) for r in rows]
 
     def get_package(self, filename: str) -> PackageRecord | None:
         with self._connect() as conn:
@@ -610,6 +668,14 @@ def _job_from_row(row: sqlite3.Row) -> JobRecord:
     )
 
 
+def _environment_from_row(row: sqlite3.Row) -> EnvironmentRow:
+    return EnvironmentRow(
+        name=row["name"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+        credential_storage_enabled=bool(row["credential_storage_enabled"]),
+    )
+
+
 def _env_host_from_row(row: sqlite3.Row) -> EnvHostRow:
     return EnvHostRow(
         id=row["id"],
@@ -631,6 +697,7 @@ def _package_from_row(row: sqlite3.Row) -> PackageRecord:
         sha256=row["sha256"],
         size=row["size"],
         created_at=datetime.fromisoformat(row["created_at"]),
+        expires_at=_dt(row["expires_at"]),
     )
 
 

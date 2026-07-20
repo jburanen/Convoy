@@ -11,6 +11,8 @@ from chkp_cpuse_orch.credentials import (
     Credential,
     CredentialKind,
     CredentialStore,
+    JobCredentialVault,
+    ensure_ssh_credential,
     load_master_key,
 )
 from chkp_cpuse_orch.errors import CredentialError
@@ -115,3 +117,37 @@ def test_load_master_key_missing_or_short() -> None:
         load_master_key({})
     with pytest.raises(CredentialError, match="at least"):
         load_master_key({MASTER_KEY_ENV: "short"})
+
+
+# -- ephemeral (in-memory) credentials for storage-disabled environments -----------
+
+
+def _bundle(kind: CredentialKind = CredentialKind.SSH_PASSWORD) -> dict:
+    return {kind: Credential(host="h", kind=kind, secret=SecretStr("pw"))}
+
+
+def test_ensure_ssh_credential_requires_ssh() -> None:
+    with pytest.raises(CredentialError, match="provide an SSH"):
+        ensure_ssh_credential({}, "mgmt-01", "dmz")
+    # An expert password alone is not enough to open a session.
+    with pytest.raises(CredentialError, match="provide an SSH"):
+        ensure_ssh_credential(_bundle(CredentialKind.EXPERT_PASSWORD), "mgmt-01", "dmz")
+    # A password or a private key each satisfy it (no raise).
+    ensure_ssh_credential(_bundle(CredentialKind.SSH_PASSWORD), "mgmt-01", "dmz")
+    ensure_ssh_credential(_bundle(CredentialKind.SSH_PRIVATE_KEY), "mgmt-01", "dmz")
+
+
+def test_job_credential_vault_lifecycle() -> None:
+    vault = JobCredentialVault()
+    bundle = _bundle()
+    assert vault.get("j1") is None
+    with pytest.raises(CredentialError, match="no in-memory credentials"):
+        vault.require("j1")
+
+    vault.put("j1", bundle)
+    assert vault.get("j1") is bundle
+    assert vault.require("j1") is bundle
+
+    vault.discard("j1")
+    assert vault.get("j1") is None
+    vault.discard("j1")  # discarding an absent job is a no-op

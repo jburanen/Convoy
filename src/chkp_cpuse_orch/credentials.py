@@ -19,6 +19,7 @@ from __future__ import annotations
 import base64
 import os
 import secrets
+import threading
 from enum import StrEnum
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -201,3 +202,54 @@ def _derive_key(passphrase: str, salt: bytes) -> bytes:
     """scrypt(passphrase) → urlsafe-b64 32-byte Fernet key. Interactive-grade cost."""
     kdf = Scrypt(salt=salt, length=32, n=2**14, r=8, p=1)
     return base64.urlsafe_b64encode(kdf.derive(passphrase.encode("utf-8")))
+
+
+# -- ephemeral (in-memory-only) credentials for storage-disabled environments ------
+
+CredentialBundle = dict[CredentialKind, Credential]
+
+
+def ensure_ssh_credential(creds: CredentialBundle, host_name: str, environment: str) -> None:
+    """Reject a credential bundle that can't open an SSH session. Used at request
+    time for environments that don't store credentials."""
+    if CredentialKind.SSH_PASSWORD not in creds and CredentialKind.SSH_PRIVATE_KEY not in creds:
+        raise CredentialError(
+            f"provide an SSH password or private key for {host_name!r} in environment "
+            f"{environment!r} — this environment does not store credentials"
+        )
+
+
+class JobCredentialVault:
+    """In-memory credentials for jobs in storage-disabled environments.
+
+    Secrets are supplied when a job is submitted, kept here keyed by job id, and
+    dropped the instant the job finishes (the JobRunner calls ``discard``). They
+    are never written to disk — that is the whole point of a storage-disabled
+    environment. Thread-safe: the web threadpool submits while the runner's
+    worker threads read/discard.
+    """
+
+    def __init__(self) -> None:
+        self._by_job: dict[str, CredentialBundle] = {}
+        self._lock = threading.Lock()
+
+    def put(self, job_id: str, creds: CredentialBundle) -> None:
+        with self._lock:
+            self._by_job[job_id] = creds
+
+    def get(self, job_id: str) -> CredentialBundle | None:
+        with self._lock:
+            return self._by_job.get(job_id)
+
+    def require(self, job_id: str) -> CredentialBundle:
+        creds = self.get(job_id)
+        if creds is None:
+            raise CredentialError(
+                f"no in-memory credentials for job {job_id!r} — this environment does not "
+                "store credentials and none were supplied for this job"
+            )
+        return creds
+
+    def discard(self, job_id: str) -> None:
+        with self._lock:
+            self._by_job.pop(job_id, None)

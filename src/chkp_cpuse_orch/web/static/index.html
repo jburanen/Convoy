@@ -7,9 +7,9 @@
   Dynamic data is filled in by /js/app.js using the <template> elements below —
   the repeated markup (table rows, cards) lives HERE, in HTML, not in JS strings.
 
-  Layout: four tabs (nav below the header, one .tab-panel each) plus a Jobs
-  strip that stays visible on every tab. Default tab: Provisioning when no
-  management servers are in the inventory, Management otherwise (see app.js).
+  Layout: five tabs (nav below the header, one .tab-panel each), including a
+  dedicated Jobs tab. Default tab: Provisioning when no management servers are
+  in the inventory, Management otherwise (see app.js).
 -->
 <html lang="en">
 <head>
@@ -33,11 +33,18 @@
   <div id="status-chips">
     <!-- filled by refreshStatus(); shows a warning chip if credentials are locked -->
   </div>
+  <!-- Shown only when this tab is holding session-cached credentials for a
+       storage-disabled environment (in memory only; cleared here or on reload). -->
+  <div id="cred-cache-note" class="hidden">
+    <span id="cred-cache-text"></span>
+    <button id="cred-cache-forget" class="small">Forget now</button>
+  </div>
   <nav id="tabs">
     <button class="tab-btn" data-tab="provisioning">Provisioning</button>
     <button class="tab-btn" data-tab="packages">Packages and Credentials</button>
     <button class="tab-btn" data-tab="management">Management</button>
     <button class="tab-btn" data-tab="gateways">Gateways</button>
+    <button class="tab-btn" data-tab="jobs">Jobs<span id="jobs-badge" class="tab-badge hidden"></span></button>
   </nav>
 </header>
 
@@ -119,7 +126,9 @@
         Upload a package once, then distribute it to any server — pick a file below
         or <strong>drag &amp; drop</strong> it anywhere on this panel. Compare the
         SHA-1 / SHA-256 with the values published on the Check Point download page
-        before importing anywhere.
+        before importing anywhere. Uploads are <strong>auto-deleted after the
+        retention window</strong> (30 days by default) unless you tick
+        <strong>Keep</strong> to store them indefinitely.
       </p>
       <form id="upload-form">
         <input type="file" id="upload-file" required>
@@ -133,6 +142,7 @@
             <th>Size</th>
             <th>SHA-1</th>
             <th>SHA-256</th>
+            <th>Retention</th>
             <th></th>
           </tr>
         </thead>
@@ -146,6 +156,12 @@
         Stored encrypted at rest; secrets are never displayed again after saving.
         Host <code>*</code> acts as a fleet-wide default. Gaia auth is typically an
         SSH password (admin) — add an expert password if privileged steps need it.
+      </p>
+      <p class="hint warn hidden" id="cred-storage-notice">
+        Credential storage is <strong>disabled</strong> for this environment, so
+        nothing is stored here. You'll be prompted for credentials each time you run
+        an action; they stay in memory only until it finishes. Enable storage from
+        the environment picker → <strong>Manage Environments…</strong>.
       </p>
       <form id="credential-form">
         <input type="text" id="cred-host" placeholder="host name (or *)" required list="server-names">
@@ -209,7 +225,7 @@
         <strong>Generate</strong> candidates → <strong>Load</strong>, reorder and trim the
         list (row order = deployment order = blast-radius control) → <strong>Save order</strong>
         → optional <strong>Prepare</strong> → <strong>Execute</strong>. Execute runs under
-        nohup on the server and is followed live in the Jobs section.
+        nohup on the server and is followed live on the Jobs tab.
       </p>
 
       <div class="cdt-controls">
@@ -234,29 +250,33 @@
 
   </div>
 
-  <!-- ── Jobs: visible on every tab (tracks both subsystems) ─────────── -->
-  <section id="jobs">
-    <h2>Jobs</h2>
-    <p class="hint">
-      Every import/install/CDT action runs as a background job and survives page
-      reloads. Click a row to see its progress log. Running jobs can be cancelled
-      at the next safe point.
-    </p>
-    <table id="jobs-table">
-      <thead>
-        <tr>
-          <th>Kind</th>
-          <th>Target</th>
-          <th>Env</th>
-          <th>Status</th>
-          <th>Started</th>
-          <th>Error</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody><!-- tpl-job-row instances --></tbody>
-    </table>
-  </section>
+  <!-- ┌────────────────────────── TAB 5: Jobs ──────────────────────────┐ -->
+  <!-- Tracks both subsystems; jobs survive page reloads and run in the
+       background regardless of which tab is open. -->
+  <div class="tab-panel" id="tab-jobs">
+    <section id="jobs">
+      <h2>Jobs</h2>
+      <p class="hint">
+        Every import/install/CDT action runs as a background job and survives page
+        reloads. Click a row to see its progress log. Running jobs can be cancelled
+        at the next safe point.
+      </p>
+      <table id="jobs-table">
+        <thead>
+          <tr>
+            <th>Kind</th>
+            <th>Target</th>
+            <th>Env</th>
+            <th>Status</th>
+            <th>Started</th>
+            <th>Error</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody><!-- tpl-job-row instances --></tbody>
+      </table>
+    </section>
+  </div>
 
 </main>
 
@@ -310,6 +330,42 @@
   </div>
 </div>
 
+<!-- ============ Credential prompt (storage-disabled environments) =========== -->
+<!-- Shown before any SSH action when the current environment does not store
+     credentials. Whatever is entered is sent with that single request and lives
+     in memory only until the job/query finishes — never written to disk. -->
+<div id="cred-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="cred-modal-title">
+  <div class="modal-card narrow">
+    <div class="modal-head">
+      <h2 id="cred-modal-title">Enter credentials</h2>
+      <button id="cred-modal-close" class="small" title="Close">✕</button>
+    </div>
+    <p class="hint" id="cred-modal-hint"></p>
+    <form id="cred-modal-form">
+      <label>SSH password
+        <input type="password" id="cm-password" autocomplete="off">
+      </label>
+      <details id="cm-more">
+        <summary>Use a private key instead / add an expert password</summary>
+        <label>SSH private key
+          <textarea id="cm-key" rows="3" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
+        </label>
+        <label>Expert password
+          <input type="password" id="cm-expert" autocomplete="off">
+        </label>
+      </details>
+      <label class="cm-remember">
+        <input type="checkbox" id="cm-remember">
+        Remember for this browser tab (15 min) — kept in memory only, never saved
+      </label>
+      <div class="cred-modal-actions">
+        <button type="submit">Continue</button>
+        <button type="button" id="cred-modal-cancel" class="secondary">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <footer>
   <a id="footer-repo" href="https://github.com/jburanen/chkp-cpuse-orch" target="_blank" rel="noopener">
     <!-- GitHub mark, inline SVG so the page stays self-contained -->
@@ -324,7 +380,9 @@
     </svg>
     <span>github.com/jburanen/chkp-cpuse-orch</span>
   </a>
-  <span id="footer-version" class="muted"></span>
+  <span id="footer-version" class="muted"></span><br>
+  <span>Written with Claude. Deploy and use this tool with appropriate caution.</span><br>
+  <span>Ideas? Submit an issue at Github with the Enhancement label.</span>
 </footer>
 
 <!-- ======================= row/card templates ======================= -->
@@ -384,6 +442,12 @@
     <td class="pkg-size"></td>
     <td class="pkg-sha1 mono clip" title=""></td>
     <td class="pkg-sha256 mono clip" title=""></td>
+    <td class="pkg-retention">
+      <label title="keep this package indefinitely (skip auto-delete)">
+        <input type="checkbox" class="pkg-pin"> Keep
+      </label>
+      <span class="pkg-expiry muted"></span>
+    </td>
     <td><button class="btn-delete small danger">Delete</button></td>
   </tr>
 </template>
@@ -409,11 +473,19 @@
   </tr>
 </template>
 
-<!-- one row in the Manage Environments modal: editable name + Rename -->
+<!-- one row in the Manage Environments modal: editable name + Rename, plus a
+     per-environment credential-storage toggle -->
 <template id="tpl-env-manage-row">
   <li class="env-manage-row">
-    <input type="text" class="env-rename-input">
-    <button class="env-rename-btn small">Rename</button>
+    <div class="env-manage-name">
+      <input type="text" class="env-rename-input">
+      <button class="env-rename-btn small">Rename</button>
+    </div>
+    <label class="env-storage-toggle">
+      <input type="checkbox" class="env-storage-input">
+      Store credentials for this environment
+      <span class="hint env-storage-note"></span>
+    </label>
   </li>
 </template>
 

@@ -167,6 +167,34 @@ def test_package_roundtrip_and_unique_filename(store: Store) -> None:
     assert store.get_package("jhf.tgz") is None
 
 
+def test_package_expiry_roundtrip_and_listing(store: Store) -> None:
+    from datetime import timedelta
+
+    from chkp_cpuse_orch.store import utcnow
+
+    now = utcnow()
+    store.insert_package(
+        PackageRecord(
+            filename="soon.tgz",
+            sha1="a" * 40,
+            sha256="b" * 64,
+            size=1,
+            expires_at=now - timedelta(minutes=1),  # already past
+        )
+    )
+    store.insert_package(
+        PackageRecord(filename="pinned.tgz", sha1="c" * 40, sha256="d" * 64, size=1)
+    )  # expires_at defaults to None → never listed as expired
+
+    expired = store.list_expired_packages(now)
+    assert [p.filename for p in expired] == ["soon.tgz"]
+
+    # Pinning clears the deadline; unpinning sets one again.
+    assert store.set_package_expiry("soon.tgz", None) is True
+    assert store.list_expired_packages(now) == []
+    assert store.set_package_expiry("ghost.tgz", None) is False
+
+
 def test_v1_database_upgrades_in_place(tmp_path: Path) -> None:
     # Build a schema-v1 DB by hand (as Phase 1 shipped it), then reopen: the
     # packages table must appear without disturbing existing data.

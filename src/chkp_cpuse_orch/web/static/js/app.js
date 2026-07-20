@@ -54,6 +54,14 @@ function fmtTime(iso) {
 // and the underlying storage are shared. Selection sticks via localStorage.
 let currentEnv = localStorage.getItem("currentEnv") || null;
 
+// Per-environment "stores credentials?" flag, refreshed by loadEnvironments.
+// When false, SSH actions prompt for credentials (kept in memory only).
+let envStorage = {}; // name -> boolean
+
+function storageEnabled(name = currentEnv) {
+  return envStorage[name] !== false; // unknown → assume enabled (safe default)
+}
+
 // Sentinel picker value that opens the new-environment modal instead of
 // selecting an environment.
 const ENV_MANAGE = "__manage__";
@@ -62,9 +70,116 @@ function envUrl(path) {
   return `/api/env/${encodeURIComponent(currentEnv)}${path}`;
 }
 
+/* ---------- 1a-cred-prompt. inline credentials (storage-disabled envs) ---------- */
+
+// When the current environment doesn't store credentials, every SSH-backed
+// action first collects them here. They ride along with that one request and
+// live only in memory server-side until the operation finishes.
+let _credResolve = null;
+
+// Optional per-tab credential cache (opt-in "Remember" in the prompt). It lives
+// ONLY in this JS variable — never localStorage/sessionStorage, never the
+// server — so it dies on tab close or reload. Purely a convenience so the
+// operator isn't re-typing on every action; the server still holds credentials
+// in memory only for the life of each job. Entries are short-lived and keyed by
+// environment + host, and are evicted when an action using them fails.
+const CRED_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+const credCache = new Map(); // key: JSON.stringify([env, host]) -> { creds, expires }
+
+function _cacheKey(host) { return JSON.stringify([currentEnv, host]); }
+
+function cacheGetCreds(host) {
+  const hit = credCache.get(_cacheKey(host));
+  if (!hit) return null;
+  if (Date.now() > hit.expires) { credCache.delete(_cacheKey(host)); updateCredCacheNote(); return null; }
+  return hit.creds;
+}
+function cachePutCreds(host, creds) {
+  credCache.set(_cacheKey(host), { creds, expires: Date.now() + CRED_CACHE_TTL_MS });
+  updateCredCacheNote();
+}
+function cacheEvictCreds(host) {
+  if (credCache.delete(_cacheKey(host))) updateCredCacheNote();
+}
+function cacheClearCreds() {
+  if (credCache.size) { credCache.clear(); updateCredCacheNote(); }
+}
+
+// Prune expired entries, then show/hide the header note with the live count.
+function updateCredCacheNote() {
+  for (const [k, v] of credCache) if (Date.now() > v.expires) credCache.delete(k);
+  const note = document.getElementById("cred-cache-note");
+  const n = credCache.size;
+  note.classList.toggle("hidden", n === 0);
+  if (n) {
+    document.getElementById("cred-cache-text").textContent =
+      `🔑 ${n} credential${n === 1 ? "" : "s"} cached in this tab (session only)`;
+  }
+}
+
+function promptCredentials(host, purpose) {
+  const modal = document.getElementById("cred-modal");
+  document.getElementById("cred-modal-title").textContent = `Credentials for ${host}`;
+  document.getElementById("cred-modal-hint").textContent =
+    `This environment doesn't store credentials. Enter them to ${purpose} on ${host} — ` +
+    "kept in memory only until the operation finishes, never written to disk.";
+  for (const id of ["cm-password", "cm-key", "cm-expert"]) document.getElementById(id).value = "";
+  document.getElementById("cm-remember").checked = false;
+  document.getElementById("cm-more").open = false;
+  modal.classList.remove("hidden");
+  document.getElementById("cm-password").focus();
+  return new Promise((resolve) => { _credResolve = resolve; });
+}
+
+function closeCredModal(result) {
+  document.getElementById("cred-modal").classList.add("hidden");
+  const resolve = _credResolve;
+  _credResolve = null;
+  if (resolve) resolve(result);
+}
+
+// Returns a body fragment to spread into the request: {} for a storage-enabled
+// environment, { credentials: [...] } once collected (from cache or a prompt),
+// or null if the operator cancelled. On failure, callers evict via
+// cacheEvictCreds(host) so a stale cached password re-prompts next time.
+async function operationCredentials(host, purpose) {
+  if (storageEnabled()) return {};
+  const cached = cacheGetCreds(host);
+  if (cached) return { credentials: cached };
+  const result = await promptCredentials(host, purpose);
+  if (result === null) return null;
+  if (result.remember) cachePutCreds(host, result.creds);
+  return { credentials: result.creds };
+}
+
+document.getElementById("cred-modal-form").addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  const fields = [
+    ["ssh_password", document.getElementById("cm-password").value],
+    ["ssh_private_key", document.getElementById("cm-key").value],
+    ["expert_password", document.getElementById("cm-expert").value],
+  ];
+  const creds = fields.filter(([, s]) => s).map(([kind, secret]) => ({ kind, secret }));
+  if (!creds.some((c) => c.kind === "ssh_password" || c.kind === "ssh_private_key")) {
+    toast("Enter an SSH password or a private key.");
+    return;
+  }
+  closeCredModal({ creds, remember: document.getElementById("cm-remember").checked });
+});
+document.getElementById("cred-modal-cancel").addEventListener("click", () => closeCredModal(null));
+document.getElementById("cred-modal-close").addEventListener("click", () => closeCredModal(null));
+document.getElementById("cred-modal").addEventListener("click", (ev) => {
+  if (ev.target.id === "cred-modal") closeCredModal(null); // backdrop click cancels
+});
+document.getElementById("cred-cache-forget").addEventListener("click", () => {
+  cacheClearCreds();
+  toast("Session credentials cleared from this tab.");
+});
+
 async function loadEnvironments() {
   const picker = document.getElementById("env-picker");
   const envs = await api("/api/environments");
+  envStorage = Object.fromEntries(envs.map((e) => [e.name, e.credential_storage_enabled]));
   picker.replaceChildren();
   if (!envs.length) {
     // Placeholder so the manage entry is never the pre-selected option — a
@@ -198,11 +313,43 @@ async function renderEnvManageList() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ name: newName }),
         });
+        cacheClearCreds(); // env name changed — cached keys are now stale
         const wasCurrent = currentEnv === env.name;
         await loadEnvironments();
         if (wasCurrent) await selectEnvironment(resp.name); // refresh env-scoped views
         await renderEnvManageList();
       } catch (e) { toast("Rename failed: " + e.message); }
+    });
+
+    // Credential-storage toggle. Disabling purges any stored credentials, so we
+    // confirm first; the note reminds the operator what each mode means.
+    const toggle = row.querySelector(".env-storage-input");
+    const note = row.querySelector(".env-storage-note");
+    toggle.checked = env.credential_storage_enabled;
+    note.textContent = env.credential_storage_enabled
+      ? "— credentials saved encrypted at rest"
+      : "— credentials entered per action, kept in memory only";
+    toggle.addEventListener("change", async () => {
+      const enable = toggle.checked;
+      if (!enable && !confirm(
+        `Disable credential storage for "${env.name}"?\n\n` +
+        "Any credentials already stored for this environment are permanently " +
+        "deleted, and future actions will prompt for credentials each time."
+      )) { toggle.checked = true; return; }
+      try {
+        await api(`/api/environments/${encodeURIComponent(env.name)}/credential-storage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: enable }),
+        });
+        cacheClearCreds(); // storage mode changed — drop any cached session creds
+        await loadEnvironments();
+        if (env.name === currentEnv) await selectEnvironment(currentEnv); // refresh views
+        await renderEnvManageList();
+      } catch (e) {
+        toggle.checked = !enable; // revert on failure
+        toast("Could not change credential storage: " + e.message);
+      }
     });
     list.appendChild(row);
   }
@@ -217,6 +364,7 @@ document.getElementById("env-modal").addEventListener("click", (ev) => {
 });
 document.addEventListener("keydown", (ev) => {
   if (ev.key !== "Escape") return;
+  closeCredModal(null); // cancels a pending credential prompt (no-op otherwise)
   closeEnvModal();
   hideWelcome(); // soft close — the welcome dialog returns next load if still fresh
 });
@@ -271,6 +419,7 @@ document.getElementById("env-delete").addEventListener("click", async () => {
   )) return;
   try {
     await api(`/api/environments/${encodeURIComponent(currentEnv)}`, { method: "DELETE" });
+    cacheClearCreds(); // deleted env — nothing cached for it should linger
     currentEnv = null;
     localStorage.removeItem("currentEnv");
     await loadEnvironments(); // falls back to the first remaining environment
@@ -481,10 +630,16 @@ async function refreshState(name, row) {
   const btn = row.querySelector(".btn-refresh");
   const agentDiv = row.querySelector(".srv-agent");
   const pkgsDiv = row.querySelector(".srv-packages");
+  const extra = await operationCredentials(name, "query live state");
+  if (extra === null) return; // credential prompt cancelled
   btn.disabled = true;
   agentDiv.textContent = "querying…";
   try {
-    const state = await api(envUrl(`/servers/${encodeURIComponent(name)}/state`));
+    const state = await api(envUrl(`/servers/${encodeURIComponent(name)}/state`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(extra),
+    });
     agentDiv.textContent = state.agent_build ? `DA build ${state.agent_build}` : "";
     pkgsDiv.replaceChildren();
     for (const pkg of state.packages) {
@@ -505,6 +660,7 @@ async function refreshState(name, row) {
       agentDiv.textContent += " — no packages reported";
     }
   } catch (e) {
+    cacheEvictCreds(name); // a cached wrong/stale password re-prompts next time
     agentDiv.textContent = "detect failed: " + e.message;
   } finally {
     btn.disabled = false;
@@ -514,14 +670,17 @@ async function refreshState(name, row) {
 async function importPackage(name, row) {
   const select = row.querySelector(".pkg-select");
   if (!select.value) { toast("Choose an uploaded package first."); return; }
+  const extra = await operationCredentials(name, "import a package");
+  if (extra === null) return;
   try {
     await api(envUrl(`/servers/${encodeURIComponent(name)}/import`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ package: select.value }),
+      body: JSON.stringify({ package: select.value, ...extra }),
     });
     await loadJobs();
   } catch (e) {
+    cacheEvictCreds(name);
     toast("Import failed to start: " + e.message);
   }
 }
@@ -534,14 +693,17 @@ async function installPackage(name, packageId) {
     "Make sure this is inside a maintenance window and any HA peer is healthy."
   );
   if (!sure) return;
+  const extra = await operationCredentials(name, "install a package");
+  if (extra === null) return;
   try {
     await api(envUrl(`/servers/${encodeURIComponent(name)}/install`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ package_id: packageId, confirmed: true }),
+      body: JSON.stringify({ package_id: packageId, confirmed: true, ...extra }),
     });
     await loadJobs();
   } catch (e) {
+    cacheEvictCreds(name);
     toast("Install failed to start: " + e.message);
   }
 }
@@ -571,15 +733,22 @@ async function populateCdtSelectors() {
 async function cdtRefreshStatus() {
   const name = cdtServer();
   if (!name) return;
+  const extra = await operationCredentials(name, "query CDT status");
+  if (extra === null) return;
   const box = document.getElementById("cdt-status");
   box.textContent = "querying…";
   try {
-    const s = await api(envUrl(`/cdt/${encodeURIComponent(name)}/status`));
+    const s = await api(envUrl(`/cdt/${encodeURIComponent(name)}/status`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(extra),
+    });
     box.textContent =
       (s.available ? "CDT available" : "CDT NOT FOUND on this server") +
       (s.running ? " — RUNNING" : " — idle") +
       (s.brief ? " — " + s.brief : "");
   } catch (e) {
+    cacheEvictCreds(name);
     box.textContent = "status failed: " + e.message;
   }
 }
@@ -587,10 +756,17 @@ async function cdtRefreshStatus() {
 async function cdtLoadCandidates() {
   const name = cdtServer();
   if (!name) return;
+  const extra = await operationCredentials(name, "read the candidates list");
+  if (extra === null) return;
   try {
-    cdtCandidates = await api(envUrl(`/cdt/${encodeURIComponent(name)}/candidates`));
+    cdtCandidates = await api(envUrl(`/cdt/${encodeURIComponent(name)}/candidates/read`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(extra),
+    });
     renderCdtCandidates();
   } catch (e) {
+    cacheEvictCreds(name);
     toast("Load failed: " + e.message);
   }
 }
@@ -639,14 +815,17 @@ function cdtMoveRow(idx, delta) {
 async function cdtSaveCandidates() {
   const name = cdtServer();
   if (!name || !cdtCandidates) { toast("Load candidates first."); return; }
+  const extra = await operationCredentials(name, "save the candidates list");
+  if (extra === null) return;
   try {
     const resp = await api(envUrl(`/cdt/${encodeURIComponent(name)}/candidates`), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(cdtCandidates),
+      body: JSON.stringify({ ...cdtCandidates, ...extra }),
     });
     toast(`Saved ${resp.rows} candidate(s). Row order is the deployment order.`);
   } catch (e) {
+    cacheEvictCreds(name);
     toast("Save failed: " + e.message);
   }
 }
@@ -654,14 +833,17 @@ async function cdtSaveCandidates() {
 async function cdtAction(path, body) {
   const name = cdtServer();
   if (!name) return;
+  const extra = await operationCredentials(name, path);
+  if (extra === null) return;
   try {
     await api(envUrl(`/cdt/${encodeURIComponent(name)}/${path}`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body ?? {}),
+      body: JSON.stringify({ ...(body ?? {}), ...extra }),
     });
     await loadJobs();
   } catch (e) {
+    cacheEvictCreds(name);
     toast(`${path} failed to start: ` + e.message);
   }
 }
@@ -706,6 +888,32 @@ async function loadPackages() {
     const sha256 = row.querySelector(".pkg-sha256");
     sha256.textContent = pkg.sha256;
     sha256.title = pkg.sha256;
+
+    // Retention: ticked "Keep" == pinned (no expiry). Otherwise show the deadline.
+    const pin = row.querySelector(".pkg-pin");
+    const expiry = row.querySelector(".pkg-expiry");
+    const renderRetention = (rec) => {
+      pin.checked = rec.expires_at == null;
+      expiry.textContent = rec.expires_at ? `expires ${fmtTime(rec.expires_at)}` : "kept indefinitely";
+    };
+    renderRetention(pkg);
+    pin.addEventListener("change", async () => {
+      pin.disabled = true;
+      try {
+        const updated = await api(`/api/packages/${encodeURIComponent(pkg.filename)}/retention`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pinned: pin.checked }),
+        });
+        renderRetention(updated);
+      } catch (e) {
+        pin.checked = !pin.checked; // revert the optimistic toggle
+        toast("Could not update retention: " + e.message);
+      } finally {
+        pin.disabled = false;
+      }
+    });
+
     row.querySelector(".btn-delete").addEventListener("click", async () => {
       if (!confirm(`Delete package ${pkg.filename}?`)) return;
       try {
@@ -780,7 +988,12 @@ document.getElementById("upload-form").addEventListener("submit", async (ev) => 
 async function loadCredentials() {
   const tbody = document.querySelector("#credentials-table tbody");
   tbody.replaceChildren();
-  if (!currentEnv) return;
+  // Storage-disabled environments don't keep credentials here — swap the add
+  // form for an explanatory notice.
+  const enabled = storageEnabled();
+  document.getElementById("cred-storage-notice").classList.toggle("hidden", enabled);
+  document.getElementById("credential-form").classList.toggle("hidden", !enabled);
+  if (!currentEnv || !enabled) return;
   let creds;
   try {
     creds = await api(envUrl("/credentials"));
@@ -838,9 +1051,19 @@ document.getElementById("credential-form").addEventListener("submit", async (ev)
 
 const openJobLogs = new Set(); // job ids whose progress log is expanded
 
+// Live count of not-yet-finished jobs, shown as a pill on the Jobs tab button.
+function updateJobsBadge(jobs) {
+  const pill = document.getElementById("jobs-badge");
+  const n = jobs.filter((j) => j.status === "running" || j.status === "pending").length;
+  pill.textContent = n;
+  pill.title = `${n} job${n === 1 ? "" : "s"} running or queued`;
+  pill.classList.toggle("hidden", n === 0);
+}
+
 async function loadJobs() {
   const tbody = document.querySelector("#jobs-table tbody");
   const jobs = await api("/api/jobs?limit=25");
+  updateJobsBadge(jobs);
   tbody.replaceChildren();
   for (const job of jobs) {
     const row = el("tpl-job-row");
@@ -903,6 +1126,7 @@ async function buildJobLogRow(jobId) {
 async function pollJobs() {
   try {
     const jobs = await api("/api/jobs?limit=25");
+    updateJobsBadge(jobs); // keep the tab pill live even when we don't re-render
     const active = jobs.some((j) => j.status === "pending" || j.status === "running");
     if (active || openJobLogs.size) await loadJobs();
   } catch { /* transient — next tick will retry */ }

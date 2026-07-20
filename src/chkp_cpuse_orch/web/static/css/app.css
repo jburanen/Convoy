@@ -120,6 +120,22 @@ footer {
   color: var(--accent);
   border-bottom-color: var(--accent);
 }
+/* Live "N running" pill on the Jobs tab button. */
+.tab-badge {
+  display: inline-block;
+  min-width: 1.2rem;
+  margin-left: 0.4rem;
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.15rem;
+  text-align: center;
+  vertical-align: middle;
+}
+.tab-badge.hidden { display: none; } /* out-rank the generic .hidden */
 
 /* panels: only the active tab's panel is shown */
 .tab-panel { display: none; }
@@ -248,8 +264,49 @@ button.secondary:hover { color: var(--text); filter: none; }
 .modal-card.narrow { width: min(480px, 100%); } /* manage-environments / welcome dialogs */
 
 #env-manage-list { list-style: none; margin: 0 0 0.75rem; padding: 0; }
-.env-manage-row { display: flex; gap: 0.5rem; margin-bottom: 0.4rem; }
-.env-manage-row input { flex: 1; }
+.env-manage-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.env-manage-name { display: flex; gap: 0.5rem; }
+.env-manage-name input { flex: 1; }
+.env-storage-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+}
+.env-storage-toggle input { flex: none; }
+.env-storage-note { margin-left: 0.1rem; }
+
+/* Inline credential prompt (storage-disabled environments). */
+#cred-modal-form label { display: block; margin-bottom: 0.6rem; }
+#cred-modal-form input,
+#cred-modal-form textarea { width: 100%; box-sizing: border-box; }
+#cred-modal-form summary { cursor: pointer; color: var(--muted); margin-bottom: 0.5rem; }
+.cred-modal-actions { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
+.cm-remember {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin: 0.25rem 0 0.75rem;
+}
+
+/* Header note when this tab is holding session-cached credentials. */
+#cred-cache-note {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.35rem 0 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+#cred-cache-note.hidden { display: none; }
 .modal-head {
   display: flex;
   align-items: center;

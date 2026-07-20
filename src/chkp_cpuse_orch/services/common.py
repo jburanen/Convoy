@@ -11,9 +11,18 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Protocol
 
-from ..credentials import Credential, CredentialKind, CredentialStore
+from ..credentials import (
+    Credential,
+    CredentialBundle,
+    CredentialKind,
+    CredentialStore,
+    JobCredentialVault,
+    ensure_ssh_credential,
+)
 from ..errors import CredentialError, InventoryError
 from ..inventory import Host, Inventory, Role
+from ..jobs import JobRunner
+from ..store import JobRecord, new_id
 from ..transport.ssh import CommandResult, SSHClient
 
 _MGMT_ROLES = (Role.MANAGEMENT, Role.MDS)
@@ -61,9 +70,12 @@ class HostConnector:
         credentials: CredentialStore | None,
         client_factory: ClientFactory | None = None,
         environment: str = "default",
+        *,
+        credential_storage_enabled: bool = True,
     ) -> None:
         self.inventory = inventory
         self.environment = environment
+        self.credential_storage_enabled = credential_storage_enabled
         self._credentials = credentials
         self._client_factory = client_factory or default_client_factory
 
@@ -80,8 +92,9 @@ class HostConnector:
         return host
 
     def credential_kinds(self, host_name: str) -> list[str]:
-        """Which credential kinds are stored for a host (secret-free)."""
-        if self._credentials is None:
+        """Which credential kinds are stored for a host (secret-free). Always
+        empty for a storage-disabled environment — nothing is persisted."""
+        if self._credentials is None or not self.credential_storage_enabled:
             return []
         return [
             info.kind.value
@@ -98,7 +111,24 @@ class HostConnector:
                 "credential first"
             )
 
-    def host_credentials(self, host: Host) -> dict[CredentialKind, Credential]:
+    def require_credentials(
+        self, host: Host, provided: CredentialBundle | None = None
+    ) -> CredentialBundle | None:
+        """Gate an SSH operation and decide the credential source.
+
+        - storage enabled  → verify a stored SSH credential exists; return None,
+          meaning ``connect`` resolves from the store.
+        - storage disabled → validate the caller-``provided`` bundle and return
+          it, to be passed straight to ``connect`` (never persisted).
+        """
+        if self.credential_storage_enabled:
+            self.require_ssh_credential(host)
+            return None
+        bundle = provided or {}
+        ensure_ssh_credential(bundle, host.name, self.environment)
+        return bundle
+
+    def host_credentials(self, host: Host) -> CredentialBundle:
         if self._credentials is None:
             raise CredentialError(
                 "credential store is locked — set the master key and restart the service"
@@ -109,8 +139,58 @@ class HostConnector:
             creds = self._credentials.for_host("*", environment=self.environment)
         return creds
 
-    def connect(self, host: Host) -> Transport:
-        return self._client_factory(host, self.host_credentials(host))
+    def connect(self, host: Host, creds: CredentialBundle | None = None) -> Transport:
+        """Open a transport. ``creds`` supplies explicit credentials (storage-
+        disabled path); when omitted they are resolved from the store."""
+        if creds is None:
+            if not self.credential_storage_enabled:
+                raise CredentialError(
+                    f"environment {self.environment!r} does not store credentials — "
+                    "supply them for this operation"
+                )
+            creds = self.host_credentials(host)
+        return self._client_factory(host, creds)
+
+
+def submit_host_job(
+    runner: JobRunner,
+    vault: JobCredentialVault,
+    connector: HostConnector,
+    host: Host,
+    kind: str,
+    *,
+    params: dict[str, object] | None = None,
+    credentials: CredentialBundle | None = None,
+) -> JobRecord:
+    """Validate credentials for a host job and enqueue it. For storage-disabled
+    environments the credentials are stashed in the vault under the job id
+    *before* the job is submitted (so the runner can't start it first), and
+    removed again if submission fails."""
+    creds = connector.require_credentials(host, credentials)
+    job_id = new_id()
+    if creds is not None:
+        vault.put(job_id, creds)
+    try:
+        return runner.submit(
+            kind,
+            target=host.name,
+            params=params or {},
+            environment=connector.environment,
+            job_id=job_id,
+        )
+    except Exception:
+        vault.discard(job_id)
+        raise
+
+
+def job_run_credentials(
+    connector: HostConnector, vault: JobCredentialVault, job: JobRecord
+) -> CredentialBundle | None:
+    """Credentials a job handler should ``connect`` with: None (resolve from the
+    store) when storage is enabled, else the vault bundle put there at submit."""
+    if connector.credential_storage_enabled:
+        return None
+    return vault.require(job.id)
 
 
 class EnvironmentRegistry:

@@ -7,7 +7,12 @@ from pathlib import Path
 import pytest
 from pydantic import SecretStr
 
-from chkp_cpuse_orch.credentials import Credential, CredentialKind, CredentialStore
+from chkp_cpuse_orch.credentials import (
+    Credential,
+    CredentialKind,
+    CredentialStore,
+    JobCredentialVault,
+)
 from chkp_cpuse_orch.errors import CredentialError, InventoryError, JobError, PackageError
 from chkp_cpuse_orch.inventory import Host, Inventory, Role, Site
 from chkp_cpuse_orch.jobs import JobRunner
@@ -84,7 +89,9 @@ def service(
 ) -> PatchingService:
     registry = EnvironmentRegistry()
     registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
-    return PatchingService(registry=registry, packages=packages, runner=JobRunner(store))
+    return PatchingService(
+        registry=registry, packages=packages, runner=JobRunner(store), vault=JobCredentialVault()
+    )
 
 
 def _run(service: PatchingService) -> None:
@@ -229,10 +236,84 @@ def test_wildcard_credential_fallback(
     creds.put(Credential(host="*", kind=CredentialKind.SSH_PASSWORD, secret=SecretStr("fleet-pw")))
     registry = EnvironmentRegistry()
     registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
-    service = PatchingService(registry=registry, packages=packages, runner=JobRunner(store))
+    service = PatchingService(
+        registry=registry, packages=packages, runner=JobRunner(store), vault=JobCredentialVault()
+    )
     # mgmt-02 has no host-specific credential; the "*" default satisfies it.
     detected = service.detect("default", "mgmt-02")
     assert detected.agent_build == DA_BUILD
+
+
+# -- storage-disabled environments (credentials supplied per job, in memory) ------
+
+
+def _ssh_bundle(secret: str = "inline-pw") -> dict:
+    return {
+        CredentialKind.SSH_PASSWORD: Credential(
+            host="mgmt-01", kind=CredentialKind.SSH_PASSWORD, secret=SecretStr(secret)
+        )
+    }
+
+
+def _disabled_service(
+    store: Store, packages: PackageStore, inventory: Inventory, transport: FakeTransport
+) -> tuple[PatchingService, JobCredentialVault]:
+    vault = JobCredentialVault()
+    # No credential store needed at all for a storage-disabled environment.
+    registry = EnvironmentRegistry()
+    registry.add(
+        "default",
+        HostConnector(inventory, None, make_factory(transport), credential_storage_enabled=False),
+    )
+    runner = JobRunner(store, on_job_finished=vault.discard)
+    service = PatchingService(registry=registry, packages=packages, runner=runner, vault=vault)
+    return service, vault
+
+
+def test_storage_disabled_submit_requires_inline_credentials(
+    store: Store, packages: PackageStore, inventory: Inventory, transport: FakeTransport
+) -> None:
+    service, _vault = _disabled_service(store, packages, inventory, transport)
+    with pytest.raises(CredentialError, match="does not store credentials"):
+        service.submit_import("default", "mgmt-01", PKG)  # no credentials supplied
+
+
+def test_storage_disabled_detect_uses_inline_credentials(
+    store: Store, packages: PackageStore, inventory: Inventory, transport: FakeTransport
+) -> None:
+    service, _vault = _disabled_service(store, packages, inventory, transport)
+    detected = service.detect("default", "mgmt-01", credentials=_ssh_bundle())
+    assert detected.agent_build == DA_BUILD
+    with pytest.raises(CredentialError, match="does not store credentials"):
+        service.detect("default", "mgmt-01")  # missing
+
+
+def test_storage_disabled_job_runs_then_credentials_are_discarded(
+    store: Store, packages: PackageStore, inventory: Inventory, transport: FakeTransport
+) -> None:
+    service, vault = _disabled_service(store, packages, inventory, transport)
+    job = service.submit_import("default", "mgmt-01", PKG, credentials=_ssh_bundle())
+    # Held in memory until the job runs — never written anywhere.
+    assert vault.get(job.id) is not None
+
+    asyncio.run(service.runner.run_until_idle())
+
+    assert store.get_job(job.id).status is JobStatus.SUCCEEDED, store.get_job(job.id).error
+    assert transport.puts[0][1] == f"/var/log/upload/{PKG}"
+    # The runner finalizer dropped the in-memory credentials the moment it ended.
+    assert vault.get(job.id) is None
+
+
+def test_storage_disabled_job_credentials_discarded_even_on_failure(
+    store: Store, packages: PackageStore, inventory: Inventory, transport: FakeTransport
+) -> None:
+    service, vault = _disabled_service(store, packages, inventory, transport)
+    transport.fail_rc = 1  # make the CPUSE import command fail
+    job = service.submit_import("default", "mgmt-01", PKG, credentials=_ssh_bundle())
+    asyncio.run(service.runner.run_until_idle())
+
+    assert store.get_job(job.id).status is JobStatus.FAILED
+    assert vault.get(job.id) is None  # cleared regardless of outcome
 
 
 def test_wildcard_credential_never_crosses_environments(
@@ -253,6 +334,8 @@ def test_wildcard_credential_never_crosses_environments(
     )
     registry = EnvironmentRegistry()
     registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
-    service = PatchingService(registry=registry, packages=packages, runner=JobRunner(store))
+    service = PatchingService(
+        registry=registry, packages=packages, runner=JobRunner(store), vault=JobCredentialVault()
+    )
     with pytest.raises(CredentialError, match="no SSH credential"):
         service.detect("default", "mgmt-02")

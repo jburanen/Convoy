@@ -8,7 +8,12 @@ import pytest
 from pydantic import SecretStr
 
 from chkp_cpuse_orch.cdt import CandidatesFile
-from chkp_cpuse_orch.credentials import Credential, CredentialKind, CredentialStore
+from chkp_cpuse_orch.credentials import (
+    Credential,
+    CredentialKind,
+    CredentialStore,
+    JobCredentialVault,
+)
 from chkp_cpuse_orch.errors import CDTError, JobError
 from chkp_cpuse_orch.inventory import Host, Inventory, Role, Site
 from chkp_cpuse_orch.jobs import JobRunner
@@ -62,6 +67,7 @@ def service(store: Store, tmp_path: Path, transport: FakeTransport) -> CDTServic
         registry=registry,
         packages=packages,
         runner=JobRunner(store),
+        vault=JobCredentialVault(),
         poll_interval=0.01,  # fast execute polling in tests
     )
 

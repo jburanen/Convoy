@@ -29,9 +29,11 @@ from ..cdt import CandidatesFile
 from ..config import Config
 from ..credentials import (
     Credential,
+    CredentialBundle,
     CredentialInfo,
     CredentialKind,
     CredentialStore,
+    JobCredentialVault,
     load_master_key,
 )
 from ..errors import (
@@ -62,6 +64,25 @@ logger = get_logger(__name__)
 
 _STATIC_DIR = Path(__file__).parent / "static"
 
+# How often the background reaper sweeps for expired packages.
+_REAP_INTERVAL_SECONDS = 3600.0
+
+
+async def _reap_expired_packages(
+    packages: PackageStore, interval: float = _REAP_INTERVAL_SECONDS
+) -> None:
+    """Periodically delete packages past their retention deadline. Runs an
+    immediate sweep on startup, then every ``interval`` seconds. Never raises
+    out of the loop — a failed sweep is logged and retried next tick."""
+    while True:
+        try:
+            purged = await asyncio.to_thread(packages.purge_expired)
+            if purged:
+                logger.info("purged expired packages", count=len(purged), files=purged)
+        except Exception as exc:  # keep the reaper alive across transient errors
+            logger.warning("package reaper sweep failed", error=str(exc))
+        await asyncio.sleep(interval)
+
 
 # -- request/response bodies -------------------------------------------------------
 
@@ -73,31 +94,63 @@ class CredentialIn(BaseModel):
     secret: str = Field(min_length=1)
 
 
-class ImportRequest(BaseModel):
+class JobCredentialIn(BaseModel):
+    """One credential supplied inline for a single operation in a storage-
+    disabled environment. Never persisted — used in memory only."""
+
+    kind: CredentialKind
+    username: str | None = None
+    secret: str = Field(min_length=1)
+
+
+class OperationCredentials(BaseModel):
+    """Mixin: optional inline credentials carried by SSH-backed requests. Empty
+    for environments that store credentials; required for those that don't."""
+
+    credentials: list[JobCredentialIn] = Field(default_factory=list)
+
+
+class ImportRequest(OperationCredentials):
     package: str  # filename in the package store
 
 
-class InstallRequest(BaseModel):
+class InstallRequest(OperationCredentials):
     package_id: str  # CPUSE identifier as shown by detect
     confirmed: bool = False  # UI must send True after an explicit operator confirm
     verify_first: bool = True
 
 
-class StageRequest(BaseModel):
+class RetentionRequest(BaseModel):
+    pinned: bool  # True → keep indefinitely; False → apply the retention window
+
+
+class StageRequest(OperationCredentials):
     package: str  # filename in the package store
 
 
-class PrepareRequest(BaseModel):
+class GenerateRequest(OperationCredentials):
+    pass  # credentials only
+
+
+class PrepareRequest(OperationCredentials):
     extended: bool = False  # extended also updates CPUSE + imports on targets
 
 
-class ExecuteRequest(BaseModel):
+class ExecuteRequest(OperationCredentials):
     confirmed: bool = False  # UI must send True after an explicit operator confirm
 
 
-class CandidatesIn(BaseModel):
+class QueryRequest(OperationCredentials):
+    pass  # live-state query bodies carry only (optional) credentials
+
+
+class CandidatesIn(OperationCredentials):
     header: list[str]
     rows: list[list[str]]  # row order == deployment order
+
+
+class CredentialStorageIn(BaseModel):
+    enabled: bool
 
 
 class ProvisionRequest(BaseModel):
@@ -133,7 +186,11 @@ def create_app(
         configure_logging()
         cfg = config or Config.load()
         store = Store(cfg.paths.db_path)
-        packages = PackageStore(store, cfg.paths.packages_dir)
+        packages = PackageStore(
+            store, cfg.paths.packages_dir, retention_days=cfg.package_retention_days
+        )
+        # In-memory credentials for jobs in storage-disabled environments.
+        vault = JobCredentialVault()
 
         credentials: CredentialStore | None = None
         try:
@@ -152,13 +209,16 @@ def create_app(
         env_manager.seed_from_config(cfg)
         env_manager.rebuild()
 
-        runner = JobRunner(store)
-        service = PatchingService(registry=registry, packages=packages, runner=runner)
-        cdt_service = CDTService(registry=registry, packages=packages, runner=runner)
+        # Purge a job's in-memory credentials the moment it reaches any terminal
+        # state (success/failure/cancel), guaranteed by the runner.
+        runner = JobRunner(store, on_job_finished=vault.discard)
+        service = PatchingService(registry=registry, packages=packages, runner=runner, vault=vault)
+        cdt_service = CDTService(registry=registry, packages=packages, runner=runner, vault=vault)
 
         app.state.store = store
         app.state.packages = packages
         app.state.credentials = credentials
+        app.state.vault = vault
         app.state.registry = registry
         app.state.env_manager = env_manager
         app.state.runner = runner
@@ -169,10 +229,14 @@ def create_app(
         if interrupted:
             logger.warning("jobs interrupted by previous shutdown", count=len(interrupted))
         serve_task = asyncio.create_task(runner.serve())
+        reaper_task = asyncio.create_task(_reap_expired_packages(packages))
         try:
             yield
         finally:
             runner.stop()
+            reaper_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await reaper_task
             await serve_task
 
     app = FastAPI(
@@ -188,6 +252,31 @@ def create_app(
 def _service(request: Request) -> PatchingService:
     service: PatchingService = request.app.state.service
     return service
+
+
+def _build_credentials(
+    items: list[JobCredentialIn], host_name: str, environment: str
+) -> CredentialBundle:
+    """Turn inline request credentials into an in-memory bundle. Possibly empty;
+    the service validates it (ignored when the environment stores credentials)."""
+    return {
+        item.kind: Credential(
+            host=host_name,
+            kind=item.kind,
+            username=item.username,
+            secret=SecretStr(item.secret),
+            environment=environment,
+        )
+        for item in items
+    }
+
+
+def _op_creds(
+    body: OperationCredentials | None, host_name: str, environment: str
+) -> CredentialBundle:
+    """Bundle from an optional request body (empty when body/credentials absent).
+    Used by endpoints whose body — carrying only credentials — may be omitted."""
+    return _build_credentials(body.credentials if body is not None else [], host_name, environment)
 
 
 def _registry(request: Request) -> EnvironmentRegistry:
@@ -224,7 +313,13 @@ def _map_error(exc: OrchestratorError) -> HTTPException:
         else:
             status = 400
     elif isinstance(exc, CredentialError):
-        status = 503 if "locked" in str(exc) else 409
+        text = str(exc)
+        if "locked" in text:
+            status = 503  # credential store needs the master key
+        elif any(s in text for s in ("provide", "supply", "in-memory")):
+            status = 400  # caller didn't supply required inline credentials
+        else:
+            status = 409
     elif isinstance(exc, CDTError):
         status = 409 if "running" in str(exc) else 400
     elif isinstance(exc, TransportError):
@@ -265,7 +360,13 @@ def _register_routes(app: FastAPI) -> None:
     def environments(request: Request) -> list[dict[str, Any]]:
         service = _service(request)
         return [
-            {"name": env, "management_servers": len(service.management_servers(env))}
+            {
+                "name": env,
+                "management_servers": len(service.management_servers(env)),
+                "credential_storage_enabled": _registry(request)
+                .get(env)
+                .credential_storage_enabled,
+            }
             for env in _registry(request).names()
         ]
 
@@ -293,6 +394,19 @@ def _register_routes(app: FastAPI) -> None:
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
         return {"deleted": True}
+
+    @app.post("/api/environments/{env}/credential-storage")
+    def set_credential_storage(
+        env: str, body: CredentialStorageIn, request: Request
+    ) -> dict[str, Any]:
+        """Enable or disable credential storage. Disabling purges any stored
+        credentials for the environment (they'd be unused, and the operator
+        opted out of on-disk secrets)."""
+        try:
+            purged = _envmgr(request).set_credential_storage(env, body.enabled)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        return {"enabled": body.enabled, "purged_credentials": purged}
 
     @app.get("/api/environments/{env}/servers")
     def env_servers(env: str, request: Request) -> list[dict[str, Any]]:
@@ -364,12 +478,16 @@ def _register_routes(app: FastAPI) -> None:
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
-    @app.get("/api/env/{env}/servers/{name}/state")
-    async def server_state(env: str, name: str, request: Request) -> dict[str, Any]:
-        _credentials_or_503(request)
+    @app.post("/api/env/{env}/servers/{name}/state")
+    async def server_state(
+        env: str, name: str, request: Request, body: QueryRequest | None = None
+    ) -> dict[str, Any]:
+        """Live CPUSE state (POST so storage-disabled environments can carry
+        one-shot credentials in the body; the body is empty otherwise)."""
+        creds = _op_creds(body, name, env)
         service = _service(request)
         try:
-            detected = await asyncio.to_thread(service.detect, env, name)
+            detected = await asyncio.to_thread(service.detect, env, name, credentials=creds)
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
         return {
@@ -389,15 +507,15 @@ def _register_routes(app: FastAPI) -> None:
 
     @app.post("/api/env/{env}/servers/{name}/import", status_code=202)
     def server_import(env: str, name: str, body: ImportRequest, request: Request) -> JobRecord:
-        _credentials_or_503(request)
         try:
-            return _service(request).submit_import(env, name, body.package)
+            return _service(request).submit_import(
+                env, name, body.package, credentials=_build_credentials(body.credentials, name, env)
+            )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
     @app.post("/api/env/{env}/servers/{name}/install", status_code=202)
     def server_install(env: str, name: str, body: InstallRequest, request: Request) -> JobRecord:
-        _credentials_or_503(request)
         try:
             return _service(request).submit_install(
                 env,
@@ -405,6 +523,7 @@ def _register_routes(app: FastAPI) -> None:
                 body.package_id,
                 confirmed=body.confirmed,
                 verify_first=body.verify_first,
+                credentials=_build_credentials(body.credentials, name, env),
             )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
@@ -427,6 +546,18 @@ def _register_routes(app: FastAPI) -> None:
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
+    @app.post("/api/packages/{filename}/retention")
+    def set_package_retention(
+        filename: str, body: RetentionRequest, request: Request
+    ) -> PackageRecord:
+        """Pin a package to keep it indefinitely, or un-pin it so the retention
+        window applies again."""
+        packages: PackageStore = request.app.state.packages
+        try:
+            return packages.set_pinned(filename, body.pinned)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+
     @app.delete("/api/packages/{filename}")
     def delete_package(filename: str, request: Request) -> dict[str, bool]:
         packages: PackageStore = request.app.state.packages
@@ -445,6 +576,12 @@ def _register_routes(app: FastAPI) -> None:
     @app.put("/api/env/{env}/credentials", status_code=201)
     def put_credential(env: str, body: CredentialIn, request: Request) -> CredentialInfo:
         _require_env(request, env)
+        if not _registry(request).get(env).credential_storage_enabled:
+            raise HTTPException(
+                status_code=409,
+                detail=f"credential storage is disabled for environment {env!r} — "
+                "enable it first, or supply credentials per operation",
+            )
         store = _credentials_or_503(request)
         try:
             return store.put(
@@ -472,19 +609,25 @@ def _register_routes(app: FastAPI) -> None:
         cdt: CDTService = request.app.state.cdt
         return cdt
 
-    @app.get("/api/env/{env}/cdt/{name}/status")
-    async def cdt_status(env: str, name: str, request: Request) -> dict[str, Any]:
-        _credentials_or_503(request)
+    @app.post("/api/env/{env}/cdt/{name}/status")
+    async def cdt_status(
+        env: str, name: str, request: Request, body: QueryRequest | None = None
+    ) -> dict[str, Any]:
+        creds = _op_creds(body, name, env)
         try:
-            return await asyncio.to_thread(_cdt(request).get_status, env, name)
+            return await asyncio.to_thread(_cdt(request).get_status, env, name, credentials=creds)
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
-    @app.get("/api/env/{env}/cdt/{name}/candidates")
-    async def cdt_candidates(env: str, name: str, request: Request) -> dict[str, Any]:
-        _credentials_or_503(request)
+    @app.post("/api/env/{env}/cdt/{name}/candidates/read")
+    async def cdt_candidates(
+        env: str, name: str, request: Request, body: QueryRequest | None = None
+    ) -> dict[str, Any]:
+        creds = _op_creds(body, name, env)
         try:
-            cands = await asyncio.to_thread(_cdt(request).get_candidates, env, name)
+            cands = await asyncio.to_thread(
+                _cdt(request).get_candidates, env, name, credentials=creds
+            )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
         return {"header": cands.header, "rows": cands.rows}
@@ -493,13 +636,14 @@ def _register_routes(app: FastAPI) -> None:
     async def cdt_save_candidates(
         env: str, name: str, body: CandidatesIn, request: Request
     ) -> dict[str, int]:
-        _credentials_or_503(request)
+        creds = _build_credentials(body.credentials, name, env)
         try:
             count = await asyncio.to_thread(
                 _cdt(request).save_candidates,
                 env,
                 name,
                 CandidatesFile(header=body.header, rows=body.rows),
+                credentials=creds,
             )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
@@ -507,33 +651,43 @@ def _register_routes(app: FastAPI) -> None:
 
     @app.post("/api/env/{env}/cdt/{name}/stage", status_code=202)
     def cdt_stage(env: str, name: str, body: StageRequest, request: Request) -> JobRecord:
-        _credentials_or_503(request)
         try:
-            return _cdt(request).submit_stage(env, name, body.package)
+            return _cdt(request).submit_stage(
+                env, name, body.package, credentials=_build_credentials(body.credentials, name, env)
+            )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
     @app.post("/api/env/{env}/cdt/{name}/generate", status_code=202)
-    def cdt_generate(env: str, name: str, request: Request) -> JobRecord:
-        _credentials_or_503(request)
+    def cdt_generate(
+        env: str, name: str, request: Request, body: GenerateRequest | None = None
+    ) -> JobRecord:
         try:
-            return _cdt(request).submit_generate(env, name)
+            return _cdt(request).submit_generate(env, name, credentials=_op_creds(body, name, env))
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
     @app.post("/api/env/{env}/cdt/{name}/prepare", status_code=202)
     def cdt_prepare(env: str, name: str, body: PrepareRequest, request: Request) -> JobRecord:
-        _credentials_or_503(request)
         try:
-            return _cdt(request).submit_prepare(env, name, extended=body.extended)
+            return _cdt(request).submit_prepare(
+                env,
+                name,
+                extended=body.extended,
+                credentials=_build_credentials(body.credentials, name, env),
+            )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
     @app.post("/api/env/{env}/cdt/{name}/execute", status_code=202)
     def cdt_execute(env: str, name: str, body: ExecuteRequest, request: Request) -> JobRecord:
-        _credentials_or_503(request)
         try:
-            return _cdt(request).submit_execute(env, name, confirmed=body.confirmed)
+            return _cdt(request).submit_execute(
+                env,
+                name,
+                confirmed=body.confirmed,
+                credentials=_build_credentials(body.credentials, name, env),
+            )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
