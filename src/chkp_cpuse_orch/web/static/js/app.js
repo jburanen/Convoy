@@ -66,6 +66,14 @@ async function loadEnvironments() {
   const picker = document.getElementById("env-picker");
   const envs = await api("/api/environments");
   picker.replaceChildren();
+  if (!envs.length) {
+    // Placeholder so the manage entry is never the pre-selected option — a
+    // <select> fires no change event when its current option is re-chosen,
+    // which would make "New Environment…" dead with zero environments.
+    const placeholder = new Option("— no environments —", "");
+    placeholder.disabled = true;
+    picker.appendChild(placeholder);
+  }
   for (const env of envs) {
     picker.appendChild(new Option(env.name, env.name));
   }
@@ -77,7 +85,7 @@ async function loadEnvironments() {
   if (!envs.some((e) => e.name === currentEnv)) {
     currentEnv = envs.length ? envs[0].name : null;
   }
-  picker.value = currentEnv ?? ENV_MANAGE;
+  picker.value = currentEnv ?? "";
   // Picker is always shown now (it hosts the manage entry even with one env).
   document.getElementById("env-row").classList.remove("hidden");
 }
@@ -95,10 +103,11 @@ async function selectEnvironment(name) {
 
 document.getElementById("env-picker").addEventListener("change", async (ev) => {
   if (ev.target.value === ENV_MANAGE) {
-    ev.target.value = currentEnv ?? ""; // don't leave the sentinel selected
+    ev.target.value = currentEnv ?? ""; // back to placeholder / current env
     openEnvModal();
     return;
   }
+  if (!ev.target.value) return; // the disabled placeholder can't select anything
   await selectEnvironment(ev.target.value);
 });
 
