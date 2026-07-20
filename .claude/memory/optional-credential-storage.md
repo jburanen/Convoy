@@ -9,7 +9,9 @@ Credential storage is a **per-environment** choice (`environments.credential_sto
 schema migration v6). New UI-created environments default to **disabled**; config-seeded
 ones default to **enabled** to preserve prior behaviour.
 
-**Enabled** → the encrypted [[security-hygiene]] `CredentialStore` as before.
+**Enabled** → the encrypted [[security-hygiene]] `CredentialStore`, which since
+migration **v8** stores **named "login sets"** rather than per-host secrets (see
+[[credential-sets]]).
 
 **Disabled** → nothing is persisted. Every SSH-backed request supplies credentials
 inline (`credentials: [{kind, username?, secret}]`):

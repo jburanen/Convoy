@@ -21,7 +21,10 @@ from chkp_cpuse_orch.store import Store
 
 @pytest.fixture
 def store(tmp_path: Path) -> Store:
-    return Store(tmp_path / "orch.db")
+    store = Store(tmp_path / "orch.db")
+    # credential_sets.environment FKs to environments — the "default" row must exist.
+    store.insert_environment("default", credential_storage_enabled=True)
+    return store
 
 
 @pytest.fixture
@@ -29,77 +32,108 @@ def creds(store: Store) -> CredentialStore:
     return CredentialStore(store, master_key="correct horse battery staple")
 
 
-def _cred(
-    secret: str = "s3cret!", kind: CredentialKind = CredentialKind.SSH_PASSWORD
-) -> Credential:
-    return Credential(host="mgmt-01", kind=kind, username="admin", secret=SecretStr(secret))
+def _put(creds: CredentialStore, name: str = "primary", **kw: str) -> None:
+    """Create a set; defaults to an SSH-password set unless overridden."""
+    kw.setdefault("ssh_username", "admin")
+    kw.setdefault("ssh_password", "s3cret!")
+    creds.put_set("default", name, **kw)
 
 
-def test_put_get_roundtrip(creds: CredentialStore) -> None:
-    creds.put(_cred("hunter22"))
-    loaded = creds.get("mgmt-01", CredentialKind.SSH_PASSWORD)
-    assert loaded.reveal() == "hunter22"
-    assert loaded.username == "admin"
+def _set_id(store: Store, name: str = "primary") -> str:
+    row = store.get_credential_set_by_name("default", name)
+    assert row is not None
+    return row.id
+
+
+def test_put_set_and_bundle_roundtrip(creds: CredentialStore, store: Store) -> None:
+    creds.put_set(
+        "default",
+        "primary",
+        ssh_username="admin",
+        ssh_password="hunter22",
+        expert_password="rootpw",
+    )
+    bundle = creds.get_set_bundle(_set_id(store), "mgmt-01")
+    assert bundle[CredentialKind.SSH_PASSWORD].reveal() == "hunter22"
+    assert bundle[CredentialKind.SSH_PASSWORD].username == "admin"
+    assert bundle[CredentialKind.EXPERT_PASSWORD].reveal() == "rootpw"
+    # Expert secret carries no username.
+    assert bundle[CredentialKind.EXPERT_PASSWORD].username is None
 
 
 def test_ciphertext_on_disk_is_not_plaintext(creds: CredentialStore, store: Store) -> None:
-    creds.put(_cred("supersecretvalue"))
-    rec = store.get_credential("mgmt-01", "ssh_password")
-    assert rec is not None
-    assert b"supersecretvalue" not in rec.ciphertext
+    _put(creds, ssh_password="supersecretvalue")
+    row = store.get_credential_set_by_name("default", "primary")
+    assert row is not None and row.ssh_password_ct is not None
+    assert b"supersecretvalue" not in row.ssh_password_ct
 
 
-def test_secret_never_in_repr(creds: CredentialStore) -> None:
-    creds.put(_cred("topsecret"))
-    loaded = creds.get("mgmt-01", CredentialKind.SSH_PASSWORD)
-    assert "topsecret" not in repr(loaded)
-    assert "topsecret" not in str(loaded)
+def test_secret_never_in_repr(creds: CredentialStore, store: Store) -> None:
+    _put(creds, ssh_password="topsecret")
+    bundle = creds.get_set_bundle(_set_id(store), "mgmt-01")
+    cred = bundle[CredentialKind.SSH_PASSWORD]
+    assert "topsecret" not in repr(cred)
+    assert "topsecret" not in str(cred)
 
 
 def test_wrong_master_key_fails_fast(store: Store) -> None:
-    CredentialStore(store, master_key="the right key").put(_cred())
+    CredentialStore(store, master_key="the right key").put_set(
+        "default", "primary", ssh_password="pw"
+    )
     with pytest.raises(CredentialError, match="master key does not match"):
         CredentialStore(store, master_key="not the right key")
 
 
 def test_same_key_reopens_fine(store: Store) -> None:
-    CredentialStore(store, master_key="the right key").put(_cred("abc"))
+    CredentialStore(store, master_key="the right key").put_set(
+        "default", "primary", ssh_password="abc"
+    )
     reopened = CredentialStore(store, master_key="the right key")
-    assert reopened.get("mgmt-01", CredentialKind.SSH_PASSWORD).reveal() == "abc"
+    bundle = reopened.get_set_bundle(_set_id(store), "mgmt-01")
+    assert bundle[CredentialKind.SSH_PASSWORD].reveal() == "abc"
 
 
-def test_missing_credential_raises_but_try_get_returns_none(creds: CredentialStore) -> None:
-    with pytest.raises(CredentialError, match="no ssh_password credential"):
-        creds.get("nowhere", CredentialKind.SSH_PASSWORD)
-    assert creds.try_get("nowhere", CredentialKind.SSH_PASSWORD) is None
+def test_ssh_secret_required(creds: CredentialStore) -> None:
+    with pytest.raises(CredentialError, match="SSH password or private key"):
+        creds.put_set("default", "noauth", expert_password="only-expert")
 
 
-def test_for_host_returns_mixed_auth_bundle(creds: CredentialStore) -> None:
-    creds.put(_cred("pw", CredentialKind.SSH_PASSWORD))
-    creds.put(_cred("-----BEGIN OPENSSH PRIVATE KEY-----", CredentialKind.SSH_PRIVATE_KEY))
-    bundle = creds.for_host("mgmt-01")
-    assert set(bundle) == {CredentialKind.SSH_PASSWORD, CredentialKind.SSH_PRIVATE_KEY}
-    assert bundle[CredentialKind.SSH_PASSWORD].reveal() == "pw"
+def test_password_xor_private_key(creds: CredentialStore) -> None:
+    with pytest.raises(CredentialError, match="not both"):
+        creds.put_set("default", "both", ssh_password="pw", ssh_private_key="key")
 
 
-def test_list_is_secret_free(creds: CredentialStore) -> None:
-    creds.put(_cred("classified"))
-    infos = creds.list()
+def test_private_key_set_bundle(creds: CredentialStore, store: Store) -> None:
+    creds.put_set("default", "keyset", ssh_username="admin", ssh_private_key="KEYDATA")
+    bundle = creds.get_set_bundle(_set_id(store, "keyset"), "mgmt-01")
+    assert set(bundle) == {CredentialKind.SSH_PRIVATE_KEY}
+    assert bundle[CredentialKind.SSH_PRIVATE_KEY].reveal() == "KEYDATA"
+
+
+def test_list_sets_is_secret_free(creds: CredentialStore) -> None:
+    creds.put_set(
+        "default", "primary", ssh_username="admin", ssh_password="classified", api_key="k"
+    )
+    infos = creds.list_sets("default")
     assert len(infos) == 1
-    assert infos[0].host == "mgmt-01"
-    assert infos[0].kind is CredentialKind.SSH_PASSWORD
+    info = infos[0]
+    assert info.name == "primary"
+    assert info.ssh_username == "admin"
+    assert info.ssh_auth == "password"
+    assert info.has_api is True
+    assert info.has_expert is False
     assert "classified" not in repr(infos)
 
 
-def test_delete(creds: CredentialStore) -> None:
-    creds.put(_cred())
-    assert creds.delete("mgmt-01", CredentialKind.SSH_PASSWORD) is True
-    assert creds.delete("mgmt-01", CredentialKind.SSH_PASSWORD) is False
+def test_delete_set(creds: CredentialStore) -> None:
+    _put(creds)
+    assert creds.delete_set("default", "primary") is True
+    assert creds.delete_set("default", "primary") is False
 
 
-def test_empty_secret_refused(creds: CredentialStore) -> None:
-    with pytest.raises(CredentialError, match="empty secret"):
-        creds.put(_cred(""))
+def test_get_bundle_missing_set_raises(creds: CredentialStore) -> None:
+    with pytest.raises(CredentialError, match="not found"):
+        creds.get_set_bundle("no-such-id", "mgmt-01")
 
 
 def test_load_master_key_from_env() -> None:

@@ -275,7 +275,7 @@ async function selectEnvironment(name) {
   cdtCandidates = null;
   renderCdtCandidates();
   document.getElementById("cdt-status").textContent = "";
-  await Promise.all([loadServers(), loadPackages(), loadCredentials(), refreshStatus()]);
+  await Promise.all([loadServers(), loadPackages(), loadCredentialSets(), refreshStatus()]);
 }
 
 document.getElementById("env-picker").addEventListener("change", async (ev) => {
@@ -493,7 +493,7 @@ document.getElementById("env-delete").addEventListener("click", async () => {
     if (currentEnv) {
       await selectEnvironment(currentEnv);
     } else {
-      await Promise.all([loadServers(), loadCredentials(), refreshStatus()]);
+      await Promise.all([loadServers(), loadCredentialSets(), refreshStatus()]);
     }
   } catch (e) { toast("Delete failed: " + e.message); }
 });
@@ -604,11 +604,9 @@ document.getElementById("prov-copy").addEventListener("click", async () => {
 async function loadServers() {
   const tbody = document.querySelector("#servers-table tbody");
   const infoTbody = document.querySelector("#servers-info-table tbody");
-  const namelist = document.getElementById("server-names");
 
   tbody.replaceChildren();
   infoTbody.replaceChildren();
-  namelist.replaceChildren();
   document.getElementById("prov-env-name").textContent = currentEnv ?? "—";
 
   if (!currentEnv) {
@@ -619,13 +617,16 @@ async function loadServers() {
     return;
   }
 
-  // Patching view (credentials per server) + editable inventory (has ssh port).
-  const [servers, editable, packages] = await Promise.all([
+  // Patching view (assigned set per server) + editable inventory + packages +
+  // the environment's credential sets (to populate the assignment dropdowns).
+  const [servers, editable, packages, sets] = await Promise.all([
     api(envUrl("/servers")),
     api(`/api/environments/${encodeURIComponent(currentEnv)}/servers`),
     api("/api/packages"),
+    fetchCredentialSets(),
   ]);
-  const credsByName = new Map(servers.map((s) => [s.name, s.credentials]));
+  const assignedByName = new Map(servers.map((s) => [s.name, s.credential_set]));
+  const storageOn = storageEnabled();
 
   for (const srv of editable) {
     // Provisioning tab: inventory row with a Remove action (env management —
@@ -636,9 +637,8 @@ async function loadServers() {
     info.querySelector(".srv-role").textContent = srv.role;
     info.querySelector(".srv-user").textContent = srv.ssh_user;
     info.querySelector(".srv-port").textContent = srv.ssh_port;
-    const creds = credsByName.get(srv.name) ?? [];
     info.querySelector(".srv-creds").textContent =
-      creds.length ? creds.join(", ") : "none — not reachable yet";
+      assignedByName.get(srv.name) || "none — not assigned";
     info.querySelector(".btn-remove").addEventListener("click", async () => {
       if (!confirm(`Remove server ${srv.name} from ${currentEnv}?`)) return;
       try {
@@ -653,12 +653,26 @@ async function loadServers() {
   }
 
   for (const srv of servers) {
-    // Management tab: the action row.
+    // Management tab: the action row, with the credential-set assignment picker.
     const row = el("tpl-server-row");
     row.querySelector(".srv-name").textContent = srv.name;
     row.querySelector(".srv-address").textContent = srv.address;
-    row.querySelector(".srv-creds").textContent =
-      srv.credentials.length ? srv.credentials.join(", ") : "none";
+
+    const credSelect = row.querySelector(".srv-cred-select");
+    for (const set of sets) {
+      const opt = document.createElement("option");
+      opt.value = set.name;
+      opt.textContent = set.name;
+      credSelect.appendChild(opt);
+    }
+    credSelect.value = srv.credential_set ?? "";
+    if (storageOn) {
+      credSelect.addEventListener("change", () => assignCredential(srv.name, credSelect));
+    } else {
+      // Storage-disabled: assignment is N/A; actions prompt for credentials.
+      credSelect.disabled = true;
+      credSelect.title = "This environment doesn't store credentials — actions prompt for them.";
+    }
 
     // package dropdown for the Import action
     const select = row.querySelector(".pkg-select");
@@ -672,10 +686,6 @@ async function loadServers() {
     row.querySelector(".btn-refresh").addEventListener("click", () => refreshState(srv.name, row));
     row.querySelector(".btn-import").addEventListener("click", () => importPackage(srv.name, row));
     tbody.appendChild(row);
-
-    const opt = document.createElement("option");
-    opt.value = srv.name;
-    namelist.appendChild(opt);
   }
 
   if (!editable.length) {
@@ -684,6 +694,21 @@ async function loadServers() {
   }
 
   chooseDefaultTab(servers.length);
+}
+
+async function assignCredential(name, select) {
+  const value = select.value || null;
+  try {
+    await api(envUrl(`/servers/${encodeURIComponent(name)}/credential`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ set: value }),
+    });
+    await Promise.all([loadServers(), refreshStatus()]);
+  } catch (e) {
+    toast("Assign failed: " + e.message);
+    await loadServers(); // revert the dropdown to the stored assignment
+  }
 }
 
 function emptyRow(target, colSpan, text) {
@@ -1053,43 +1078,44 @@ document.getElementById("upload-form").addEventListener("submit", async (ev) => 
   window.addEventListener("drop", (ev) => ev.preventDefault());
 }
 
-/* ---------- 5. credentials ---------- */
+/* ---------- 5. credential sets ---------- */
 
-async function loadCredentials() {
+// Named login sets for the current environment (name → info), refreshed by
+// loadCredentialSets and reused to populate the Management-tab assignment picker.
+let credentialSets = [];
+
+async function fetchCredentialSets() {
+  if (!currentEnv || !storageEnabled()) return [];
+  try {
+    return await api(envUrl("/credentials"));
+  } catch {
+    return []; // store locked / not reachable — dropdowns fall back to none
+  }
+}
+
+async function loadCredentialSets() {
   const tbody = document.querySelector("#credentials-table tbody");
   tbody.replaceChildren();
-  // Storage-disabled environments don't keep credentials here — swap the add
-  // form for an explanatory notice.
+  // Storage-disabled environments don't keep credential sets — swap the form
+  // for an explanatory notice.
   const enabled = storageEnabled();
   document.getElementById("cred-storage-notice").classList.toggle("hidden", enabled);
   document.getElementById("credential-form").classList.toggle("hidden", !enabled);
-  if (!currentEnv || !enabled) return;
-  let creds;
-  try {
-    creds = await api(envUrl("/credentials"));
-  } catch (e) {
-    const tr = document.createElement("tr");
-    const td = document.createElement("td");
-    td.colSpan = 4;
-    td.className = "muted";
-    td.textContent = e.message;
-    tr.appendChild(td);
-    tbody.appendChild(tr);
-    return;
-  }
-  for (const cred of creds) {
+  if (!currentEnv || !enabled) { credentialSets = []; return; }
+  credentialSets = await fetchCredentialSets();
+  const tick = (b) => (b ? "✓" : "—");
+  for (const set of credentialSets) {
     const row = el("tpl-credential-row");
-    row.querySelector(".cred-host").textContent = cred.host;
-    row.querySelector(".cred-kind").textContent = cred.kind;
-    row.querySelector(".cred-username").textContent = cred.username ?? "";
+    row.querySelector(".cs-name").textContent = set.name;
+    row.querySelector(".cs-user").textContent = set.ssh_username ?? "";
+    row.querySelector(".cs-auth").textContent = set.ssh_auth; // password | key | none
+    row.querySelector(".cs-expert").textContent = tick(set.has_expert);
+    row.querySelector(".cs-api").textContent = tick(set.has_api);
     row.querySelector(".btn-delete").addEventListener("click", async () => {
-      if (!confirm(`Delete ${cred.kind} credential for ${cred.host}?`)) return;
+      if (!confirm(`Delete credential set "${set.name}"? Servers using it lose access.`)) return;
       try {
-        await api(
-          envUrl(`/credentials/${encodeURIComponent(cred.host)}/${encodeURIComponent(cred.kind)}`),
-          { method: "DELETE" },
-        );
-        await Promise.all([loadCredentials(), loadServers()]);
+        await api(envUrl(`/credentials/${encodeURIComponent(set.name)}`), { method: "DELETE" });
+        await Promise.all([loadCredentialSets(), loadServers()]);
       } catch (e) { toast("Delete failed: " + e.message); }
     });
     tbody.appendChild(row);
@@ -1098,20 +1124,30 @@ async function loadCredentials() {
 
 document.getElementById("credential-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
-  const secretInput = document.getElementById("cred-secret");
+  const pwInput = document.getElementById("cs-ssh-password");
+  const keyInput = document.getElementById("cs-ssh-key");
+  const password = pwInput.value;
+  const key = keyInput.value.trim();
+  if (!password && !key) { toast("Enter an SSH password or a private key."); return; }
+  if (password && key) { toast("Enter an SSH password OR a private key, not both."); return; }
+  const expertInput = document.getElementById("cs-expert");
+  const apiInput = document.getElementById("cs-api");
   try {
     await api(envUrl("/credentials"), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        host: document.getElementById("cred-host").value.trim(),
-        kind: document.getElementById("cred-kind").value,
-        username: document.getElementById("cred-username").value.trim() || null,
-        secret: secretInput.value,
+        name: document.getElementById("cs-name").value.trim(),
+        ssh_username: document.getElementById("cs-ssh-user").value.trim() || null,
+        ssh_password: password || null,
+        ssh_private_key: key || null,
+        expert_password: expertInput.value || null,
+        api_key: apiInput.value || null,
       }),
     });
-    secretInput.value = ""; // never keep the secret around in the form
-    await Promise.all([loadCredentials(), loadServers()]);
+    // Secrets never linger in the form.
+    for (const i of [pwInput, keyInput, expertInput, apiInput]) i.value = "";
+    await Promise.all([loadCredentialSets(), loadServers()]);
   } catch (e) {
     toast("Save failed: " + e.message);
   }
@@ -1210,7 +1246,7 @@ async function pollJobs() {
   await initAuth(); // establish session state (logout control, idle timer) first
   const envs = await loadEnvironments(); // must resolve currentEnv before env-scoped loads
   await refreshStatus();
-  await Promise.all([loadServers(), loadPackages(), loadCredentials(), loadJobs()]);
+  await Promise.all([loadServers(), loadPackages(), loadCredentialSets(), loadJobs()]);
   pollJobs();
   await maybeShowWelcome(envs);
 })();

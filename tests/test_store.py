@@ -8,7 +8,7 @@ import pytest
 from chkp_cpuse_orch.errors import StoreError
 from chkp_cpuse_orch.store import (
     _MIGRATIONS,
-    CredentialRecord,
+    CredentialSetRow,
     EnvHostRow,
     JobRecord,
     JobStatus,
@@ -127,29 +127,48 @@ def test_events_append_and_resume_from_seq(store: Store) -> None:
     assert [e.seq for e in store.events(job.id, after_seq=e1.seq)] == [e2.seq]
 
 
-def test_credential_upsert_get_delete(store: Store) -> None:
-    rec = CredentialRecord(host="mgmt-01", kind="ssh_password", username="admin", ciphertext=b"x")
-    store.upsert_credential(rec)
-    # Upsert on same (host, kind) replaces ciphertext/username.
-    store.upsert_credential(
-        CredentialRecord(host="mgmt-01", kind="ssh_password", username="admin2", ciphertext=b"y")
+def test_credential_set_crud(store: Store) -> None:
+    store.insert_environment("default", credential_storage_enabled=True)
+    store.upsert_credential_set(
+        CredentialSetRow(
+            environment="default", name="primary", ssh_username="admin", ssh_password_ct=b"ct"
+        )
     )
-    loaded = store.get_credential("mgmt-01", "ssh_password")
-    assert loaded is not None
-    assert loaded.username == "admin2"
-    assert loaded.ciphertext == b"y"
-    assert len(store.list_credentials()) == 1
-    assert store.delete_credential("mgmt-01", "ssh_password") is True
-    assert store.delete_credential("mgmt-01", "ssh_password") is False
-    assert store.get_credential("mgmt-01", "ssh_password") is None
+    got = store.get_credential_set_by_name("default", "primary")
+    assert got is not None and got.ssh_password_ct == b"ct" and got.ssh_username == "admin"
+    # Upsert on the same (environment, name) replaces every secret column.
+    store.upsert_credential_set(
+        CredentialSetRow(environment="default", name="primary", ssh_private_key_ct=b"key")
+    )
+    got = store.get_credential_set_by_name("default", "primary")
+    assert got is not None and got.ssh_password_ct is None and got.ssh_private_key_ct == b"key"
+    assert len(store.list_credential_sets("default")) == 1
+    assert store.delete_credential_set("default", "primary") is True
+    assert store.delete_credential_set("default", "primary") is False
 
 
-def test_list_credentials_filters_by_host(store: Store) -> None:
-    store.upsert_credential(CredentialRecord(host="a", kind="ssh_password", ciphertext=b"1"))
-    store.upsert_credential(CredentialRecord(host="a", kind="api_key", ciphertext=b"2"))
-    store.upsert_credential(CredentialRecord(host="b", kind="ssh_password", ciphertext=b"3"))
-    assert len(store.list_credentials("a")) == 2
-    assert len(store.list_credentials()) == 3
+def test_assign_credential_set_and_fk_set_null(store: Store) -> None:
+    store.insert_environment("default", credential_storage_enabled=True)
+    store.upsert_env_host(
+        EnvHostRow(environment="default", name="mgmt-01", address="1.2.3.4", role="management")
+    )
+    store.upsert_credential_set(
+        CredentialSetRow(environment="default", name="primary", ssh_password_ct=b"ct")
+    )
+    set_id = store.get_credential_set_by_name("default", "primary").id  # type: ignore[union-attr]
+
+    assert store.assign_credential_set("default", "mgmt-01", set_id) is True
+    assert store.list_env_hosts("default")[0].credential_set_id == set_id
+    # A server edit must not clear the assignment.
+    store.upsert_env_host(
+        EnvHostRow(environment="default", name="mgmt-01", address="9.9.9.9", role="management")
+    )
+    assert store.list_env_hosts("default")[0].credential_set_id == set_id
+    # Deleting the set auto-unassigns via ON DELETE SET NULL.
+    store.delete_credential_set("default", "primary")
+    assert store.list_env_hosts("default")[0].credential_set_id is None
+    # Assigning against an unknown server reports no row updated.
+    assert store.assign_credential_set("default", "ghost", None) is False
 
 
 def test_package_roundtrip_and_unique_filename(store: Store) -> None:
@@ -260,8 +279,8 @@ def test_duplicate_environment_raises(store: Store) -> None:
 def test_rename_environment_moves_children(store: Store) -> None:
     store.insert_environment("corp")
     store.upsert_env_host(EnvHostRow(environment="corp", name="m1", address="10.0.0.1", role="mds"))
-    store.upsert_credential(
-        CredentialRecord(environment="corp", host="m1", kind="ssh_password", ciphertext=b"x")
+    store.upsert_credential_set(
+        CredentialSetRow(environment="corp", name="primary", ssh_password_ct=b"x")
     )
     store.insert_job(JobRecord(kind="cpuse.import", target="m1", environment="corp"))
 
@@ -269,8 +288,8 @@ def test_rename_environment_moves_children(store: Store) -> None:
 
     assert store.environment_exists("corp") is False
     assert [h.name for h in store.list_env_hosts("Corp HQ")] == ["m1"]
-    assert len(store.list_credentials(environment="Corp HQ")) == 1
-    assert store.list_credentials(environment="corp") == []
+    assert len(store.list_credential_sets("Corp HQ")) == 1
+    assert store.list_credential_sets("corp") == []
     jobs = store.list_jobs()
     assert jobs and all(j.environment == "Corp HQ" for j in jobs)
 

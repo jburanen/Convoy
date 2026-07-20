@@ -2,8 +2,8 @@
 
 Both the CPUSE-local subsystem (patching.py) and the CDT subsystem (cdt_ops.py)
 connect to management servers the same way: resolve the host from inventory,
-require an SSH credential (host-specific, falling back to the "*" fleet-wide
-default), and open a transport via a swappable factory (tests inject fakes).
+require the SSH credential from the named credential set assigned to that server,
+and open a transport via a swappable factory (tests inject fakes).
 """
 
 from __future__ import annotations
@@ -91,24 +91,22 @@ class HostConnector:
             )
         return host
 
-    def credential_kinds(self, host_name: str) -> list[str]:
-        """Which credential kinds are stored for a host (secret-free). Always
-        empty for a storage-disabled environment — nothing is persisted."""
+    def assigned_credential(self, host_name: str) -> str | None:
+        """Name of the credential set assigned to a server (secret-free), or None.
+        Always None for a storage-disabled environment — nothing is persisted."""
         if self._credentials is None or not self.credential_storage_enabled:
-            return []
-        return [
-            info.kind.value
-            for info in self._credentials.list(environment=self.environment)
-            if info.host == host_name
-        ]
+            return None
+        host = self.inventory.host(host_name)  # raises InventoryError if unknown
+        if host.credential_set_id is None:
+            return None
+        return self._credentials.set_name(host.credential_set_id)
 
     def require_ssh_credential(self, host: Host) -> None:
-        creds = self.host_credentials(host)
+        creds = self.host_credentials(host)  # raises if unassigned / store locked
         if CredentialKind.SSH_PASSWORD not in creds and CredentialKind.SSH_PRIVATE_KEY not in creds:
             raise CredentialError(
-                f"no SSH credential stored for {host.name!r} in environment "
-                f"{self.environment!r} — add an ssh_password or ssh_private_key "
-                "credential first"
+                f"the credential set assigned to {host.name!r} has no SSH password or "
+                "private key — edit the set on the Provisioning tab"
             )
 
     def require_credentials(
@@ -133,11 +131,12 @@ class HostConnector:
             raise CredentialError(
                 "credential store is locked — set the master key and restart the service"
             )
-        creds = self._credentials.for_host(host.name, environment=self.environment)
-        if not creds:
-            # Environment-wide default, if any. Never crosses environments.
-            creds = self._credentials.for_host("*", environment=self.environment)
-        return creds
+        if host.credential_set_id is None:
+            raise CredentialError(
+                f"no credential assigned to {host.name!r} in environment "
+                f"{self.environment!r} — assign a credential set on the Management tab"
+            )
+        return self._credentials.get_set_bundle(host.credential_set_id, host.name)
 
     def connect(self, host: Host, creds: CredentialBundle | None = None) -> Transport:
         """Open a transport. ``creds`` supplies explicit credentials (storage-

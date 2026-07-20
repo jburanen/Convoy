@@ -88,9 +88,11 @@
     <section id="credentials">
       <h2>Credentials</h2>
       <p class="hint">
-        Stored encrypted at rest; secrets are never displayed again after saving.
-        Host <code>*</code> acts as a fleet-wide default. Gaia auth is typically an
-        SSH password (admin) — add an expert password if privileged steps need it.
+        Named <strong>login sets</strong>, stored encrypted at rest; secrets are never
+        displayed again after saving. Give one an SSH password <em>or</em> a private key
+        (plus an optional expert password for privileged CPUSE steps), then assign it to
+        servers on the <strong>Management</strong> tab. One set can be assigned to many
+        servers.
       </p>
       <p class="hint warn hidden" id="cred-storage-notice">
         Credential storage is <strong>disabled</strong> for this environment, so
@@ -98,22 +100,18 @@
         an action; they stay in memory only until it finishes. Enable storage from
         the environment picker → <strong>Manage Environments…</strong>.
       </p>
-      <form id="credential-form">
-        <input type="text" id="cred-host" placeholder="host name (or *)" required list="server-names">
-        <datalist id="server-names"></datalist>
-        <select id="cred-kind">
-          <option value="ssh_password">SSH password</option>
-          <option value="ssh_private_key">SSH private key</option>
-          <option value="expert_password">Expert password</option>
-          <option value="api_key">API key</option>
-        </select>
-        <input type="text" id="cred-username" placeholder="username (optional)">
-        <input type="password" id="cred-secret" placeholder="secret" required>
-        <button type="submit">Save</button>
+      <form id="credential-form" class="stacked">
+        <label>Name<input type="text" id="cs-name" placeholder="e.g. primary-admin" required></label>
+        <label>SSH username<input type="text" id="cs-ssh-user" placeholder="admin"></label>
+        <label>SSH password<input type="password" id="cs-ssh-password" autocomplete="new-password"></label>
+        <label>SSH private key (instead of a password)<textarea id="cs-ssh-key" rows="3" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea></label>
+        <label>Expert password (optional)<input type="password" id="cs-expert" autocomplete="new-password"></label>
+        <label>API key (optional)<input type="password" id="cs-api" autocomplete="new-password"></label>
+        <button type="submit">Save credential set</button>
       </form>
       <table id="credentials-table">
         <thead>
-          <tr><th>Host</th><th>Kind</th><th>Username</th><th></th></tr>
+          <tr><th>Name</th><th>SSH user</th><th>SSH auth</th><th>Expert</th><th>API</th><th></th></tr>
         </thead>
         <tbody><!-- tpl-credential-row instances --></tbody>
       </table>
@@ -124,8 +122,9 @@
       <p class="hint">
         The inventory of the environment selected in the top-right picker. Add or
         remove servers here; patching actions live on the <strong>Management</strong>
-        tab. A server is ready once an SSH credential is stored for it. To create
-        another environment, use the picker's <strong>New Environment…</strong> entry.
+        tab. A server is ready once a credential set is assigned to it (assign on the
+        Management tab). To create another environment, use the picker's
+        <strong>New Environment…</strong> entry.
       </p>
       <table id="servers-info-table">
         <thead>
@@ -135,7 +134,7 @@
             <th>Role</th>
             <th>SSH user</th>
             <th>Port</th>
-            <th>Stored credentials</th>
+            <th>Credential set</th>
             <th></th>
           </tr>
         </thead>
@@ -214,7 +213,7 @@
           <tr>
             <th>Server</th>
             <th>Address</th>
-            <th>Credentials</th>
+            <th>Credential set</th>
             <th>CPUSE state</th>
             <th>Actions</th>
           </tr>
@@ -422,7 +421,11 @@
   <tr>
     <td class="srv-name"></td>
     <td class="srv-address mono"></td>
-    <td class="srv-creds"></td>
+    <td class="srv-creds">
+      <select class="srv-cred-select" title="assign a credential set to this server">
+        <option value="">— none —</option>
+      </select>
+    </td>
     <td class="srv-state">
       <button class="btn-refresh small">Refresh</button>
       <div class="srv-agent muted"></div>
@@ -473,9 +476,11 @@
 
 <template id="tpl-credential-row">
   <tr>
-    <td class="cred-host"></td>
-    <td class="cred-kind"></td>
-    <td class="cred-username"></td>
+    <td class="cs-name"></td>
+    <td class="cs-user"></td>
+    <td class="cs-auth"></td>
+    <td class="cs-expert"></td>
+    <td class="cs-api"></td>
     <td><button class="btn-delete small danger">Delete</button></td>
   </tr>
 </template>

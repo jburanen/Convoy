@@ -21,7 +21,8 @@ UI is the primary interface (see [[architecture]]); the CLI is secondary.
 
 ## Decisions locked (2026-07-17)
 - **Gaia auth = both/mixed.** SSH key for the transport; admin **password** for
-  privileged installer/expert steps. The credential store holds both per host.
+  privileged installer/expert steps. Both live together in a named **login set**
+  assigned to the server (migration v8; see [[credential-sets]]).
 - **Web-primary, CLI-secondary.** Invest in the web + job-runner model as the main
   experience; CLI is a thin secondary caller of the same `services/` core.
 - **Environments are DB-backed and UI-editable** (v0.4.0). `environments` +

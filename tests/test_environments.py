@@ -8,7 +8,18 @@ from chkp_cpuse_orch.config import Config, EnvironmentDef, Paths
 from chkp_cpuse_orch.errors import InventoryError
 from chkp_cpuse_orch.services.common import EnvironmentRegistry
 from chkp_cpuse_orch.services.environments import EnvironmentManager
-from chkp_cpuse_orch.store import CredentialRecord, Store
+from chkp_cpuse_orch.store import CredentialSetRow, Store
+
+
+def _set(store: Store, environment: str, name: str = "primary") -> str:
+    """Insert a minimal credential set and return its id."""
+    store.upsert_credential_set(
+        CredentialSetRow(environment=environment, name=name, ssh_password_ct=b"ct")
+    )
+    row = store.get_credential_set_by_name(environment, name)
+    assert row is not None
+    return row.id
+
 
 INVENTORY_YAML = """\
 sites:
@@ -120,26 +131,46 @@ def test_delete_environment_removes_from_registry(store: Store) -> None:
         mgr.delete_environment("corp")
 
 
-def test_delete_environment_purges_credentials(store: Store) -> None:
+def test_delete_environment_purges_credential_sets(store: Store) -> None:
     # Guard against credential resurrection: a same-named env created later must
     # NOT inherit the deleted environment's secrets.
     mgr = _manager(store, EnvironmentRegistry())
     mgr.create_environment("corp")
-    store.upsert_credential(
-        CredentialRecord(environment="corp", host="m1", kind="ssh_password", ciphertext=b"x")
-    )
-    # A credential in a different environment must survive the delete.
-    store.upsert_credential(
-        CredentialRecord(environment="other", host="m1", kind="ssh_password", ciphertext=b"y")
-    )
+    _set(store, "corp")
+    mgr.create_environment("other")
+    _set(store, "other")  # a set in a different environment must survive
     mgr.delete_environment("corp")
 
-    assert store.list_credentials(environment="corp") == []
-    assert len(store.list_credentials(environment="other")) == 1
+    assert store.list_credential_sets("corp") == []
+    assert len(store.list_credential_sets("other")) == 1
 
-    # Recreate the name — it starts with no credentials.
+    # Recreate the name — it starts with no credential sets.
     mgr.create_environment("corp")
-    assert store.list_credentials(environment="corp") == []
+    assert store.list_credential_sets("corp") == []
+
+
+def test_assign_credential_set_to_server(store: Store) -> None:
+    registry = EnvironmentRegistry()
+    mgr = _manager(store, registry)
+    mgr.create_environment("corp")
+    mgr.set_credential_storage("corp", True)
+    mgr.add_server("corp", name="m1", address="10.0.0.1", role="management", ssh_user="admin")
+    _set(store, "corp", "primary")
+
+    mgr.assign_credential("corp", "m1", "primary")
+    assert store.list_env_hosts("corp")[0].credential_set_id is not None
+    # The live registry reflects the assignment (Host carries the set id).
+    assert registry.get("corp").management_servers()[0].credential_set_id is not None
+
+    # Unknown set / server are rejected.
+    with pytest.raises(InventoryError, match="credential set 'nope' not found"):
+        mgr.assign_credential("corp", "m1", "nope")
+    with pytest.raises(InventoryError, match="server 'ghost' not found"):
+        mgr.assign_credential("corp", "ghost", "primary")
+
+    # Clearing the assignment.
+    mgr.assign_credential("corp", "m1", None)
+    assert store.list_env_hosts("corp")[0].credential_set_id is None
 
 
 def test_rename_environment_moves_everything(store: Store) -> None:
@@ -147,16 +178,14 @@ def test_rename_environment_moves_everything(store: Store) -> None:
     mgr = _manager(store, registry)
     mgr.create_environment("corp")
     mgr.add_server("corp", name="m1", address="10.0.0.1", role="management", ssh_user="admin")
-    store.upsert_credential(
-        CredentialRecord(environment="corp", host="m1", kind="ssh_password", ciphertext=b"x")
-    )
+    _set(store, "corp")
 
     assert mgr.rename_environment("corp", "  Corp HQ ") == "Corp HQ"
 
     assert [e.name for e in store.list_environments()] == ["Corp HQ"]
     assert [h.name for h in store.list_env_hosts("Corp HQ")] == ["m1"]
-    assert len(store.list_credentials(environment="Corp HQ")) == 1
-    assert store.list_credentials(environment="corp") == []
+    assert len(store.list_credential_sets("Corp HQ")) == 1
+    assert store.list_credential_sets("corp") == []
     assert registry.names() == ["Corp HQ"]
     assert [h.name for h in registry.get("Corp HQ").management_servers()] == ["m1"]
 

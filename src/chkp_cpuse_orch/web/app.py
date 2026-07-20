@@ -33,8 +33,8 @@ from ..config import Config
 from ..credentials import (
     Credential,
     CredentialBundle,
-    CredentialInfo,
     CredentialKind,
+    CredentialSetInfo,
     CredentialStore,
     JobCredentialVault,
     load_master_key,
@@ -131,11 +131,22 @@ async def _reap_idle_sessions(
 # -- request/response bodies -------------------------------------------------------
 
 
-class CredentialIn(BaseModel):
-    host: str
-    kind: CredentialKind
-    username: str | None = None
-    secret: str = Field(min_length=1)
+class CredentialSetIn(BaseModel):
+    """Create/replace a named login set. Exactly one SSH secret (password or
+    private key) is expected; expert password and API key are optional."""
+
+    name: str = Field(min_length=1)
+    ssh_username: str | None = None
+    ssh_password: SecretStr | None = None
+    ssh_private_key: SecretStr | None = None
+    expert_password: SecretStr | None = None
+    api_key: SecretStr | None = None
+
+
+class CredentialAssignmentIn(BaseModel):
+    """Assign a credential set (by name) to a server, or clear it with null."""
+
+    set: str | None = None
 
 
 class JobCredentialIn(BaseModel):
@@ -653,7 +664,7 @@ def _register_routes(app: FastAPI) -> None:
                     "address": h.address,
                     "role": h.role.value,
                     "ssh_user": h.ssh_user,
-                    "credentials": service.credential_kinds(env, h.name),
+                    "credential_set": service.assigned_credential(env, h.name),
                 }
                 for h in service.management_servers(env)
             ]
@@ -748,15 +759,15 @@ def _register_routes(app: FastAPI) -> None:
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
-    # -- credentials (environment-scoped; never echo secrets) -------------------
+    # -- credential sets (named login objects; environment-scoped) --------------
 
     @app.get("/api/env/{env}/credentials")
-    def list_credentials(env: str, request: Request) -> list[CredentialInfo]:
+    def list_credential_sets(env: str, request: Request) -> list[CredentialSetInfo]:
         _require_env(request, env)
-        return _credentials_or_503(request).list(environment=env)
+        return _credentials_or_503(request).list_sets(env)
 
     @app.put("/api/env/{env}/credentials", status_code=201)
-    def put_credential(env: str, body: CredentialIn, request: Request) -> CredentialInfo:
+    def put_credential_set(env: str, body: CredentialSetIn, request: Request) -> CredentialSetInfo:
         _require_env(request, env)
         if request.app.state.auth is None:
             raise HTTPException(
@@ -771,25 +782,38 @@ def _register_routes(app: FastAPI) -> None:
                 "enable it first, or supply credentials per operation",
             )
         store = _credentials_or_503(request)
+
+        def _reveal(value: SecretStr | None) -> str | None:
+            return value.get_secret_value() if value is not None else None
+
         try:
-            return store.put(
-                Credential(
-                    host=body.host,
-                    kind=body.kind,
-                    username=body.username,
-                    secret=SecretStr(body.secret),
-                    environment=env,
-                )
+            return store.put_set(
+                env,
+                body.name,
+                ssh_username=body.ssh_username,
+                ssh_password=_reveal(body.ssh_password),
+                ssh_private_key=_reveal(body.ssh_private_key),
+                expert_password=_reveal(body.expert_password),
+                api_key=_reveal(body.api_key),
             )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
-    @app.delete("/api/env/{env}/credentials/{host}/{kind}")
-    def delete_credential(
-        env: str, host: str, kind: CredentialKind, request: Request
-    ) -> dict[str, bool]:
+    @app.delete("/api/env/{env}/credentials/{name}")
+    def delete_credential_set(env: str, name: str, request: Request) -> dict[str, bool]:
         _require_env(request, env)
-        return {"deleted": _credentials_or_503(request).delete(host, kind, environment=env)}
+        return {"deleted": _credentials_or_503(request).delete_set(env, name)}
+
+    @app.post("/api/env/{env}/servers/{name}/credential")
+    def assign_credential(
+        env: str, name: str, body: CredentialAssignmentIn, request: Request
+    ) -> dict[str, str | None]:
+        """Assign a credential set (by name) to a management server, or clear it."""
+        try:
+            _envmgr(request).assign_credential(env, name, body.set)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        return {"credential_set": body.set}
 
     # -- CDT (gateway fleet, driven from a management server) --------------------
 

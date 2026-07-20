@@ -117,17 +117,23 @@ class EnvHostRow(BaseModel):
     ssh_port: int = 22
     ssh_user: str = "admin"
     notes: str | None = None
+    # Assigned credential set (credential_sets.id), or None when unassigned.
+    credential_set_id: str | None = None
 
 
-class CredentialRecord(BaseModel):
-    """Ciphertext row — the store never sees plaintext secrets."""
+class CredentialSetRow(BaseModel):
+    """A named "login set" — ciphertext only; the store never sees plaintext.
+    Each secret column is Fernet ciphertext (or None when that secret is unset).
+    One of ssh_password_ct / ssh_private_key_ct is expected in practice."""
 
     id: str = Field(default_factory=new_id)
     environment: str = "default"  # credential namespaces are per-environment
-    host: str  # inventory Host.name, or "*" for an environment-wide default
-    kind: str  # CredentialKind value; kept as str so the schema stays dumb
-    username: str | None = None
-    ciphertext: bytes
+    name: str  # operator-chosen label, unique within the environment
+    ssh_username: str | None = None
+    ssh_password_ct: bytes | None = None
+    ssh_private_key_ct: bytes | None = None
+    expert_password_ct: bytes | None = None
+    api_key_ct: bytes | None = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -269,6 +275,32 @@ _MIGRATIONS: tuple[str, ...] = (
     );
     CREATE INDEX idx_sessions_last_seen ON sessions (last_seen_at);
     """,
+    # v8: credentials become named "login set" objects assigned to servers, instead
+    # of being keyed by host. This WIPES the old per-host credentials table (operator
+    # chose re-entry over migration); sets are recreated in the new UI. env_hosts
+    # gains a credential_set_id FK (ON DELETE SET NULL → deleting a set auto-unassigns
+    # its servers; foreign_keys pragma is on per connection).
+    """
+    DROP TABLE credentials;
+
+    CREATE TABLE credential_sets (
+        id                 TEXT PRIMARY KEY,
+        environment        TEXT NOT NULL REFERENCES environments (name) ON DELETE CASCADE,
+        name               TEXT NOT NULL,
+        ssh_username       TEXT,
+        ssh_password_ct    BLOB,
+        ssh_private_key_ct BLOB,
+        expert_password_ct BLOB,
+        api_key_ct         BLOB,
+        created_at         TEXT NOT NULL,
+        updated_at         TEXT NOT NULL,
+        UNIQUE (environment, name)
+    );
+    CREATE INDEX idx_credential_sets_env ON credential_sets (environment);
+
+    ALTER TABLE env_hosts ADD COLUMN credential_set_id TEXT
+        REFERENCES credential_sets (id) ON DELETE SET NULL;
+    """,
 )
 
 
@@ -320,75 +352,92 @@ class Store:
                 (key, value),
             )
 
-    # -- credentials (ciphertext only) ----------------------------------------
+    # -- credential sets (named login objects; ciphertext only) ----------------
 
-    def upsert_credential(self, rec: CredentialRecord) -> CredentialRecord:
+    _CRED_SET_COLS = (
+        "id, environment, name, ssh_username, ssh_password_ct, ssh_private_key_ct,"
+        " expert_password_ct, api_key_ct, created_at, updated_at"
+    )
+
+    def upsert_credential_set(self, rec: CredentialSetRow) -> CredentialSetRow:
+        """Create or replace a named credential set (keyed by environment+name).
+        All secret columns are overwritten, so the caller passes the full set."""
         now = utcnow()
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO credentials (id, environment, host, kind, username, ciphertext,"
-                " created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT (environment, host, kind) DO UPDATE SET"
-                " username = excluded.username, ciphertext = excluded.ciphertext,"
+                f"INSERT INTO credential_sets ({self._CRED_SET_COLS})"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT (environment, name) DO UPDATE SET"
+                " ssh_username = excluded.ssh_username,"
+                " ssh_password_ct = excluded.ssh_password_ct,"
+                " ssh_private_key_ct = excluded.ssh_private_key_ct,"
+                " expert_password_ct = excluded.expert_password_ct,"
+                " api_key_ct = excluded.api_key_ct,"
                 " updated_at = excluded.updated_at",
                 (
                     rec.id,
                     rec.environment,
-                    rec.host,
-                    rec.kind,
-                    rec.username,
-                    rec.ciphertext,
+                    rec.name,
+                    rec.ssh_username,
+                    rec.ssh_password_ct,
+                    rec.ssh_private_key_ct,
+                    rec.expert_password_ct,
+                    rec.api_key_ct,
                     rec.created_at.isoformat(),
                     now.isoformat(),
                 ),
             )
-        stored = self.get_credential(rec.host, rec.kind, environment=rec.environment)
+        stored = self.get_credential_set_by_name(rec.environment, rec.name)
         assert stored is not None  # just written
         return stored
 
-    def get_credential(
-        self, host: str, kind: str, environment: str = "default"
-    ) -> CredentialRecord | None:
+    def get_credential_set(self, set_id: str) -> CredentialSetRow | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM credential_sets WHERE id = ?", (set_id,)).fetchone()
+        return None if row is None else _credential_set_from_row(row)
+
+    def get_credential_set_by_name(self, environment: str, name: str) -> CredentialSetRow | None:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT * FROM credentials WHERE environment = ? AND host = ? AND kind = ?",
-                (environment, host, kind),
+                "SELECT * FROM credential_sets WHERE environment = ? AND name = ?",
+                (environment, name),
             ).fetchone()
-        return None if row is None else _credential_from_row(row)
+        return None if row is None else _credential_set_from_row(row)
 
-    def list_credentials(
-        self, host: str | None = None, environment: str | None = None
-    ) -> list[CredentialRecord]:
-        query = "SELECT * FROM credentials"
-        clauses: list[str] = []
-        args: list[Any] = []
-        if host is not None:
-            clauses.append("host = ?")
-            args.append(host)
-        if environment is not None:
-            clauses.append("environment = ?")
-            args.append(environment)
-        if clauses:
-            query += " WHERE " + " AND ".join(clauses)
-        query += " ORDER BY environment, host, kind"
+    def list_credential_sets(self, environment: str) -> list[CredentialSetRow]:
         with self._connect() as conn:
-            rows = conn.execute(query, tuple(args)).fetchall()
-        return [_credential_from_row(r) for r in rows]
+            rows = conn.execute(
+                "SELECT * FROM credential_sets WHERE environment = ? ORDER BY name",
+                (environment,),
+            ).fetchall()
+        return [_credential_set_from_row(r) for r in rows]
 
-    def delete_credential(self, host: str, kind: str, environment: str = "default") -> bool:
+    def delete_credential_set(self, environment: str, name: str) -> bool:
+        """Delete a set. Any env_hosts pointing at it are auto-unassigned by the
+        ON DELETE SET NULL foreign key (foreign_keys pragma is on per connection)."""
         with self._connect() as conn:
             cur = conn.execute(
-                "DELETE FROM credentials WHERE environment = ? AND host = ? AND kind = ?",
-                (environment, host, kind),
+                "DELETE FROM credential_sets WHERE environment = ? AND name = ?",
+                (environment, name),
             )
         return cur.rowcount > 0
 
-    def delete_environment_credentials(self, environment: str) -> int:
-        """Purge every credential in an environment. Operates on ciphertext rows,
-        so it works even when the credential store is locked. Returns the count."""
+    def delete_environment_credential_sets(self, environment: str) -> int:
+        """Purge every credential set in an environment (servers auto-unassign via
+        the FK). Works on ciphertext rows, so it runs even with the store locked."""
         with self._connect() as conn:
-            cur = conn.execute("DELETE FROM credentials WHERE environment = ?", (environment,))
+            cur = conn.execute("DELETE FROM credential_sets WHERE environment = ?", (environment,))
         return cur.rowcount
+
+    def assign_credential_set(self, environment: str, host_name: str, set_id: str | None) -> bool:
+        """Point a management server at a credential set (or ``None`` to clear).
+        Returns False if the server doesn't exist in the environment."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE env_hosts SET credential_set_id = ? WHERE environment = ? AND name = ?",
+                (set_id, environment, host_name),
+            )
+        return cur.rowcount > 0
 
     # -- environments + their management servers (DB-backed inventory) ----------
 
@@ -433,11 +482,12 @@ class Store:
         return cur.rowcount > 0
 
     def rename_environment(self, old: str, new: str) -> bool:
-        """Rename an environment, moving its servers, credentials, and job
+        """Rename an environment, moving its servers, credential sets, and job
         history along in ONE transaction (the FK is ON DELETE CASCADE only, so
         this is insert-new / move-children / delete-old rather than a PK
-        update). Returns False if ``old`` doesn't exist; raises
-        sqlite3.IntegrityError if ``new`` is already taken."""
+        update). Server→set assignments survive because set ids are unchanged.
+        Returns False if ``old`` doesn't exist; raises sqlite3.IntegrityError if
+        ``new`` is already taken."""
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT created_at, credential_storage_enabled FROM environments WHERE name = ?",
@@ -451,7 +501,9 @@ class Store:
                 (new, row["created_at"], row["credential_storage_enabled"]),
             )
             conn.execute("UPDATE env_hosts SET environment = ? WHERE environment = ?", (new, old))
-            conn.execute("UPDATE credentials SET environment = ? WHERE environment = ?", (new, old))
+            conn.execute(
+                "UPDATE credential_sets SET environment = ? WHERE environment = ?", (new, old)
+            )
             conn.execute("UPDATE jobs SET environment = ? WHERE environment = ?", (new, old))
             conn.execute("DELETE FROM environments WHERE name = ?", (old,))
         return True
@@ -762,6 +814,7 @@ def _env_host_from_row(row: sqlite3.Row) -> EnvHostRow:
         ssh_port=row["ssh_port"],
         ssh_user=row["ssh_user"],
         notes=row["notes"],
+        credential_set_id=row["credential_set_id"],
     )
 
 
@@ -777,14 +830,16 @@ def _package_from_row(row: sqlite3.Row) -> PackageRecord:
     )
 
 
-def _credential_from_row(row: sqlite3.Row) -> CredentialRecord:
-    return CredentialRecord(
+def _credential_set_from_row(row: sqlite3.Row) -> CredentialSetRow:
+    return CredentialSetRow(
         id=row["id"],
         environment=row["environment"],
-        host=row["host"],
-        kind=row["kind"],
-        username=row["username"],
-        ciphertext=row["ciphertext"],
+        name=row["name"],
+        ssh_username=row["ssh_username"],
+        ssh_password_ct=row["ssh_password_ct"],
+        ssh_private_key_ct=row["ssh_private_key_ct"],
+        expert_password_ct=row["expert_password_ct"],
+        api_key_ct=row["api_key_ct"],
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
     )

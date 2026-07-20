@@ -361,6 +361,23 @@ button.secondary:hover { color: var(--text); filter: none; }
   white-space: pre-wrap;
 }
 
+/* ---- credential-set form (stacked login-set fields) ---- */
+#credential-form.stacked {
+  flex-direction: column;
+  align-items: stretch;
+  max-width: 32rem;
+}
+#credential-form.stacked label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.9rem;
+}
+#credential-form.stacked input,
+#credential-form.stacked textarea { width: 100%; }
+#credential-form.stacked textarea { font-family: var(--mono); resize: vertical; }
+.srv-cred-select { max-width: 14rem; }
+
 /* ---- login page (login.html) ---- */
 #login-card {
   max-width: 22rem;

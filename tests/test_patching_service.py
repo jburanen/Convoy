@@ -34,16 +34,21 @@ def store(tmp_path: Path) -> Store:
 
 @pytest.fixture
 def creds(store: Store) -> CredentialStore:
+    # credential_sets.environment FKs to environments; create the env row first.
+    store.insert_environment("default", credential_storage_enabled=True)
     cs = CredentialStore(store, master_key="unit test master key")
-    cs.put(
-        Credential(
-            host="mgmt-01",
-            kind=CredentialKind.SSH_PASSWORD,
-            username="admin",
-            secret=SecretStr("gaia-pw"),
-        )
-    )
+    cs.put_set("default", "primary", ssh_username="admin", ssh_password="gaia-pw")
     return cs
+
+
+def _assign(store: Store, inventory: Inventory, host_name: str, set_name: str = "primary") -> None:
+    """Point an inventory Host at a credential set by id (the resolution key)."""
+    row = store.get_credential_set_by_name("default", set_name)
+    assert row is not None
+    for site in inventory.sites:
+        for host in site.hosts:
+            if host.name == host_name:
+                host.credential_set_id = row.id
 
 
 @pytest.fixture
@@ -87,6 +92,7 @@ def service(
     inventory: Inventory,
     transport: FakeTransport,
 ) -> PatchingService:
+    _assign(store, inventory, "mgmt-01")  # mgmt-01 gets the "primary" set; mgmt-02 stays unassigned
     registry = EnvironmentRegistry()
     registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
     return PatchingService(
@@ -118,13 +124,13 @@ def test_detect_parses_live_state_and_closes(
 
 
 def test_detect_requires_credentials(service: PatchingService) -> None:
-    with pytest.raises(CredentialError, match="no SSH credential"):
-        service.detect("default", "mgmt-02")  # inventory has it, credential store doesn't
+    with pytest.raises(CredentialError, match="no credential assigned"):
+        service.detect("default", "mgmt-02")  # in inventory, but no set assigned
 
 
-def test_credential_kinds_secret_free_summary(service: PatchingService) -> None:
-    assert service.credential_kinds("default", "mgmt-01") == ["ssh_password"]
-    assert service.credential_kinds("default", "mgmt-02") == []
+def test_assigned_credential_summary(service: PatchingService) -> None:
+    assert service.assigned_credential("default", "mgmt-01") == "primary"
+    assert service.assigned_credential("default", "mgmt-02") is None
 
 
 # -- submission validation --------------------------------------------------------
@@ -223,25 +229,25 @@ def test_failed_installer_command_fails_the_job(
     assert finished.error is not None and "CPUSE" in finished.error
 
 
-# -- fleet-wide credential fallback ----------------------------------------------
+# -- a credential set reused across servers --------------------------------------
 
 
-def test_wildcard_credential_fallback(
+def test_credential_set_shared_across_servers(
     store: Store,
     creds: CredentialStore,
     packages: PackageStore,
     inventory: Inventory,
     transport: FakeTransport,
 ) -> None:
-    creds.put(Credential(host="*", kind=CredentialKind.SSH_PASSWORD, secret=SecretStr("fleet-pw")))
+    # One set assigned to two servers is the replacement for the old "*" default.
+    _assign(store, inventory, "mgmt-01")
+    _assign(store, inventory, "mgmt-02")
     registry = EnvironmentRegistry()
     registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
     service = PatchingService(
         registry=registry, packages=packages, runner=JobRunner(store), vault=JobCredentialVault()
     )
-    # mgmt-02 has no host-specific credential; the "*" default satisfies it.
-    detected = service.detect("default", "mgmt-02")
-    assert detected.agent_build == DA_BUILD
+    assert service.detect("default", "mgmt-02").agent_build == DA_BUILD
 
 
 # -- storage-disabled environments (credentials supplied per job, in memory) ------
@@ -316,26 +322,21 @@ def test_storage_disabled_job_credentials_discarded_even_on_failure(
     assert vault.get(job.id) is None  # cleared regardless of outcome
 
 
-def test_wildcard_credential_never_crosses_environments(
+def test_set_in_other_environment_does_not_satisfy_unassigned_server(
     store: Store,
     creds: CredentialStore,
     packages: PackageStore,
     inventory: Inventory,
     transport: FakeTransport,
 ) -> None:
-    # A "*" credential stored in another environment must NOT satisfy this one.
-    creds.put(
-        Credential(
-            host="*",
-            kind=CredentialKind.SSH_PASSWORD,
-            secret=SecretStr("other-env-pw"),
-            environment="other",
-        )
-    )
+    # A credential set in another environment must NOT satisfy an unassigned
+    # server here — resolution is strictly per-server assignment.
+    store.insert_environment("other")
+    creds.put_set("other", "primary", ssh_password="other-env-pw")
     registry = EnvironmentRegistry()
     registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
     service = PatchingService(
         registry=registry, packages=packages, runner=JobRunner(store), vault=JobCredentialVault()
     )
-    with pytest.raises(CredentialError, match="no SSH credential"):
+    with pytest.raises(CredentialError, match="no credential assigned"):
         service.detect("default", "mgmt-02")

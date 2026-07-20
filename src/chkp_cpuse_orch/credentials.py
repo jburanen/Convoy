@@ -27,7 +27,7 @@ from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from pydantic import BaseModel, SecretStr
 
 from .errors import CredentialError
-from .store import CredentialRecord, Store
+from .store import CredentialSetRow, Store
 
 MASTER_KEY_ENV = "CHKP_CPUSE_MASTER_KEY"
 MASTER_KEY_FILE_ENV = "CHKP_CPUSE_MASTER_KEY_FILE"
@@ -45,10 +45,15 @@ class CredentialKind(StrEnum):
     API_KEY = "api_key"  # Management API / Gaia REST key
 
 
-class Credential(BaseModel):
-    """A decrypted credential. Exists in memory only — never log or persist."""
+# The SSH secrets that carry a login username (expert/API are secret-only).
+_SSH_KINDS = (CredentialKind.SSH_PASSWORD, CredentialKind.SSH_PRIVATE_KEY)
 
-    host: str  # inventory Host.name, or "*" for an environment-wide default
+
+class Credential(BaseModel):
+    """A decrypted credential. Exists in memory only — never log or persist.
+    ``host`` is the server this credential was resolved for (informational)."""
+
+    host: str
     kind: CredentialKind
     username: str | None = None
     secret: SecretStr  # SecretStr keeps it out of repr()/logs
@@ -58,13 +63,15 @@ class Credential(BaseModel):
         return self.secret.get_secret_value()
 
 
-class CredentialInfo(BaseModel):
-    """Listing/UI view of a stored credential — deliberately secret-free."""
+class CredentialSetInfo(BaseModel):
+    """Listing/UI view of a named credential set — deliberately secret-free."""
 
-    host: str
-    kind: CredentialKind
-    username: str | None
+    name: str
     environment: str = "default"
+    ssh_username: str | None = None
+    ssh_auth: str  # "password" | "key" | "none" — which SSH secret the set holds
+    has_expert: bool = False
+    has_api: bool = False
 
 
 def load_master_key(environ: os._Environ[str] | dict[str, str] | None = None) -> str:
@@ -90,7 +97,9 @@ def load_master_key(environ: os._Environ[str] | dict[str, str] | None = None) ->
 
 
 class CredentialStore:
-    """Put/get credentials for hosts; everything at rest is ciphertext."""
+    """Manage named credential sets; everything at rest is ciphertext. A set is a
+    "login object" (SSH user + SSH password/key + optional expert/API secrets) that
+    is assigned to servers elsewhere (see services/environments.py)."""
 
     def __init__(self, store: Store, master_key: str) -> None:
         self._store = store
@@ -123,78 +132,111 @@ class CredentialStore:
                 "the credentials and re-enter them under the new key."
             ) from None
 
-    # -- CRUD -----------------------------------------------------------------
+    # -- credential-set CRUD --------------------------------------------------
 
-    def put(self, cred: Credential) -> CredentialInfo:
-        if not cred.reveal():
-            raise CredentialError("refusing to store an empty secret")
-        rec = CredentialRecord(
-            environment=cred.environment,
-            host=cred.host,
-            kind=cred.kind.value,
-            username=cred.username,
-            ciphertext=self._fernet.encrypt(cred.reveal().encode("utf-8")),
+    def put_set(
+        self,
+        environment: str,
+        name: str,
+        *,
+        ssh_username: str | None = None,
+        ssh_password: str | None = None,
+        ssh_private_key: str | None = None,
+        expert_password: str | None = None,
+        api_key: str | None = None,
+    ) -> CredentialSetInfo:
+        """Create or replace a named login set. Requires exactly one SSH secret
+        (password or private key); optional expert password / API key. Secrets are
+        encrypted here and never leave this process in plaintext."""
+        if ssh_password and ssh_private_key:
+            raise CredentialError("provide an SSH password or a private key, not both")
+        if not ssh_password and not ssh_private_key:
+            raise CredentialError("a credential set needs an SSH password or private key")
+        row = CredentialSetRow(
+            environment=environment,
+            name=name,
+            ssh_username=ssh_username or None,
+            ssh_password_ct=self._enc(ssh_password),
+            ssh_private_key_ct=self._enc(ssh_private_key),
+            expert_password_ct=self._enc(expert_password),
+            api_key_ct=self._enc(api_key),
         )
-        stored = self._store.upsert_credential(rec)
-        return CredentialInfo(
-            host=stored.host,
-            kind=CredentialKind(stored.kind),
-            username=stored.username,
-            environment=stored.environment,
-        )
+        return self._info(self._store.upsert_credential_set(row))
 
-    def get(self, host: str, kind: CredentialKind, environment: str = "default") -> Credential:
-        cred = self.try_get(host, kind, environment)
-        if cred is None:
-            raise CredentialError(
-                f"no {kind.value} credential stored for host {host!r} "
-                f"in environment {environment!r}"
-            )
-        return cred
+    def list_sets(self, environment: str) -> list[CredentialSetInfo]:
+        return [self._info(r) for r in self._store.list_credential_sets(environment)]
 
-    def try_get(
-        self, host: str, kind: CredentialKind, environment: str = "default"
-    ) -> Credential | None:
-        rec = self._store.get_credential(host, kind.value, environment=environment)
-        if rec is None:
+    def set_name(self, set_id: str) -> str | None:
+        """Name of a set by id (secret-free), or None if it no longer exists."""
+        row = self._store.get_credential_set(set_id)
+        return None if row is None else row.name
+
+    def delete_set(self, environment: str, name: str) -> bool:
+        return self._store.delete_credential_set(environment, name)
+
+    def get_set_bundle(self, set_id: str, server_name: str) -> CredentialBundle:
+        """Decrypt a credential set into a per-kind bundle for one server. Raises
+        if the set no longer exists (e.g. deleted after assignment)."""
+        row = self._store.get_credential_set(set_id)
+        if row is None:
+            raise CredentialError(f"credential set {set_id!r} not found")
+        bundle: CredentialBundle = {}
+        self._add(bundle, CredentialKind.SSH_PASSWORD, row.ssh_password_ct, row, server_name)
+        self._add(bundle, CredentialKind.SSH_PRIVATE_KEY, row.ssh_private_key_ct, row, server_name)
+        self._add(bundle, CredentialKind.EXPERT_PASSWORD, row.expert_password_ct, row, server_name)
+        self._add(bundle, CredentialKind.API_KEY, row.api_key_ct, row, server_name)
+        return bundle
+
+    # -- helpers --------------------------------------------------------------
+
+    def _enc(self, secret: str | None) -> bytes | None:
+        if not secret:
             return None
-        return self._decrypt(rec)
+        return self._fernet.encrypt(secret.encode("utf-8"))
 
-    def for_host(self, host: str, environment: str = "default") -> dict[CredentialKind, Credential]:
-        """All credentials for one host in one environment, keyed by kind."""
-        return {
-            CredentialKind(rec.kind): self._decrypt(rec)
-            for rec in self._store.list_credentials(host, environment=environment)
-        }
-
-    def list(self, environment: str | None = None) -> list[CredentialInfo]:
-        return [
-            CredentialInfo(
-                host=r.host,
-                kind=CredentialKind(r.kind),
-                username=r.username,
-                environment=r.environment,
-            )
-            for r in self._store.list_credentials(environment=environment)
-        ]
-
-    def delete(self, host: str, kind: CredentialKind, environment: str = "default") -> bool:
-        return self._store.delete_credential(host, kind.value, environment=environment)
-
-    def _decrypt(self, rec: CredentialRecord) -> Credential:
+    def _dec(self, ciphertext: bytes) -> str:
         try:
-            plaintext = self._fernet.decrypt(rec.ciphertext).decode("utf-8")
+            return self._fernet.decrypt(ciphertext).decode("utf-8")
         except InvalidToken:
             # _check_canary should make this unreachable; keep the message clear anyway.
-            raise CredentialError(
-                f"cannot decrypt {rec.kind} credential for {rec.host!r} — wrong master key?"
-            ) from None
-        return Credential(
-            host=rec.host,
-            kind=CredentialKind(rec.kind),
-            username=rec.username,
-            secret=SecretStr(plaintext),
-            environment=rec.environment,
+            raise CredentialError("cannot decrypt credential — wrong master key?") from None
+
+    def _add(
+        self,
+        bundle: CredentialBundle,
+        kind: CredentialKind,
+        ciphertext: bytes | None,
+        row: CredentialSetRow,
+        server_name: str,
+    ) -> None:
+        if ciphertext is None:
+            return
+        # Only the SSH secrets carry the set's username; expert/API are secret-only.
+        username = row.ssh_username if kind in _SSH_KINDS else None
+        bundle[kind] = Credential(
+            host=server_name,
+            kind=kind,
+            username=username,
+            secret=SecretStr(self._dec(ciphertext)),
+            environment=row.environment,
+        )
+
+    @staticmethod
+    def _info(row: CredentialSetRow) -> CredentialSetInfo:
+        ssh_auth = (
+            "password"
+            if row.ssh_password_ct is not None
+            else "key"
+            if row.ssh_private_key_ct is not None
+            else "none"
+        )
+        return CredentialSetInfo(
+            name=row.name,
+            environment=row.environment,
+            ssh_username=row.ssh_username,
+            ssh_auth=ssh_auth,
+            has_expert=row.expert_password_ct is not None,
+            has_api=row.api_key_ct is not None,
         )
 
 

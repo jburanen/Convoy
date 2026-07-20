@@ -31,7 +31,10 @@ class Host(BaseModel):
     ssh_port: int = 22
     ssh_user: str = "admin"
     # Credentials are never stored in inventory — they live in the encrypted
-    # CredentialStore (added via the web UI), keyed by host + environment.
+    # CredentialStore as named "login sets". A management server references the set
+    # assigned to it (credential_sets.id); None when unassigned. Populated from the
+    # DB (env_hosts) at registry build time, not from inventory YAML.
+    credential_set_id: str | None = None
     notes: str | None = None
 
 

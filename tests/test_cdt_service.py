@@ -5,12 +5,9 @@ import io
 from pathlib import Path
 
 import pytest
-from pydantic import SecretStr
 
 from chkp_cpuse_orch.cdt import CandidatesFile
 from chkp_cpuse_orch.credentials import (
-    Credential,
-    CredentialKind,
     CredentialStore,
     JobCredentialVault,
 )
@@ -49,15 +46,24 @@ def transport() -> FakeTransport:
 
 @pytest.fixture
 def service(store: Store, tmp_path: Path, transport: FakeTransport) -> CDTService:
+    store.insert_environment("default", credential_storage_enabled=True)
     creds = CredentialStore(store, master_key="unit test master key")
-    creds.put(Credential(host="mgmt-01", kind=CredentialKind.SSH_PASSWORD, secret=SecretStr("pw")))
+    creds.put_set("default", "primary", ssh_username="admin", ssh_password="pw")
+    set_id = store.get_credential_set_by_name("default", "primary").id  # type: ignore[union-attr]
     packages = PackageStore(store, tmp_path / "packages")
     packages.add_stream(PKG, io.BytesIO(PKG_CONTENT))
     inventory = Inventory(
         sites=[
             Site(
                 name="t",
-                hosts=[Host(name="mgmt-01", address="192.0.2.10", role=Role.MANAGEMENT)],
+                hosts=[
+                    Host(
+                        name="mgmt-01",
+                        address="192.0.2.10",
+                        role=Role.MANAGEMENT,
+                        credential_set_id=set_id,
+                    )
+                ],
             )
         ]
     )

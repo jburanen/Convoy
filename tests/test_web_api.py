@@ -100,12 +100,26 @@ def _enable_storage(client: TestClient, env: str) -> None:
     assert resp.status_code == 200, resp.text
 
 
-def _add_ssh_credential(client: TestClient, host: str = "mgmt-01") -> None:
-    resp = client.put(
-        "/api/env/default/credentials",
-        json={"host": host, "kind": "ssh_password", "username": "admin", "secret": "pw"},
-    )
+def _put_set(
+    client: TestClient, env: str = "default", name: str = "primary", **extra: object
+) -> None:
+    body: dict[str, object] = {"name": name, "ssh_username": "admin", "ssh_password": "pw"}
+    body.update(extra)
+    resp = client.put(f"/api/env/{env}/credentials", json=body)
     assert resp.status_code == 201, resp.text
+
+
+def _assign_set(
+    client: TestClient, host: str, env: str = "default", name: str | None = "primary"
+) -> None:
+    resp = client.post(f"/api/env/{env}/servers/{host}/credential", json={"set": name})
+    assert resp.status_code == 200, resp.text
+
+
+def _add_ssh_credential(client: TestClient, host: str = "mgmt-01") -> None:
+    """Create the shared 'primary' login set and assign it to a server."""
+    _put_set(client)
+    _assign_set(client, host)
 
 
 # Inline credentials for a storage-disabled environment (one-shot per request).
@@ -168,10 +182,7 @@ def test_new_environment_defaults_to_storage_disabled(client: TestClient) -> Non
 
 def test_storage_disabled_env_rejects_stored_credentials(client: TestClient) -> None:
     client.post("/api/environments", json={"name": "dmz"})
-    resp = client.put(
-        "/api/env/dmz/credentials",
-        json={"host": "m1", "kind": "ssh_password", "secret": "pw"},
-    )
+    resp = client.put("/api/env/dmz/credentials", json={"name": "primary", "ssh_password": "pw"})
     assert resp.status_code == 409
     assert "storage is disabled" in resp.json()["detail"]
 
@@ -179,10 +190,7 @@ def test_storage_disabled_env_rejects_stored_credentials(client: TestClient) -> 
 def test_toggle_credential_storage_purges_on_disable(client: TestClient) -> None:
     client.post("/api/environments", json={"name": "corp"})
     _enable_storage(client, "corp")
-    client.put(
-        "/api/env/corp/credentials",
-        json={"host": "m1", "kind": "ssh_password", "secret": "corp-pw"},
-    )
+    _put_set(client, "corp")
     assert len(client.get("/api/env/corp/credentials").json()) == 1
 
     resp = client.post("/api/environments/corp/credential-storage", json={"enabled": False})
@@ -258,10 +266,7 @@ def test_delete_environment_and_its_servers(client: TestClient) -> None:
 def test_delete_environment_purges_its_credentials(client: TestClient) -> None:
     client.post("/api/environments", json={"name": "corp"})
     _enable_storage(client, "corp")
-    client.put(
-        "/api/env/corp/credentials",
-        json={"host": "m1", "kind": "ssh_password", "secret": "corp-pw"},
-    )
+    _put_set(client, "corp")
     assert len(client.get("/api/env/corp/credentials").json()) == 1
 
     assert client.delete("/api/environments/corp").json() == {"deleted": True}
@@ -277,10 +282,7 @@ def test_rename_environment_moves_servers_and_credentials(client: TestClient) ->
         "/api/environments/old name/servers",
         json={"name": "m1", "address": "192.0.2.85", "role": "management"},
     )
-    client.put(
-        "/api/env/old name/credentials",
-        json={"host": "m1", "kind": "ssh_password", "secret": "pw"},
-    )
+    _put_set(client, "old name")
 
     resp = client.post("/api/environments/old name/rename", json={"name": "New Name"})
     assert resp.status_code == 200
@@ -315,13 +317,13 @@ def test_remove_server(client: TestClient) -> None:
 # -- servers ---------------------------------------------------------------------
 
 
-def test_servers_lists_management_only_with_credential_summary(client: TestClient) -> None:
+def test_servers_lists_management_only_with_assigned_set(client: TestClient) -> None:
     servers = client.get("/api/env/default/servers").json()
     assert [s["name"] for s in servers] == ["mgmt-01"]
-    assert servers[0]["credentials"] == []
+    assert servers[0]["credential_set"] is None
     _add_ssh_credential(client)
     servers = client.get("/api/env/default/servers").json()
-    assert servers[0]["credentials"] == ["ssh_password"]
+    assert servers[0]["credential_set"] == "primary"
 
 
 def test_server_state_detects_live_packages(client: TestClient) -> None:
@@ -337,20 +339,27 @@ def test_server_state_detects_live_packages(client: TestClient) -> None:
 def test_server_state_without_credentials_is_409(client: TestClient) -> None:
     resp = client.post("/api/env/default/servers/mgmt-01/state")
     assert resp.status_code == 409
-    assert "no SSH credential" in resp.json()["detail"]
+    assert "no credential assigned" in resp.json()["detail"]
 
 
 # -- credentials ------------------------------------------------------------------
 
 
-def test_credentials_roundtrip_never_echoes_secret(client: TestClient) -> None:
-    _add_ssh_credential(client)
+def test_credential_sets_roundtrip_never_echoes_secret(client: TestClient) -> None:
+    _put_set(client, expert_password="rootpw")
     listing = client.get("/api/env/default/credentials").json()
     assert listing == [
-        {"host": "mgmt-01", "kind": "ssh_password", "username": "admin", "environment": "default"}
+        {
+            "name": "primary",
+            "environment": "default",
+            "ssh_username": "admin",
+            "ssh_auth": "password",
+            "has_expert": True,
+            "has_api": False,
+        }
     ]
-    assert "pw" not in str(listing)
-    resp = client.delete("/api/env/default/credentials/mgmt-01/ssh_password")
+    assert "pw" not in str(listing) and "rootpw" not in str(listing)
+    resp = client.delete("/api/env/default/credentials/primary")
     assert resp.json() == {"deleted": True}
     assert client.get("/api/env/default/credentials").json() == []
 
@@ -453,7 +462,6 @@ def test_install_flow_end_to_end(client: TestClient, transport: FakeTransport) -
 def test_import_against_gateway_not_in_inventory_is_404(client: TestClient) -> None:
     # Gateways are not seeded into an environment's management-server inventory
     # (only management/mds roles are), so a gateway name is simply unknown here.
-    _add_ssh_credential(client, host="fw-01")
     _upload_package(client)
     resp = client.post("/api/env/default/servers/fw-01/import", json={"package": "jhf.tgz"})
     assert resp.status_code == 404
@@ -511,10 +519,10 @@ def test_cdt_stage_and_generate_flow(client: TestClient, transport: FakeTranspor
 
 
 def test_cdt_endpoints_locked_without_credentials(client: TestClient) -> None:
-    # No SSH credential stored for the host → 409 with a clear message.
+    # No credential set assigned to the host → 409 with a clear message.
     resp = client.post("/api/env/default/cdt/mgmt-01/status")
     assert resp.status_code == 409
-    assert "no SSH credential" in resp.json()["detail"]
+    assert "no credential assigned" in resp.json()["detail"]
 
 
 # -- storage-disabled environments (inline credentials per operation) --------------
@@ -641,19 +649,16 @@ def test_two_environments_are_isolated(
         assert [s["name"] for s in c.get("/api/env/corp/servers").json()] == ["mgmt-01"]
         assert [s["name"] for s in c.get("/api/env/dmz/servers").json()] == ["mgmt-b1"]
 
-        # A credential stored in corp is invisible in dmz — and does not
-        # authorize actions there.
-        resp = c.put(
-            "/api/env/corp/credentials",
-            json={"host": "mgmt-01", "kind": "ssh_password", "secret": "corp-pw"},
-        )
-        assert resp.status_code == 201
+        # A credential set in corp is invisible in dmz — and does not authorize
+        # actions there.
+        _put_set(c, "corp")
+        _assign_set(c, "mgmt-01", env="corp")
         assert len(c.get("/api/env/corp/credentials").json()) == 1
         assert c.get("/api/env/dmz/credentials").json() == []
 
         state = c.post("/api/env/dmz/servers/mgmt-b1/state")
-        assert state.status_code == 409  # no credential in dmz
-        assert "no SSH credential" in state.json()["detail"]
+        assert state.status_code == 409  # no set assigned in dmz
+        assert "no credential assigned" in state.json()["detail"]
 
         # Jobs record which environment they belong to.
         _upload_package(c)

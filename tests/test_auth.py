@@ -147,7 +147,7 @@ def test_credential_storage_blocked_without_auth(tmp_path: Path) -> None:
         assert (
             c.put(
                 "/api/env/corp/credentials",
-                json={"host": "h", "kind": "ssh_password", "secret": "x"},
+                json={"name": "primary", "ssh_password": "x"},
             ).status_code
             == 409
         )
@@ -164,7 +164,7 @@ def test_credential_storage_allowed_with_auth(tmp_path: Path) -> None:
         assert (
             c.put(
                 "/api/env/corp/credentials",
-                json={"host": "h", "kind": "ssh_password", "secret": "x"},
+                json={"name": "primary", "ssh_password": "x"},
             ).status_code
             == 201
         )

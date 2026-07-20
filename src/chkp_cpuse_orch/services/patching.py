@@ -86,8 +86,9 @@ class PatchingService:
     def management_servers(self, environment: str) -> list[Host]:
         return self.registry.get(environment).management_servers()
 
-    def credential_kinds(self, environment: str, host_name: str) -> list[str]:
-        return self.registry.get(environment).credential_kinds(host_name)
+    def assigned_credential(self, environment: str, host_name: str) -> str | None:
+        """Name of the credential set assigned to a server, or None if unassigned."""
+        return self.registry.get(environment).assigned_credential(host_name)
 
     def detect(
         self,

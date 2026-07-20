@@ -114,17 +114,18 @@ class EnvironmentManager:
     def set_credential_storage(self, name: str, enabled: bool) -> int:
         """Enable or disable credential storage for an environment.
 
-        Disabling **purges** any stored credentials for it — the operator opted
+        Disabling **purges** any stored credential sets for it — the operator opted
         out of keeping secrets on disk, so we don't leave them lying around (and
-        they would be unused anyway). Returns the number of credentials purged."""
+        they would be unused anyway). Servers are auto-unassigned via the FK.
+        Returns the number of credential sets purged."""
         if not self._store.set_environment_credential_storage(name, enabled):
             raise InventoryError(f"unknown environment: {name!r}")
         purged = 0
         if not enabled:
-            purged = self._store.delete_environment_credentials(name)
+            purged = self._store.delete_environment_credential_sets(name)
             if purged:
                 logger.info(
-                    "purged credentials on disabling storage", environment=name, count=purged
+                    "purged credential sets on disabling storage", environment=name, count=purged
                 )
         self.rebuild()
         return purged
@@ -156,11 +157,31 @@ class EnvironmentManager:
     def delete_environment(self, name: str) -> None:
         if not self._store.delete_environment(name):
             raise InventoryError(f"unknown environment: {name!r}")
-        # Purge credentials too: a same-named environment created later must NOT
+        # Purge credential sets too: a same-named environment created later must NOT
         # inherit the deleted one's secrets. env_hosts go via FK cascade.
-        purged = self._store.delete_environment_credentials(name)
+        purged = self._store.delete_environment_credential_sets(name)
         if purged:
-            logger.info("purged credentials on environment delete", environment=name, count=purged)
+            logger.info(
+                "purged credential sets on environment delete", environment=name, count=purged
+            )
+        self.rebuild()
+
+    # -- credential-set assignment ----------------------------------------------
+
+    def assign_credential(self, environment: str, host_name: str, set_name: str | None) -> None:
+        """Assign a credential set (by name) to a management server, or clear the
+        assignment with ``None``. Rebuilds the registry so resolution sees it."""
+        self._require_env(environment)
+        set_id: str | None = None
+        if set_name is not None:
+            row = self._store.get_credential_set_by_name(environment, set_name)
+            if row is None:
+                raise InventoryError(
+                    f"credential set {set_name!r} not found in environment {environment!r}"
+                )
+            set_id = row.id
+        if not self._store.assign_credential_set(environment, host_name, set_id):
+            raise InventoryError(f"server {host_name!r} not found in environment {environment!r}")
         self.rebuild()
 
     # -- management-server CRUD --------------------------------------------------
@@ -237,6 +258,7 @@ def _host_from_row(row: EnvHostRow) -> Host:
         ssh_port=row.ssh_port,
         ssh_user=row.ssh_user,
         notes=row.notes,
+        credential_set_id=row.credential_set_id,
     )
 
 
