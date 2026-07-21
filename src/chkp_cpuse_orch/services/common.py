@@ -72,10 +72,16 @@ class HostConnector:
         environment: str = "default",
         *,
         credential_storage_enabled: bool = True,
+        is_mds: bool = False,
     ) -> None:
         self.inventory = inventory
         self.environment = environment
         self.credential_storage_enabled = credential_storage_enabled
+        # Declared once per environment (see services/environments.py) — an
+        # environment is either an SMS estate or a Multi-Domain one, never both.
+        # Command selection (e.g. discovery) reads this instead of guessing from
+        # whichever host happens to be the primary.
+        self.is_mds = is_mds
         self._credentials = credentials
         self._client_factory = client_factory or default_client_factory
 

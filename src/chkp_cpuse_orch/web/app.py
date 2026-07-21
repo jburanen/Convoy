@@ -230,6 +230,13 @@ class ProvisionRequest(BaseModel):
 
 class EnvironmentIn(BaseModel):
     name: str
+    # Ignored by the rename endpoint (name-only); create uses it to declare the
+    # environment's kind up front. See EnvironmentKindIn for changing it later.
+    is_mds: bool = False
+
+
+class EnvironmentKindIn(BaseModel):
+    is_mds: bool
 
 
 class EnvServerIn(BaseModel):
@@ -575,6 +582,7 @@ def _register_routes(app: FastAPI) -> None:
                 "credential_storage_enabled": _registry(request)
                 .get(env)
                 .credential_storage_enabled,
+                "is_mds": _registry(request).get(env).is_mds,
             }
             for env in _registry(request).names()
         ]
@@ -582,7 +590,7 @@ def _register_routes(app: FastAPI) -> None:
     @app.post("/api/environments", status_code=201)
     def create_environment(body: EnvironmentIn, request: Request) -> dict[str, str]:
         try:
-            name = _envmgr(request).create_environment(body.name)
+            name = _envmgr(request).create_environment(body.name, is_mds=body.is_mds)
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
         return {"name": name}
@@ -622,6 +630,16 @@ def _register_routes(app: FastAPI) -> None:
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
         return {"enabled": body.enabled, "purged_credentials": purged}
+
+    @app.post("/api/environments/{env}/kind")
+    def set_environment_kind(env: str, body: EnvironmentKindIn, request: Request) -> dict[str, Any]:
+        """Declare an environment SMS or Multi-Domain (MDS) — decides which
+        command variants discovery (and future MDS-vs-SMS-specific tasks) use."""
+        try:
+            _envmgr(request).set_environment_kind(env, body.is_mds)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        return {"is_mds": body.is_mds}
 
     @app.get("/api/environments/{env}/servers")
     def env_servers(env: str, request: Request) -> list[dict[str, Any]]:
@@ -860,9 +878,7 @@ def _register_routes(app: FastAPI) -> None:
             raise _map_error(exc) from exc
 
     @app.post("/api/env/{env}/credentials/{name}/default")
-    def set_default_credential_set(
-        env: str, name: str, request: Request
-    ) -> dict[str, str | None]:
+    def set_default_credential_set(env: str, name: str, request: Request) -> dict[str, str | None]:
         """Make a credential set the environment's default (assigned to new servers)."""
         _require_env(request, env)
         store = _credentials_or_503(request)

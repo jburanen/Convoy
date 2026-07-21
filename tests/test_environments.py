@@ -84,6 +84,59 @@ def test_create_add_server_rebuilds_registry(store: Store) -> None:
     assert hosts[0].ssh_user == "svc"
 
 
+def test_create_environment_declares_mds_kind(store: Store) -> None:
+    registry = EnvironmentRegistry()
+    mgr = _manager(store, registry)
+    mgr.create_environment("corp")
+    mgr.create_environment("mds-estate", is_mds=True)
+
+    assert registry.get("corp").is_mds is False
+    assert registry.get("mds-estate").is_mds is True
+
+
+def test_set_environment_kind_updates_registry(store: Store) -> None:
+    registry = EnvironmentRegistry()
+    mgr = _manager(store, registry)
+    mgr.create_environment("corp")
+    assert registry.get("corp").is_mds is False
+
+    mgr.set_environment_kind("corp", True)
+    assert registry.get("corp").is_mds is True
+
+
+def test_set_environment_kind_unknown_environment_raises(store: Store) -> None:
+    mgr = _manager(store, EnvironmentRegistry())
+    with pytest.raises(InventoryError, match="unknown environment"):
+        mgr.set_environment_kind("nope", True)
+
+
+def test_seed_infers_mds_kind_from_inventory(tmp_path: Path, store: Store) -> None:
+    mds_yaml = """\
+sites:
+  - name: dc
+    hosts:
+      - name: mds-01
+        address: 192.0.2.30
+        role: primary_mds
+"""
+    (tmp_path / "mds-inventory.yaml").write_text(mds_yaml, encoding="utf-8")
+    (tmp_path / "sms-inventory.yaml").write_text(INVENTORY_YAML, encoding="utf-8")
+    registry = EnvironmentRegistry()
+    mgr = _manager(store, registry)
+    config = Config(
+        paths=Paths(inventory_path=tmp_path / "sms-inventory.yaml"),
+        environments=[
+            EnvironmentDef(name="mds-env", inventory=tmp_path / "mds-inventory.yaml"),
+            EnvironmentDef(name="sms-env", inventory=tmp_path / "sms-inventory.yaml"),
+        ],
+    )
+    mgr.seed_from_config(config)
+    mgr.rebuild()
+
+    assert registry.get("mds-env").is_mds is True
+    assert registry.get("sms-env").is_mds is False
+
+
 def test_invalid_environment_name_rejected(store: Store) -> None:
     mgr = _manager(store, EnvironmentRegistry())
     for bad in ("", "   ", "x!", "-leading-dash", "café", "a" * 33):

@@ -42,6 +42,8 @@ UI is the primary interface (see [[architecture]]); the CLI is secondary.
   environment drops its `env_hosts` (cascade) **and purges its credentials** — a
   later same-named environment must not inherit old secrets (credential-leak
   guard, operator-flagged). Credential purge works even when the store is locked.
+  Each environment also declares itself **SMS or Multi-Domain (MDS)** once
+  (`is_mds`, migration v10) — see [[environment-kind]].
 - **Persistence = SQLite on `/data`** (the bind-mounted, git-ignored volume) via
   **stdlib `sqlite3`** (connection-per-call + WAL in `store.py` — chose it over
   SQLModel/SQLAlchemy: 4 small tables, zero extra deps, cleaner under mypy strict).

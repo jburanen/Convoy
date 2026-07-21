@@ -406,6 +406,27 @@ async function renderEnvManageList() {
       } catch (e) { toast("Delete failed: " + e.message); }
     });
 
+    // MDS-kind toggle. An environment is always entirely SMS or entirely
+    // Multi-Domain — this decides which command variants (discovery, etc.) run
+    // against every server in it, instead of guessing per-request.
+    const mdsToggle = row.querySelector(".env-mds-input");
+    mdsToggle.checked = env.is_mds;
+    mdsToggle.addEventListener("change", async () => {
+      const isMds = mdsToggle.checked;
+      try {
+        await api(`/api/environments/${encodeURIComponent(env.name)}/kind`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ is_mds: isMds }),
+        });
+        await loadEnvironments();
+        await renderEnvManageList();
+      } catch (e) {
+        mdsToggle.checked = !isMds; // revert on failure
+        toast("Could not change environment kind: " + e.message);
+      }
+    });
+
     // Credential-storage toggle. Disabling purges any stored credentials, so we
     // confirm first; the note reminds the operator what each mode means.
     const toggle = row.querySelector(".env-storage-input");
@@ -466,13 +487,15 @@ document.addEventListener("keydown", (ev) => {
 document.getElementById("env-add-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const input = document.getElementById("env-add-name");
+  const mdsInput = document.getElementById("env-add-is-mds");
   try {
     const created = await api("/api/environments", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: input.value }),
+      body: JSON.stringify({ name: input.value, is_mds: mdsInput.checked }),
     });
     input.value = "";
+    mdsInput.checked = false;
     closeEnvModal();
     await loadEnvironments();
     await selectEnvironment(created.name); // server-normalized (trimmed) name
@@ -513,9 +536,10 @@ document.getElementById("env-server-form").addEventListener("submit", async (ev)
 
 /* ---------- 1c-primary. connect to primary (empty-inventory modal) ---------- */
 
-function openPrimaryModal() {
+async function openPrimaryModal() {
   if (!currentEnv) { toast("Create an environment first (picker → New Environment…)."); return; }
   document.getElementById("primary-form").reset();
+  await populatePrimaryCredSelect();
   document.getElementById("primary-modal").classList.remove("hidden");
   document.getElementById("pm-name").focus();
 }
@@ -523,10 +547,29 @@ function closePrimaryModal() {
   document.getElementById("primary-modal").classList.add("hidden");
 }
 
+// Fill the primary-modal's credential-set picker from this environment's stored
+// sets; storage-disabled environments have none, so hide it instead.
+async function populatePrimaryCredSelect() {
+  const label = document.getElementById("pm-cred-label");
+  const select = document.getElementById("pm-cred-select");
+  select.querySelectorAll("option:not(:first-child)").forEach((o) => o.remove());
+  const enabled = storageEnabled();
+  label.classList.toggle("hidden", !enabled);
+  if (!enabled) return;
+  const sets = await fetchCredentialSets();
+  for (const set of sets) {
+    const opt = document.createElement("option");
+    opt.value = set.name;
+    opt.textContent = set.name;
+    select.appendChild(opt);
+  }
+}
+
 document.getElementById("primary-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   if (!currentEnv) return;
   const name = document.getElementById("pm-name").value.trim();
+  const credSet = document.getElementById("pm-cred-select").value;
   try {
     await addServer({
       name,
@@ -535,6 +578,13 @@ document.getElementById("primary-form").addEventListener("submit", async (ev) =>
       ssh_user: document.getElementById("pm-user").value.trim() || "admin",
       ssh_port: Number(document.getElementById("pm-port").value) || 22,
     });
+    if (credSet) {
+      await api(envUrl(`/servers/${encodeURIComponent(name)}/credential`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ set: credSet }),
+      });
+    }
     closePrimaryModal();
     await Promise.all([loadServers(), refreshStatus()]);
     // Offer discovery from the just-defined primary (operator can Close to keep

@@ -17,3 +17,5 @@ Load this at the start of each session; read a linked file when its hook looks r
 - [Web UI authentication](web-auth.md) — LDAP/AD login, sessions, idle logout; no-auth ⇒ no credential storage
 - [Git workflow](git-workflow.md) — work directly on main; no feature branches; bump `__version__` every batch, in the shipping commit
 - [Provisioning command order](provisioning-command-order.md) — RBA role assignment must precede the shell→bash switch
+- [MDS discovery command](mds-discovery-command.md) — use `mdsenv; mdsquerydb MDSs` (not invented `$MDSVERUTIL AllMdssInfo`); SmartEvent on MDS needs API login domain="Global"
+- [Environment kind (SMS vs MDS)](environment-kind.md) — `environments.is_mds` flag, set via UI checkbox, drives command selection (not host role)

@@ -103,6 +103,11 @@ class EnvironmentRow(BaseModel):
     # (and live-state query) supplies them at request time and they live only in
     # memory until the operation finishes. New environments default to False.
     credential_storage_enabled: bool = False
+    # Whether this environment is a Multi-Domain (MDS) estate rather than a plain
+    # SMS one. An environment is always exactly one or the other — this decides
+    # which command variants (discovery, and future MDS-vs-SMS-specific tasks)
+    # apply across every server in it.
+    is_mds: bool = False
 
 
 class EnvHostRow(BaseModel):
@@ -308,6 +313,13 @@ _MIGRATIONS: tuple[str, ...] = (
     """
     ALTER TABLE credential_sets ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0;
     """,
+    # v10: an environment is either an SMS estate or a Multi-Domain (MDS) one —
+    # never both — so the operator declares it once instead of the tool guessing
+    # per-request from whichever host role happens to be the discovery primary.
+    # Existing environments default to 0 (SMS), preserving current behaviour.
+    """
+    ALTER TABLE environments ADD COLUMN is_mds INTEGER NOT NULL DEFAULT 0;
+    """,
 )
 
 
@@ -496,14 +508,16 @@ class Store:
             row = conn.execute("SELECT 1 FROM environments WHERE name = ?", (name,)).fetchone()
         return row is not None
 
-    def insert_environment(self, name: str, *, credential_storage_enabled: bool = False) -> None:
+    def insert_environment(
+        self, name: str, *, credential_storage_enabled: bool = False, is_mds: bool = False
+    ) -> None:
         """Raises sqlite3.IntegrityError if the name already exists. New
-        environments default to credential storage *disabled*."""
+        environments default to credential storage *disabled* and SMS (not MDS)."""
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO environments (name, created_at, credential_storage_enabled)"
-                " VALUES (?, ?, ?)",
-                (name, utcnow().isoformat(), int(credential_storage_enabled)),
+                "INSERT INTO environments (name, created_at, credential_storage_enabled, is_mds)"
+                " VALUES (?, ?, ?, ?)",
+                (name, utcnow().isoformat(), int(credential_storage_enabled), int(is_mds)),
             )
 
     def set_environment_credential_storage(self, name: str, enabled: bool) -> bool:
@@ -512,6 +526,15 @@ class Store:
             cur = conn.execute(
                 "UPDATE environments SET credential_storage_enabled = ? WHERE name = ?",
                 (int(enabled), name),
+            )
+        return cur.rowcount > 0
+
+    def set_environment_kind(self, name: str, is_mds: bool) -> bool:
+        """Declare an environment SMS (False) or Multi-Domain/MDS (True).
+        Returns False if unknown."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE environments SET is_mds = ? WHERE name = ?", (int(is_mds), name)
             )
         return cur.rowcount > 0
 
@@ -530,15 +553,16 @@ class Store:
         ``new`` is already taken."""
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT created_at, credential_storage_enabled FROM environments WHERE name = ?",
+                "SELECT created_at, credential_storage_enabled, is_mds"
+                " FROM environments WHERE name = ?",
                 (old,),
             ).fetchone()
             if row is None:
                 return False
             conn.execute(
-                "INSERT INTO environments (name, created_at, credential_storage_enabled)"
-                " VALUES (?, ?, ?)",
-                (new, row["created_at"], row["credential_storage_enabled"]),
+                "INSERT INTO environments (name, created_at, credential_storage_enabled, is_mds)"
+                " VALUES (?, ?, ?, ?)",
+                (new, row["created_at"], row["credential_storage_enabled"], row["is_mds"]),
             )
             conn.execute("UPDATE env_hosts SET environment = ? WHERE environment = ?", (new, old))
             conn.execute(
@@ -838,6 +862,7 @@ def _environment_from_row(row: sqlite3.Row) -> EnvironmentRow:
         name=row["name"],
         created_at=datetime.fromisoformat(row["created_at"]),
         credential_storage_enabled=bool(row["credential_storage_enabled"]),
+        is_mds=bool(row["is_mds"]),
     )
 
 

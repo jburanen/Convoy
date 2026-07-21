@@ -1,19 +1,30 @@
 """Estate discovery — enumerate the management plane from the primary server.
 
 Given one management server the operator has already defined, connect to it and
-discover the *rest* of the estate so they don't have to type every box in by hand:
+discover the *rest* of the estate so they don't have to type every box in by hand.
+Which command variants run is decided by the environment's declared kind
+(``HostConnector.is_mds`` — set once per environment, see services/environments.py),
+not by the primary's own role: an environment is always entirely SMS or entirely
+Multi-Domain, never a mix.
 
 - **SMS side** via the Check Point **Management API** (``show-gateways-and-servers``):
   other management servers, dedicated Log Servers, and SmartEvent servers.
-- **MDS side** via SSH on a Multi-Domain Server (``$MDSVERUTIL AllMdssInfo``):
-  Primary / Secondary MDS and MLM. The API does not expose these.
+- **MDS side, Global domain** via the same API call, logged into the ``Global``
+  domain instead of a specific Domain/CMA: SmartEvent servers shared across the
+  Multi-Domain deployment live there rather than in any one Domain.
+- **MDS side, peer MDS/MLM boxes** via SSH on a Multi-Domain Server (``mdsenv;
+  mdsquerydb MDSs``):
+  the other MDS/MLM peers by name + IP. The API does not expose these, and
+  ``mdsquerydb`` itself doesn't report Primary/Secondary/MLM role — only the peer
+  matching the address we connected to is inferred as primary; every other MDS peer
+  is flagged ``needs_review`` for the operator to classify.
 
 This layer only *maps* discovered objects to roles and marks what is already in the
 inventory; it never writes. The web layer presents the result in an editable review
 table and the operator confirms before anything is imported (reusing the normal
-add-server path). Detection is best-effort — especially primary-vs-secondary and the
-MDS text parsing — so ambiguous rows are flagged ``needs_review`` for the operator to
-correct. See .claude/memory/architecture.md (thin wrappers, decisions in services).
+add-server path). Detection is best-effort — especially primary-vs-secondary — so
+ambiguous rows are flagged ``needs_review`` for the operator to correct. See
+.claude/memory/architecture.md (thin wrappers, decisions in services).
 """
 
 from __future__ import annotations
@@ -98,12 +109,15 @@ class DiscoveryService:
         existing_names = {h.name for h in existing}
         existing_addrs = {h.address for h in existing}
 
-        self._discover_via_api(primary, bundle, result)
-        if primary.role in (Role.PRIMARY_MDS, Role.SECONDARY_MDS, Role.MDS):
+        # The environment declares SMS vs MDS once (services/environments.py) —
+        # that, not the primary's own role, decides which command variants apply.
+        is_mds = connector.is_mds
+        # On an MDS, SmartEvent (and other shared) servers live in the Global
+        # domain, not the per-Domain view — log in there instead of the default.
+        self._discover_via_api(primary, bundle, result, domain="Global" if is_mds else None)
+        if is_mds:
             self._discover_mds_via_ssh(connector, primary, result)
-        elif primary.role in (Role.PRIMARY_SMS, Role.SECONDARY_SMS, Role.MANAGEMENT):
-            # An SMS scan can't see MDS peers; nothing to warn about here.
-            pass
+        # else: an SMS scan can't see MDS peers; nothing more to do.
 
         # Drop the primary itself; flag rows already in the inventory.
         deduped: list[DiscoveredServer] = []
@@ -118,16 +132,23 @@ class DiscoveryService:
         result.servers = deduped
         return result
 
-    # -- SMS side (Management API) -----------------------------------------------
+    # -- Management API side (SMS domain, or MDS Global domain) ------------------
 
     def _discover_via_api(
-        self, primary: Host, bundle: dict[CredentialKind, Any], result: DiscoveryResult
+        self,
+        primary: Host,
+        bundle: dict[CredentialKind, Any],
+        result: DiscoveryResult,
+        *,
+        domain: str | None = None,
     ) -> None:
         try:
             auth = _api_auth(bundle)
         except CredentialError as exc:
             result.warnings.append(str(exc))
             return
+        if domain is not None:
+            auth = {**auth, "domain": domain}
         try:
             with self._mgmt_client_factory(primary, **auth) as client:
                 objects = client.show_gateways_and_servers(details_level="full")
@@ -147,7 +168,7 @@ class DiscoveryService:
             result.warnings.append(f"MDS SSH discovery skipped: {exc}")
             return
         try:
-            out = client.run("$MDSVERUTIL AllMdssInfo")
+            out = client.run("mdsenv; mdsquerydb MDSs")
         except TransportError as exc:
             result.warnings.append(f"MDS enumeration failed: {exc}")
             return
@@ -156,9 +177,9 @@ class DiscoveryService:
         if out.exit_status != 0:
             result.warnings.append("MDS enumeration returned no data (is the primary an MDS?)")
             return
-        rows = parse_all_mdss_info(out.stdout)
+        rows = parse_mdsquerydb_mdss(out.stdout, primary.address)
         if not rows:
-            result.warnings.append("Could not parse $MDSVERUTIL AllMdssInfo output")
+            result.warnings.append("Could not parse mdsquerydb MDSs output")
         result.servers.extend(rows)
 
 
@@ -241,45 +262,37 @@ def _truthy_any(blades: dict[str, Any], keys: tuple[str, ...]) -> bool:
     return any(bool(blades.get(k)) for k in keys)
 
 
-# $MDSVERUTIL AllMdssInfo: format is version-dependent (docs unverified at build
-# time), so parse tolerantly — pull an IP and classify from role keywords, and flag
-# every row needs_review so the operator confirms in the table.
+# `mdsenv; mdsquerydb MDSs` returns each MDS as a name + IP pair (tab/space
+# delimited) — it does not report Primary/Secondary/MLM role, so we can only
+# infer the primary (it's the address we're already connected to) and flag
+# every other peer needs_review for the operator to classify.
 _IP_RE = re.compile(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b")
 
 
-def parse_all_mdss_info(text: str) -> list[DiscoveredServer]:
+def parse_mdsquerydb_mdss(text: str, primary_address: str) -> list[DiscoveredServer]:
     servers: list[DiscoveredServer] = []
     for raw in text.splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
         ip_match = _IP_RE.search(line)
-        address = ip_match.group(1) if ip_match else ""
-        lowered = line.lower()
-        # A line with neither an IP nor an MDS keyword is a header/noise.
-        if not address and not any(k in lowered for k in ("mds", "mlm", "manager", "log")):
-            continue
-        role = _mds_role_from_keywords(lowered)
+        if not ip_match:
+            continue  # header/banner noise — a data row always has an IP
+        address = ip_match.group(1)
         name = _first_field(line) or address
+        is_primary = address == primary_address
+        note = None if is_primary else "mdsquerydb doesn't report role — confirm Secondary vs MLM"
         servers.append(
             DiscoveredServer(
                 name=name,
                 address=address,
-                detected_role=role,
+                detected_role=Role.PRIMARY_MDS if is_primary else Role.SECONDARY_MDS,
                 source="ssh",
-                needs_review=True,
-                note="MDS detection is best-effort — confirm the role",
+                needs_review=not is_primary,
+                note=note,
             )
         )
     return servers
-
-
-def _mds_role_from_keywords(lowered: str) -> Role:
-    if "mlm" in lowered or ("log" in lowered and "manager" not in lowered):
-        return Role.MLM
-    if "secondary" in lowered or "standby" in lowered:
-        return Role.SECONDARY_MDS
-    return Role.PRIMARY_MDS
 
 
 def _first_field(line: str) -> str:
@@ -310,5 +323,5 @@ __all__ = [
     "DiscoveryResult",
     "DiscoveryService",
     "map_gateways_and_servers",
-    "parse_all_mdss_info",
+    "parse_mdsquerydb_mdss",
 ]

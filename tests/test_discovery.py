@@ -8,7 +8,7 @@ from chkp_cpuse_orch.inventory import Host, Inventory, Role, Site
 from chkp_cpuse_orch.services.discovery import (
     DiscoveryService,
     map_gateways_and_servers,
-    parse_all_mdss_info,
+    parse_mdsquerydb_mdss,
 )
 
 from .fakes import FakeTransport
@@ -61,30 +61,35 @@ def test_map_gateways_and_servers_roles() -> None:
     assert all(s.source == "api" for s in servers)
 
 
-# ---- $MDSVERUTIL AllMdssInfo parsing (pure) -------------------------------------
+# ---- `mdsenv; mdsquerydb MDSs` parsing (pure) -----------------------------------
 
 ALL_MDSS_INFO = """\
-Name         IP           Type
-mds-primary  10.0.0.1     Primary Manager
-mds-second   10.0.0.2     Secondary Manager
-mlm-01       10.0.0.3     Log Manager (MLM)
+Name         IP
+mds-primary  10.0.0.1
+mds-second   10.0.0.2
+mlm-01       10.0.0.3
 """
 
 
-def test_parse_all_mdss_info() -> None:
-    servers = parse_all_mdss_info(ALL_MDSS_INFO)
+def test_parse_mdsquerydb_mdss() -> None:
+    servers = parse_mdsquerydb_mdss(ALL_MDSS_INFO, primary_address="10.0.0.1")
     by_name = {s.name: s for s in servers}
     assert set(by_name) == {"mds-primary", "mds-second", "mlm-01"}
+    # Only the peer matching the address we connected to is inferred as primary.
     assert by_name["mds-primary"].detected_role is Role.PRIMARY_MDS
+    assert by_name["mds-primary"].needs_review is False
     assert by_name["mds-primary"].address == "10.0.0.1"
+    # mdsquerydb doesn't report role — every other peer needs operator review.
     assert by_name["mds-second"].detected_role is Role.SECONDARY_MDS
-    assert by_name["mlm-01"].detected_role is Role.MLM
-    # MDS detection is best-effort — every row is flagged for operator review.
-    assert all(s.needs_review and s.source == "ssh" for s in servers)
+    assert by_name["mds-second"].needs_review is True
+    assert by_name["mlm-01"].detected_role is Role.SECONDARY_MDS
+    assert by_name["mlm-01"].needs_review is True
+    assert all(s.source == "ssh" for s in servers)
 
 
-def test_parse_all_mdss_info_ignores_noise() -> None:
-    assert parse_all_mdss_info("\n   \n# comment\nheader only\n") == []
+def test_parse_mdsquerydb_mdss_ignores_noise() -> None:
+    noise = "\n   \n# comment\nheader only\n"
+    assert parse_mdsquerydb_mdss(noise, primary_address="10.0.0.1") == []
 
 
 # ---- DiscoveryService orchestration (fakes, no live gear) -----------------------
@@ -107,9 +112,15 @@ class _FakeMgmtClient:
 
 class _FakeConnector:
     def __init__(
-        self, inventory: Inventory, bundle: CredentialBundle, ssh: FakeTransport | None = None
+        self,
+        inventory: Inventory,
+        bundle: CredentialBundle,
+        ssh: FakeTransport | None = None,
+        *,
+        is_mds: bool = False,
     ) -> None:
         self.inventory = inventory
+        self.is_mds = is_mds
         self._bundle = bundle
         self._ssh = ssh
 
@@ -179,10 +190,38 @@ def test_discover_api_failure_becomes_warning() -> None:
     assert any("Management API discovery failed" in w for w in result.warnings)
 
 
+def test_discover_mds_uses_global_domain_for_api_call() -> None:
+    inv = _inventory(Host(name="mds-primary", address="10.0.0.1", role=Role.PRIMARY_MDS))
+    connector = _FakeConnector(inv, _api_bundle(), ssh=FakeTransport(), is_mds=True)
+    seen_kwargs: list[dict[str, object]] = []
+
+    def factory(host: object, **kw: object) -> _FakeMgmtClient:
+        seen_kwargs.append(kw)
+        return _FakeMgmtClient([], **kw)
+
+    service = DiscoveryService(_FakeRegistry(connector), mgmt_client_factory=factory)  # type: ignore[arg-type]
+    service.discover("default", "mds-primary")
+    assert seen_kwargs[0]["domain"] == "Global"
+
+
+def test_discover_sms_omits_domain_for_api_call() -> None:
+    inv = _inventory(Host(name="mgmt-01", address="192.0.2.10", role=Role.PRIMARY_SMS))
+    connector = _FakeConnector(inv, _api_bundle())
+    seen_kwargs: list[dict[str, object]] = []
+
+    def factory(host: object, **kw: object) -> _FakeMgmtClient:
+        seen_kwargs.append(kw)
+        return _FakeMgmtClient([], **kw)
+
+    service = DiscoveryService(_FakeRegistry(connector), mgmt_client_factory=factory)  # type: ignore[arg-type]
+    service.discover("default", "mgmt-01")
+    assert "domain" not in seen_kwargs[0]
+
+
 def test_discover_mds_over_ssh() -> None:
     inv = _inventory(Host(name="mds-primary", address="10.0.0.1", role=Role.PRIMARY_MDS))
-    ssh = FakeTransport(responses={"MDSVERUTIL AllMdssInfo": ALL_MDSS_INFO})
-    connector = _FakeConnector(inv, _api_bundle(), ssh=ssh)
+    ssh = FakeTransport(responses={"mdsquerydb MDSs": ALL_MDSS_INFO})
+    connector = _FakeConnector(inv, _api_bundle(), ssh=ssh, is_mds=True)
     service = DiscoveryService(
         _FakeRegistry(connector),  # type: ignore[arg-type]
         mgmt_client_factory=lambda host, **kw: _FakeMgmtClient([], **kw),
@@ -193,5 +232,5 @@ def test_discover_mds_over_ssh() -> None:
     # The primary MDS is flagged existing; the peers are importable.
     assert by_name["mds-primary"].already_in_inventory is True
     assert by_name["mds-second"].detected_role is Role.SECONDARY_MDS
-    assert by_name["mlm-01"].detected_role is Role.MLM
+    assert by_name["mlm-01"].detected_role is Role.SECONDARY_MDS
     assert ssh.closed is True  # transport is always closed

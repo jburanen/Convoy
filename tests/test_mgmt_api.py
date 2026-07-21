@@ -70,3 +70,32 @@ def test_error_status_becomes_transport_error() -> None:
 def test_requires_some_credential() -> None:
     with pytest.raises(TransportError, match="API key or a username/password"):
         ManagementAPIClient(_host())
+
+
+def test_login_sends_domain_when_set() -> None:
+    seen_payload = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/login"):
+            seen_payload.update(json.loads(request.content or b"{}"))
+            return httpx.Response(200, json={"sid": "SID-123"})
+        return httpx.Response(200, json={"objects": [], "total": 0})
+
+    client = ManagementAPIClient(
+        _host(), api_key="k", domain="Global", transport=httpx.MockTransport(handler)
+    )
+    client.login()
+    assert seen_payload["domain"] == "Global"
+
+
+def test_login_omits_domain_when_unset() -> None:
+    seen_payload = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/login"):
+            seen_payload.update(json.loads(request.content or b"{}"))
+            return httpx.Response(200, json={"sid": "SID-123"})
+        return httpx.Response(200, json={"objects": [], "total": 0})
+
+    ManagementAPIClient(_host(), api_key="k", transport=httpx.MockTransport(handler)).login()
+    assert "domain" not in seen_payload

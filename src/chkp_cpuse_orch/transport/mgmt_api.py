@@ -44,6 +44,7 @@ class ManagementAPIClient:
         api_key: str | None = None,
         username: str | None = None,
         password: str | None = None,
+        domain: str | None = None,
         port: int = 443,
         verify_tls: bool = False,
         timeout: float = 30.0,
@@ -55,6 +56,9 @@ class ManagementAPIClient:
         self._api_key = api_key
         self._username = username
         self._password = password
+        # Multi-Domain Server login only: which Domain (CMA) or the "Global" domain
+        # to log into. Ignored on a single-domain SMS.
+        self._domain = domain
         self._base_url = f"https://{server.address}:{port}/web_api"
         self._verify_tls = verify_tls
         self._timeout = timeout
@@ -95,6 +99,8 @@ class ManagementAPIClient:
         )
         # read-only is enough for discovery and avoids taking a global write lock.
         payload["read-only"] = True
+        if self._domain is not None:
+            payload["domain"] = self._domain
         data = self._post("login", payload, authed=False)
         sid = data.get("sid")
         if not isinstance(sid, str) or not sid:

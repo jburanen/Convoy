@@ -260,6 +260,24 @@ def test_environment_and_env_host_crud(store: Store) -> None:
     assert hosts[0].ssh_user == "svc"
 
 
+def test_environment_is_mds_defaults_false_and_toggles(store: Store) -> None:
+    store.insert_environment("corp")
+    assert store.get_environment("corp").is_mds is False  # type: ignore[union-attr]
+
+    store.insert_environment("mds-estate", is_mds=True)
+    assert store.get_environment("mds-estate").is_mds is True  # type: ignore[union-attr]
+
+    assert store.set_environment_kind("corp", True) is True
+    assert store.get_environment("corp").is_mds is True  # type: ignore[union-attr]
+    assert store.set_environment_kind("ghost", True) is False
+
+
+def test_rename_environment_carries_is_mds(store: Store) -> None:
+    store.insert_environment("corp", is_mds=True)
+    assert store.rename_environment("corp", "Corp HQ") is True
+    assert store.get_environment("Corp HQ").is_mds is True  # type: ignore[union-attr]
+
+
 def test_deleting_environment_cascades_to_hosts(store: Store) -> None:
     store.insert_environment("corp")
     store.upsert_env_host(EnvHostRow(environment="corp", name="m1", address="10.0.0.1", role="mds"))

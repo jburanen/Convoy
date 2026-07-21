@@ -167,7 +167,12 @@ def test_status_reports_unlocked_and_counts(client: TestClient) -> None:
 def test_environments_endpoint(client: TestClient) -> None:
     envs = client.get("/api/environments").json()
     assert envs == [
-        {"name": "default", "management_servers": 1, "credential_storage_enabled": True}
+        {
+            "name": "default",
+            "management_servers": 1,
+            "credential_storage_enabled": True,
+            "is_mds": False,
+        }
     ]
 
 
@@ -178,6 +183,27 @@ def test_new_environment_defaults_to_storage_disabled(client: TestClient) -> Non
     }
     assert envs["dmz"] is False  # UI-created environments don't store credentials
     assert envs["default"] is True  # config-seeded ones keep the old behaviour
+
+
+def test_create_environment_declares_mds_kind(client: TestClient) -> None:
+    client.post("/api/environments", json={"name": "mds-estate", "is_mds": True})
+    envs = {e["name"]: e["is_mds"] for e in client.get("/api/environments").json()}
+    assert envs["mds-estate"] is True
+    assert envs["default"] is False
+
+
+def test_set_environment_kind_toggles_is_mds(client: TestClient) -> None:
+    client.post("/api/environments", json={"name": "dmz"})
+    resp = client.post("/api/environments/dmz/kind", json={"is_mds": True})
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"is_mds": True}
+    envs = {e["name"]: e["is_mds"] for e in client.get("/api/environments").json()}
+    assert envs["dmz"] is True
+
+
+def test_set_environment_kind_unknown_environment_404s(client: TestClient) -> None:
+    resp = client.post("/api/environments/nope/kind", json={"is_mds": True})
+    assert resp.status_code == 404
 
 
 def test_storage_disabled_env_rejects_stored_credentials(client: TestClient) -> None:

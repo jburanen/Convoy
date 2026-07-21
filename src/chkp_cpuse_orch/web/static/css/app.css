@@ -433,6 +433,8 @@ button.secondary:hover { color: var(--text); filter: none; }
    the placeholder example is fully readable. */
 #env-add-name { flex: 1; min-width: 0; }
 
+.env-add-mds { display: flex; align-items: center; gap: 0.35rem; font-size: 0.9rem; white-space: nowrap; }
+
 #env-manage-list { list-style: none; margin: 0 0 0.75rem; padding: 0; }
 .env-manage-row {
   display: flex;

@@ -38,6 +38,10 @@ _SEEDED_META_KEY = "environments_seeded"
 # and patches locally via CPUSE) — shared with services/common.py via inventory.
 MANAGEMENT_ROLES = MANAGEMENT_PLANE_ROLES
 
+# Roles that only exist in a Multi-Domain deployment — used to infer is_mds when
+# seeding an environment from a config-defined inventory file.
+_MDS_FAMILY_ROLES = (Role.PRIMARY_MDS, Role.SECONDARY_MDS, Role.MLM, Role.MDS)
+
 
 class EnvironmentManager:
     """Owns environment/server persistence and keeps the live registry in sync."""
@@ -63,11 +67,18 @@ class EnvironmentManager:
         if self._store.get_meta(_SEEDED_META_KEY):
             return
         for env_def in config.resolved_environments():
+            inventory = Inventory.load(env_def.inventory) if env_def.inventory.is_file() else None
             # Config-seeded environments preserve the pre-feature behaviour of
             # storing credentials; only UI-created environments default to off.
-            self._store.insert_environment(env_def.name, credential_storage_enabled=True)
-            if env_def.inventory.is_file():
-                inventory = Inventory.load(env_def.inventory)
+            # MDS-ness is inferred from the seeded inventory (an operator setting
+            # up a fresh environment via the UI declares it explicitly instead).
+            is_mds = inventory is not None and any(
+                h.role in _MDS_FAMILY_ROLES for h in _all_hosts(inventory)
+            )
+            self._store.insert_environment(
+                env_def.name, credential_storage_enabled=True, is_mds=is_mds
+            )
+            if inventory is not None:
                 for host in _all_hosts(inventory):
                     if host.role in MANAGEMENT_ROLES:
                         self._store.upsert_env_host(_row_from_host(env_def.name, host))
@@ -92,12 +103,13 @@ class EnvironmentManager:
                 self._client_factory,
                 environment=env.name,
                 credential_storage_enabled=env.credential_storage_enabled,
+                is_mds=env.is_mds,
             )
         self._registry.rebuild(connectors)
 
     # -- environment CRUD --------------------------------------------------------
 
-    def create_environment(self, name: str) -> str:
+    def create_environment(self, name: str, *, is_mds: bool = False) -> str:
         """Create an environment; returns the normalized (stripped) name."""
         name = name.strip()
         if not _ENV_NAME_RE.fullmatch(name):
@@ -106,11 +118,19 @@ class EnvironmentManager:
                 "'_' and '-', starting with a letter or digit, max 32 chars"
             )
         try:
-            self._store.insert_environment(name, credential_storage_enabled=False)
+            self._store.insert_environment(name, credential_storage_enabled=False, is_mds=is_mds)
         except sqlite3.IntegrityError:
             raise InventoryError(f"environment {name!r} already exists") from None
         self.rebuild()
         return name
+
+    def set_environment_kind(self, name: str, is_mds: bool) -> None:
+        """Declare an environment SMS or Multi-Domain (MDS) — decides which
+        command variants (discovery, and future MDS-vs-SMS-specific tasks) apply
+        to every server in it."""
+        if not self._store.set_environment_kind(name, is_mds):
+            raise InventoryError(f"unknown environment: {name!r}")
+        self.rebuild()
 
     def set_credential_storage(self, name: str, enabled: bool) -> int:
         """Enable or disable credential storage for an environment.

@@ -390,11 +390,18 @@
       Environments are independent management estates — each has its own inventory
       of management servers and its own credentials. Edit a name and click
       <strong>Rename</strong>: servers, credentials, and job history move with it.
-      Servers and deletion are managed on the <strong>Provisioning</strong> tab.
+      Servers and deletion are managed on the <strong>Provisioning</strong> tab. An
+      environment is always entirely an SMS estate or entirely a Multi-Domain
+      (MDS) one — never a mix — so discovery and other commands know which
+      variant to use.
     </p>
     <ul id="env-manage-list"><!-- tpl-env-manage-row instances --></ul>
     <form id="env-add-form">
       <input type="text" id="env-add-name" placeholder="new environment name (e.g. Corp HQ)" required>
+      <label class="env-add-mds">
+        <input type="checkbox" id="env-add-is-mds">
+        Multi-Domain (MDS) environment
+      </label>
       <button type="submit">Create</button>
     </form>
   </div>
@@ -493,6 +500,9 @@
       </label>
       <label>SSH user<input type="text" id="pm-user" value="admin"></label>
       <label>SSH port<input type="number" id="pm-port" value="22" min="1" max="65535"></label>
+      <label id="pm-cred-label">Credential set
+        <select id="pm-cred-select"><option value="">none — assign later</option></select>
+      </label>
       <div class="cred-modal-actions">
         <button type="submit">Add primary server</button>
         <button type="button" id="primary-cancel" class="secondary">Cancel</button>
@@ -682,8 +692,8 @@
   </tr>
 </template>
 
-<!-- one row in the Manage Environments modal: editable name + Rename, plus a
-     per-environment credential-storage toggle -->
+<!-- one row in the Manage Environments modal: editable name + Rename, plus
+     per-environment credential-storage and MDS-kind toggles -->
 <template id="tpl-env-manage-row">
   <li class="env-manage-row">
     <div class="env-manage-name">
@@ -691,6 +701,10 @@
       <button class="env-rename-btn small">Rename</button>
       <button class="env-delete-btn small danger" title="Delete this environment — removes its servers and stored credentials">Delete</button>
     </div>
+    <label class="env-storage-toggle">
+      <input type="checkbox" class="env-mds-input">
+      Multi-Domain (MDS) environment
+    </label>
     <label class="env-storage-toggle">
       <input type="checkbox" class="env-storage-input">
       <span class="env-storage-main">
