@@ -553,6 +553,7 @@ async function populatePrimaryCredSelect() {
   const label = document.getElementById("pm-cred-label");
   const select = document.getElementById("pm-cred-select");
   select.querySelectorAll("option:not(:first-child)").forEach((o) => o.remove());
+  applyPrimaryCredUser(); // reset the SSH-user field/lock before repopulating
   const enabled = storageEnabled();
   label.classList.toggle("hidden", !enabled);
   if (!enabled) return;
@@ -561,9 +562,28 @@ async function populatePrimaryCredSelect() {
     const opt = document.createElement("option");
     opt.value = set.name;
     opt.textContent = set.name;
+    opt.dataset.sshUser = set.ssh_username || "";
     select.appendChild(opt);
   }
 }
+
+// A credential set already carries its own SSH username — re-typing it in the
+// primary modal is redundant. When a set with one is selected, derive the SSH
+// user field from it and lock it; otherwise leave it free-text.
+function applyPrimaryCredUser() {
+  const select = document.getElementById("pm-cred-select");
+  const userInput = document.getElementById("pm-user");
+  const sshUser = select.selectedOptions[0]?.dataset.sshUser;
+  if (sshUser) {
+    userInput.value = sshUser;
+    userInput.disabled = true;
+    userInput.title = "From the selected credential set";
+  } else {
+    userInput.disabled = false;
+    userInput.title = "";
+  }
+}
+document.getElementById("pm-cred-select").addEventListener("change", applyPrimaryCredUser);
 
 document.getElementById("primary-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
@@ -1112,6 +1132,17 @@ async function loadServers() {
     info.querySelector(".srv-port").textContent = srv.ssh_port;
     info.querySelector(".srv-creds").textContent =
       assignedByName.get(srv.name) || "none — not assigned";
+    info.querySelector(".btn-edit").addEventListener("click", () => {
+      // Load this server into the inline add form — submitting it back updates
+      // the same row in place (add/update is keyed on name).
+      document.getElementById("es-name").value = srv.name;
+      document.getElementById("es-address").value = srv.address;
+      document.getElementById("es-role").value = srv.role;
+      document.getElementById("es-user").value = srv.ssh_user;
+      document.getElementById("es-port").value = srv.ssh_port;
+      document.getElementById("es-address").focus();
+      document.getElementById("env-server-form").scrollIntoView({ block: "nearest" });
+    });
     info.querySelector(".btn-remove").addEventListener("click", async () => {
       if (!confirm(`Remove server ${srv.name} from ${currentEnv}?`)) return;
       try {
