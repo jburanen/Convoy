@@ -161,6 +161,41 @@ footer {
 }
 .tab-badge.hidden { display: none; } /* out-rank the generic .hidden */
 
+/* ---- tab guide: descriptive row under the tab bar ----
+   Five equal-width blocks (one per tab), always visible on every tab, with a
+   right-pointing chevron between them to signal the left-to-right sequence.
+   Text uses the disabled/CDT-tab color (muted + 0.4 opacity) at footer size. */
+#tab-guide {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+.tab-guide-item {
+  flex: 1 1 0; /* five equal-width columns */
+  margin: 0;
+  text-align: center;
+  color: var(--muted);
+  opacity: 0.4; /* matches the disabled CDT tab title text */
+  font-size: 0.85rem; /* matches the footer text size */
+  line-height: 1.35;
+}
+.tab-guide-item.active {
+  opacity: 1; /* the active tab's blurb reads as normal muted text */
+}
+.tab-guide-chevron {
+  flex: 0 0 auto;
+  color: var(--muted);
+  opacity: 0.4;
+  font-size: 1.1rem;
+  line-height: 1;
+  user-select: none;
+}
+/* Too cramped for five text columns on narrow screens — hide the whole row. */
+@media (max-width: 720px) {
+  #tab-guide { display: none; }
+}
+
 /* panels: only the active tab's panel is shown */
 .tab-panel { display: none; }
 .tab-panel.active { display: block; }

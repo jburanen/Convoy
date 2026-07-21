@@ -515,6 +515,10 @@ function selectTab(name) {
   for (const panel of document.querySelectorAll(".tab-panel")) {
     panel.classList.toggle("active", panel.id === "tab-" + name);
   }
+  // Un-dim the guide blurb for the active tab (normal muted text).
+  for (const item of document.querySelectorAll("#tab-guide .tab-guide-item")) {
+    item.classList.toggle("active", item.dataset.tab === name);
+  }
   tabChosen = true;
 }
 
