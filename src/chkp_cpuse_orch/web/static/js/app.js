@@ -524,16 +524,38 @@ async function addServer({ name, address, role, ssh_user, ssh_port }) {
 // editable; each row's Edit button opens it prefilled with Name locked (add/
 // update is upsert-by-name, so changing it would create a new server rather
 // than rename this one).
-function openAddServerModal() {
+// Storage-enabled environments pick an SSH identity from a stored credential
+// set (no free-text username — the set's ssh_username drives it); storage-
+// disabled environments have no sets to pick from, so they type a username.
+async function populateServerCredSelect(assignedSetName) {
+  const enabled = storageEnabled();
+  document.getElementById("sm-user-label").classList.toggle("hidden", enabled);
+  document.getElementById("sm-cred-label").classList.toggle("hidden", !enabled);
+  if (!enabled) return;
+  const select = document.getElementById("sm-cred-select");
+  select.querySelectorAll("option:not(:first-child)").forEach((o) => o.remove());
+  const sets = await fetchCredentialSets();
+  for (const set of sets) {
+    const opt = document.createElement("option");
+    opt.value = set.name;
+    opt.textContent = set.name;
+    opt.dataset.sshUser = set.ssh_username || "";
+    select.appendChild(opt);
+  }
+  select.value = assignedSetName || "";
+}
+
+async function openAddServerModal() {
   if (!currentEnv) { toast("Create an environment first (picker → New Environment…)."); return; }
   document.getElementById("server-form").reset();
   document.getElementById("sm-name").disabled = false;
   document.getElementById("server-modal-title").textContent = "Add server";
   document.getElementById("server-modal-submit").textContent = "Add server";
+  await populateServerCredSelect();
   document.getElementById("server-modal").classList.remove("hidden");
   document.getElementById("sm-name").focus();
 }
-function openEditServerModal(srv) {
+async function openEditServerModal(srv, assignedSetName) {
   document.getElementById("sm-name").value = srv.name;
   document.getElementById("sm-name").disabled = true;
   document.getElementById("sm-address").value = srv.address;
@@ -542,6 +564,7 @@ function openEditServerModal(srv) {
   document.getElementById("sm-port").value = srv.ssh_port;
   document.getElementById("server-modal-title").textContent = `Edit ${srv.name}`;
   document.getElementById("server-modal-submit").textContent = "Save changes";
+  await populateServerCredSelect(assignedSetName);
   document.getElementById("server-modal").classList.remove("hidden");
   document.getElementById("sm-address").focus();
 }
@@ -553,14 +576,27 @@ document.getElementById("add-server-btn").addEventListener("click", openAddServe
 document.getElementById("server-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   if (!currentEnv) return;
+  const name = document.getElementById("sm-name").value.trim();
+  const credSelect = document.getElementById("sm-cred-select");
+  const credSet = storageEnabled() ? credSelect.value : null;
+  const sshUser = storageEnabled()
+    ? credSelect.selectedOptions[0]?.dataset.sshUser || "admin"
+    : document.getElementById("sm-user").value.trim() || "admin";
   try {
     await addServer({
-      name: document.getElementById("sm-name").value.trim(),
+      name,
       address: document.getElementById("sm-address").value.trim(),
       role: document.getElementById("sm-role").value,
-      ssh_user: document.getElementById("sm-user").value.trim() || "admin",
+      ssh_user: sshUser,
       ssh_port: Number(document.getElementById("sm-port").value) || 22,
     });
+    if (storageEnabled()) {
+      await api(envUrl(`/servers/${encodeURIComponent(name)}/credential`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ set: credSet || null }),
+      });
+    }
     closeServerModal();
     await Promise.all([loadServers(), refreshStatus()]);
   } catch (e) { toast("Save failed: " + e.message); }
@@ -658,21 +694,30 @@ document.getElementById("primary-modal").addEventListener("click", (ev) => {
 
 /* ---------- 1c. discover servers ---------- */
 
+// The discover-from primary's SSH identity, captured when a scan runs so
+// imported servers can inherit it (same credential set, or same typed
+// username in a storage-disabled environment) instead of defaulting to admin.
+let discoverPrimarySshUser = "admin";
+let discoverPrimaryCredSet = null;
+
 // Open the Discover modal, populating the "Discover from" picker with the
-// environment's current servers. `preselectName` pre-picks the just-added primary.
+// environment's Primary SMS/MDS servers only — discovery needs a primary,
+// not a secondary or dedicated Log/SmartEvent server. `preselectName`
+// pre-picks the just-added primary.
 async function openDiscoverModal(preselectName) {
   if (!currentEnv) { toast("Create an environment and add a primary server first."); return; }
   let servers = [];
   try {
     servers = await api(`/api/environments/${encodeURIComponent(currentEnv)}/servers`);
   } catch (e) { toast("Could not load servers: " + e.message); return; }
-  if (!servers.length) {
-    toast("Add a primary management server before discovering the rest.");
+  const primaries = servers.filter((s) => s.role === "primary_sms" || s.role === "primary_mds");
+  if (!primaries.length) {
+    toast("Add a Primary SMS or Primary MDS server before discovering the rest.");
     return;
   }
   const select = document.getElementById("discover-primary");
   select.replaceChildren();
-  for (const s of servers) {
+  for (const s of primaries) {
     const opt = document.createElement("option");
     opt.value = s.name;
     opt.textContent = `${s.name} (${roleLabel(s.role)})`;
@@ -708,6 +753,17 @@ document.getElementById("discover-form").addEventListener("submit", async (ev) =
   const runBtn = document.getElementById("discover-run");
   runBtn.disabled = true;
   try {
+    // Capture the primary's own SSH identity so imported servers can inherit
+    // it below, instead of silently defaulting to admin.
+    const editableServers = await api(`/api/environments/${encodeURIComponent(currentEnv)}/servers`);
+    const primarySrv = editableServers.find((s) => s.name === primary);
+    discoverPrimarySshUser = primarySrv ? primarySrv.ssh_user : "admin";
+    discoverPrimaryCredSet = null;
+    if (storageEnabled()) {
+      const servers = await api(envUrl("/servers"));
+      const match = servers.find((s) => s.name === primary);
+      discoverPrimaryCredSet = match ? match.credential_set : null;
+    }
     const result = await api(`/api/environments/${encodeURIComponent(currentEnv)}/discover`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -791,11 +847,20 @@ document.getElementById("discover-import").addEventListener("click", async () =>
     const role = r.querySelector(".disc-role").value;
     if (!name || !address) { failed.push(name || address || "(unnamed)"); continue; }
     try {
+      // Inherit the discover-from primary's SSH identity: same credential set
+      // in a storage-enabled environment, same typed username otherwise.
       await api(`/api/environments/${encodeURIComponent(currentEnv)}/servers`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, address, role }),
+        body: JSON.stringify({ name, address, role, ssh_user: discoverPrimarySshUser }),
       });
+      if (storageEnabled() && discoverPrimaryCredSet) {
+        await api(envUrl(`/servers/${encodeURIComponent(name)}/credential`), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ set: discoverPrimaryCredSet }),
+        });
+      }
       ok++;
     } catch (e) { failed.push(`${name}: ${e.message}`); }
   }
@@ -1062,14 +1127,14 @@ document.getElementById("provision-form").addEventListener("submit", async (ev) 
       body: JSON.stringify({
         username,
         password,
-        // `|| 2600` would silently turn a deliberately-entered 0 back into the
-        // default (0 is falsy in JS, and Number("") is 0 too) — some adminRole
-        // accounts really are uid 0.
+        // A naive `Number(...) || fallback` would silently turn a deliberately-
+        // entered 0 into the fallback (0 is falsy in JS, and Number("") is 0
+        // too) — so this only falls back on a genuinely non-numeric value.
         uid: (() => {
           const raw = document.getElementById("prov-uid").value.trim();
-          if (raw === "") return 2600;
+          if (raw === "") return 0;
           const n = Number(raw);
-          return Number.isNaN(n) ? 2600 : n;
+          return Number.isNaN(n) ? 0 : n;
         })(),
         mgmt_api: document.getElementById("prov-api").checked,
       }),
@@ -1177,7 +1242,9 @@ async function loadServers() {
     info.querySelector(".srv-port").textContent = srv.ssh_port;
     info.querySelector(".srv-creds").textContent =
       assignedByName.get(srv.name) || "none — not assigned";
-    info.querySelector(".btn-edit").addEventListener("click", () => openEditServerModal(srv));
+    info.querySelector(".btn-edit").addEventListener("click", () => {
+      openEditServerModal(srv, assignedByName.get(srv.name));
+    });
     info.querySelector(".btn-remove").addEventListener("click", async () => {
       if (!confirm(`Remove server ${srv.name} from ${currentEnv}?`)) return;
       try {

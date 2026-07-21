@@ -103,7 +103,7 @@
           <input type="text" id="prov-cred-name" placeholder="e.g. primary-admin">
           <input type="text" id="prov-username" placeholder="e.g. svc-patch" required>
           <input type="password" id="prov-password" placeholder="8+ characters" required>
-          <input type="number" id="prov-uid" value="2600" min="0" max="65000" title="0 is allowed — some adminRole accounts use uid 0">
+          <input type="number" id="prov-uid" value="0" min="0" max="65000" title="Defaults to 0, matching built-in adminRole accounts">
         </div>
         <label class="prov-api-toggle" title="Emit the expert-mode commands that grant Management API access — required for estate auto-discovery">
           <input type="checkbox" id="prov-api" checked>
@@ -522,7 +522,10 @@
           <option value="smartevent">SmartEvent</option>
         </select>
       </label>
-      <label>SSH user<input type="text" id="sm-user" value="admin"></label>
+      <label id="sm-user-label">SSH user<input type="text" id="sm-user" value="admin"></label>
+      <label id="sm-cred-label" class="hidden">Credential set
+        <select id="sm-cred-select"><option value="">none — assign later</option></select>
+      </label>
       <label>SSH port<input type="number" id="sm-port" value="22" min="1" max="65535"></label>
       <div class="cred-modal-actions">
         <button type="submit" id="server-modal-submit">Add server</button>

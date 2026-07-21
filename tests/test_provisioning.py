@@ -12,7 +12,7 @@ from chkp_cpuse_orch.services.provisioning import (
 
 def test_renders_full_command_set_in_order() -> None:
     cmds = render_gaia_user_commands("svc-patch", "s3cret-pw!")
-    assert cmds[0] == "add user svc-patch uid 2600 homedir /home/svc-patch"
+    assert cmds[0] == "add user svc-patch uid 0 homedir /home/svc-patch"
     assert cmds[1].startswith("set user svc-patch password-hash $6$")
     assert cmds[2] == "add rba user svc-patch roles adminRole"
     assert cmds[3] == "set user svc-patch gid 100 shell /bin/bash"  # bash → SCP works

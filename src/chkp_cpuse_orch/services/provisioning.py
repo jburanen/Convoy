@@ -28,7 +28,9 @@ _MIN_PASSWORD_LEN = 8
 # are commonly uid 0, and operators provisioning this service account to mirror
 # an existing admin's privileges need to be able to enter that.
 _UID_RANGE = (0, 65000)
-DEFAULT_UID = 2600
+# Default to uid 0 to match the built-in adminRole accounts this service
+# account is meant to mirror; the operator can still enter any uid in range.
+DEFAULT_UID = 0
 DEFAULT_ROLE = "adminRole"  # full admin: CPUSE installer verbs require it
 
 
