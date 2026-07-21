@@ -172,23 +172,23 @@ class DiscoveryService:
         except (CredentialError, TransportError) as exc:
             result.warnings.append(f"MDS SSH discovery skipped: {exc}")
             return
+        command = "$MDSDIR/scripts/mdsquerydb MDSs"
         try:
-            # Call by $MDSDIR-relative path instead of a bare `mdsquerydb` — PATH
-            # isn't reliably populated over a plain SSH exec (neither bare nor
-            # `bash -lc` worked on a live MDS), but $MDSDIR itself is already set
-            # in that same session (confirmed 2026-07-22: `which mdsquerydb`
-            # resolved to `$MDSDIR/scripts/mdsquerydb` on the operator's box, and
-            # $MDSDIR is the same env var `$MDSVERUTIL` is built from, which has
-            # resolved in our SSH session since the very first version of this
-            # feature).
-            out = client.run("$MDSDIR/scripts/mdsquerydb MDSs")
+            out = client.run(command)
         except TransportError as exc:
             result.warnings.append(f"MDS enumeration failed: {exc}")
             return
         finally:
             client.close()
         if out.exit_status != 0:
-            result.warnings.append("MDS enumeration returned no data (is the primary an MDS?)")
+            # Surface the real exit status + stderr instead of a generic message —
+            # this exact command has been wrong twice already (see
+            # .claude/memory/mds-discovery-command.md); guessing a third fix
+            # without seeing the actual failure isn't worth shipping again.
+            stderr = out.stderr.strip() or "(no stderr)"
+            result.warnings.append(
+                f"MDS enumeration returned no data: `{command}` exited {out.exit_status}: {stderr}"
+            )
             return
         rows = parse_mdsquerydb_mdss(out.stdout, primary.address)
         if not rows:

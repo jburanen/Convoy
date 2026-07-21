@@ -236,6 +236,9 @@ section h2 { margin: 0 0 0.75rem; font-size: 1.15rem; }
   margin-bottom: 0.75rem; /* matches the plain section h2 spacing above */
 }
 .section-head h2 { margin-bottom: 0; } /* the row owns the spacing below */
+/* Groups multiple header buttons flush to the row's right edge (in order,
+   left to right) instead of spreading them out via the row's space-between. */
+.section-head-actions { display: flex; align-items: center; gap: 0.5rem; }
 
 /* ---- tables ---- */
 table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
@@ -246,6 +249,9 @@ th, td {
   vertical-align: top;
 }
 th { color: var(--muted); font-weight: 600; font-size: 0.85rem; }
+/* Edit/Delete-style action cells align to the table's right edge — flush with
+   the section-head buttons (Generate, Discover) directly above them. */
+.row-actions { text-align: right; white-space: nowrap; }
 tr.job-row { cursor: pointer; }
 tr.job-row:hover td { background: var(--badge-bg); }
 
@@ -397,8 +403,9 @@ button.secondary:hover { color: var(--text); filter: none; }
   margin-left: 0.4rem;
   padding: 0.05rem 0.5rem;
   border-radius: 999px;
-  background: var(--accent);
-  color: var(--accent-text);
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--muted);
   font-size: 0.72rem;
   font-weight: 700;
   vertical-align: middle;

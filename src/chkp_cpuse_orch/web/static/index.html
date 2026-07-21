@@ -170,12 +170,14 @@
     <section id="servers-info">
       <div class="section-head">
         <h2>Management servers in <span id="prov-env-name">—</span></h2>
-        <!-- Scans the estate from a chosen primary via the Management API (+ SSH for
-             MDS) and offers the discovered servers for review before import. -->
-        <button type="button" id="discover-btn" class="small">Discover servers</button>
-        <!-- Shown once a primary exists (the first server is added via the
-             Connect-to-Primary modal); opens the same modal as Edit, in add mode. -->
-        <button type="button" id="add-server-btn" class="small hidden">Manually add a server</button>
+        <div class="section-head-actions">
+          <!-- Shown once a primary exists (the first server is added via the
+               Connect-to-Primary modal); opens the same modal as Edit, in add mode. -->
+          <button type="button" id="add-server-btn" class="small hidden">Manually add a server</button>
+          <!-- Scans the estate from a chosen primary via the Management API (+ SSH for
+               MDS) and offers the discovered servers for review before import. -->
+          <button type="button" id="discover-btn" class="small">Discover servers</button>
+        </div>
       </div>
       <p class="hint">
         The inventory of the environment selected in the top-right picker. Add or
@@ -601,7 +603,7 @@
     <td class="srv-user mono"></td>
     <td class="srv-port"></td>
     <td class="srv-creds"></td>
-    <td>
+    <td class="row-actions">
       <button class="btn-edit small" title="edit this server">Edit</button>
       <button class="btn-remove small danger" title="remove from environment">Remove</button>
     </td>
@@ -694,7 +696,7 @@
     <td class="cs-auth"></td>
     <td class="cs-expert"></td>
     <td class="cs-api"></td>
-    <td class="cs-actions">
+    <td class="cs-actions row-actions">
       <button class="btn-default small secondary">Make default</button>
       <button class="btn-edit small">Edit</button>
       <button class="btn-delete small danger">Delete</button>

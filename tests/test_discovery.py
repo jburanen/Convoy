@@ -237,3 +237,19 @@ def test_discover_mds_over_ssh() -> None:
     # isn't reliably populated over a plain SSH exec, but $MDSDIR already is.
     assert ssh.commands[-1] == "$MDSDIR/scripts/mdsquerydb MDSs"
     assert ssh.closed is True  # transport is always closed
+
+
+def test_discover_mds_nonzero_exit_surfaces_command_and_status() -> None:
+    # This exact command has been wrong twice already — the warning must carry
+    # enough of the real failure (command, exit status, stderr) that the next
+    # miss is diagnosable from the UI alone, not another round of guessing.
+    inv = _inventory(Host(name="mds-primary", address="10.0.0.1", role=Role.PRIMARY_MDS))
+    ssh = FakeTransport(fail_rc=127)
+    connector = _FakeConnector(inv, _api_bundle(), ssh=ssh, is_mds=True)
+    service = DiscoveryService(
+        _FakeRegistry(connector),  # type: ignore[arg-type]
+        mgmt_client_factory=lambda host, **kw: _FakeMgmtClient([], **kw),
+    )
+
+    result = service.discover("default", "mds-primary")
+    assert any("$MDSDIR/scripts/mdsquerydb MDSs" in w and "127" in w for w in result.warnings)
