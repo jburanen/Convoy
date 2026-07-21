@@ -738,10 +738,10 @@ function selectTab(name) {
   tabChosen = true;
 }
 
-// Slide the tab-guide row so the active tab's block centers under its tab. The
-// left-most tab yields translateX(0) (the row's natural, full-width layout); other
-// tabs slide left by the same amount that would bring their block under their tab,
-// anchored to the left-most so it never slides right past the natural position.
+// Slide the tab-guide row so the active tab's block centers under its tab title.
+// The provisioning tab (left-most) is the exception: it keeps the bar at its
+// natural left-edge-aligned position (translateX 0). Every other tab slides left
+// by exactly the distance that brings its block's center under its tab's center.
 let guideTranslate = 0;
 function positionTabGuide() {
   const guide = document.getElementById("tab-guide");
@@ -749,18 +749,19 @@ function positionTabGuide() {
   const activeItem = guide.querySelector(".tab-guide-item.active");
   const activeBtn = document.querySelector("#tabs .tab-btn.active");
   const firstItem = guide.querySelector(".tab-guide-item");
-  const firstBtn = document.querySelector("#tabs .tab-btn");
-  if (!activeItem || !activeBtn || !firstItem || !firstBtn) return;
+  if (!activeItem || !activeBtn || !firstItem) return;
   if (!guide.offsetParent) return; // hidden (narrow screens) — nothing to place
 
   // getBoundingClientRect() includes the current transform, so subtract it to
   // recover each block's natural (untranslated) center. Tab buttons never move.
   const centerOf = (el) => { const r = el.getBoundingClientRect(); return r.left + r.width / 2; };
-  const itemCenter = (el) => centerOf(el) - guideTranslate;
+  const naturalCenter = (el) => centerOf(el) - guideTranslate;
 
-  const offsetActive = centerOf(activeBtn) - itemCenter(activeItem);
-  const offsetFirst = centerOf(firstBtn) - itemCenter(firstItem);
-  const translate = Math.min(0, offsetActive - offsetFirst); // never slide right
+  // Provisioning stays left-aligned; others center under their tab (never sliding
+  // right past the natural layout).
+  const translate = activeItem === firstItem
+    ? 0
+    : Math.min(0, centerOf(activeBtn) - naturalCenter(activeItem));
   guideTranslate = translate;
   guide.style.transform = `translateX(${translate}px)`;
   viewport.classList.toggle("slid", translate < -1);
