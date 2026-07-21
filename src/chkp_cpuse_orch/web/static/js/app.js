@@ -435,6 +435,7 @@ document.addEventListener("keydown", (ev) => {
   closeEnvModal();
   closeCredAddModal();
   closeDiscoverModal();
+  closePrimaryModal();
   hideWelcome(); // soft close — the welcome dialog returns next load if still fresh
 });
 
@@ -459,33 +460,69 @@ document.getElementById("env-add-form").addEventListener("submit", async (ev) =>
 
 /* ---------- 1a-prov. environment management (Provisioning tab) ---------- */
 
+// Shared add/update path for both the inline form and the Connect-to-Primary modal.
+async function addServer({ name, address, role, ssh_user, ssh_port }) {
+  await api(`/api/environments/${encodeURIComponent(currentEnv)}/servers`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, address, role, ssh_user, ssh_port }),
+  });
+}
+
+// Inline form: shown once a primary exists, for expanding the table manually.
 document.getElementById("env-server-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   if (!currentEnv) { toast("Create an environment first (picker → New Environment…)."); return; }
-  // Was the inventory empty before this add? If so, this is the primary — offer to
-  // discover the rest of the estate from it once it's saved.
-  const wasEmpty =
-    document.querySelectorAll("#servers-info-table tbody .srv-name").length === 0;
-  const name = document.getElementById("es-name").value.trim();
   try {
-    await api(`/api/environments/${encodeURIComponent(currentEnv)}/servers`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name,
-        address: document.getElementById("es-address").value.trim(),
-        role: document.getElementById("es-role").value,
-        ssh_user: document.getElementById("es-user").value.trim() || "admin",
-        ssh_port: Number(document.getElementById("es-port").value) || 22,
-      }),
+    await addServer({
+      name: document.getElementById("es-name").value.trim(),
+      address: document.getElementById("es-address").value.trim(),
+      role: document.getElementById("es-role").value,
+      ssh_user: document.getElementById("es-user").value.trim() || "admin",
+      ssh_port: Number(document.getElementById("es-port").value) || 22,
     });
     document.getElementById("es-name").value = "";
     document.getElementById("es-address").value = "";
     await Promise.all([loadServers(), refreshStatus()]);
-    // Offer discovery from the just-defined primary (operator can Close to keep
-    // adding manually).
-    if (wasEmpty) openDiscoverModal(name);
   } catch (e) { toast("Save failed: " + e.message); }
+});
+
+/* ---------- 1c-primary. connect to primary (empty-inventory modal) ---------- */
+
+function openPrimaryModal() {
+  if (!currentEnv) { toast("Create an environment first (picker → New Environment…)."); return; }
+  document.getElementById("primary-form").reset();
+  document.getElementById("primary-modal").classList.remove("hidden");
+  document.getElementById("pm-name").focus();
+}
+function closePrimaryModal() {
+  document.getElementById("primary-modal").classList.add("hidden");
+}
+
+document.getElementById("primary-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  if (!currentEnv) return;
+  const name = document.getElementById("pm-name").value.trim();
+  try {
+    await addServer({
+      name,
+      address: document.getElementById("pm-address").value.trim(),
+      role: document.getElementById("pm-role").value,
+      ssh_user: document.getElementById("pm-user").value.trim() || "admin",
+      ssh_port: Number(document.getElementById("pm-port").value) || 22,
+    });
+    closePrimaryModal();
+    await Promise.all([loadServers(), refreshStatus()]);
+    // Offer discovery from the just-defined primary (operator can Close to keep
+    // adding manually — the Discover button stays available either way).
+    openDiscoverModal(name);
+  } catch (e) { toast("Save failed: " + e.message); }
+});
+
+document.getElementById("primary-close").addEventListener("click", closePrimaryModal);
+document.getElementById("primary-cancel").addEventListener("click", closePrimaryModal);
+document.getElementById("primary-modal").addEventListener("click", (ev) => {
+  if (ev.target.id === "primary-modal") closePrimaryModal(); // backdrop closes
 });
 
 document.getElementById("env-delete").addEventListener("click", async () => {
@@ -660,7 +697,12 @@ document.getElementById("discover-import").addEventListener("click", async () =>
   }
 });
 
-document.getElementById("discover-btn").addEventListener("click", () => openDiscoverModal());
+// Dual-purpose button: with no servers it opens the Connect-to-Primary modal;
+// once a primary exists it runs discovery (re-runnable anytime).
+document.getElementById("discover-btn").addEventListener("click", () => {
+  if (inventoryHasServers) openDiscoverModal();
+  else openPrimaryModal();
+});
 document.getElementById("discover-close").addEventListener("click", closeDiscoverModal);
 document.getElementById("discover-cancel").addEventListener("click", closeDiscoverModal);
 document.getElementById("discover-modal").addEventListener("click", (ev) => {
@@ -789,6 +831,20 @@ const ROLE_LABELS = {
 };
 const roleLabel = (role) => ROLE_LABELS[role] ?? role;
 
+// Whether the current environment has at least one management server. Drives the
+// Provisioning panel's button (Connect-to-Primary vs Discover) and whether the
+// inline add form is shown.
+let inventoryHasServers = false;
+
+function updateServersInfoControls(hasServers) {
+  inventoryHasServers = hasServers;
+  document.getElementById("discover-btn").textContent =
+    hasServers ? "Discover servers" : "Connect to Primary SMS/MDS";
+  // The inline add form (to expand the table) appears only once a primary exists;
+  // the first server is added via the Connect-to-Primary modal.
+  document.getElementById("env-server-form").classList.toggle("hidden", !hasServers);
+}
+
 async function loadServers() {
   const tbody = document.querySelector("#servers-table tbody");
   const infoTbody = document.querySelector("#servers-info-table tbody");
@@ -802,6 +858,7 @@ async function loadServers() {
     const msg = "No environments. Use the Environment picker → New Environment…";
     emptyRow(infoTbody, 7, msg);
     emptyRow(tbody, 5, msg);
+    updateServersInfoControls(false);
     return;
   }
 
@@ -877,9 +934,10 @@ async function loadServers() {
   }
 
   if (!editable.length) {
-    emptyRow(infoTbody, 7, "No management servers yet — add one below.");
+    emptyRow(infoTbody, 7, "No management servers yet — click Connect to Primary SMS/MDS above.");
     emptyRow(tbody, 5, "No management servers yet — add them on the Provisioning tab.");
   }
+  updateServersInfoControls(editable.length > 0);
 
   chooseDefaultTab(servers.length);
 }

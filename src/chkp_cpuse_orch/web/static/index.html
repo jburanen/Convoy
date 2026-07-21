@@ -156,7 +156,9 @@
         </thead>
         <tbody><!-- tpl-server-info-row instances --></tbody>
       </table>
-      <form id="env-server-form">
+      <!-- Manual add form to expand the table — shown once a primary exists (the
+           first server is added via the Connect-to-Primary modal). -->
+      <form id="env-server-form" class="hidden">
         <input type="text" id="es-name" placeholder="name" required>
         <input type="text" id="es-address" placeholder="address / IP" required>
         <select id="es-role">
@@ -426,6 +428,40 @@
       <div class="cred-modal-actions">
         <button type="submit">Continue</button>
         <button type="button" id="cred-modal-cancel" class="secondary">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ============ Connect to Primary modal (opened from the Provisioning tab) == -->
+<!-- Configures the first (primary) management server for an empty environment. Once
+     a primary exists, the inline add form appears for manual additions and this
+     button becomes "Discover servers". -->
+<div id="primary-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="primary-title">
+  <div class="modal-card narrow">
+    <div class="modal-head">
+      <h2 id="primary-title">Connect to Primary SMS/MDS</h2>
+      <button id="primary-close" class="small" title="Close">✕</button>
+    </div>
+    <p class="hint">
+      Define your primary management server — a Security Management Server or a
+      Multi-Domain Server. After it's added you can discover the rest of the estate
+      from it, or keep adding servers manually.
+    </p>
+    <form id="primary-form" class="stacked">
+      <label>Name<input type="text" id="pm-name" placeholder="e.g. mgmt-primary" required></label>
+      <label>Address / IP<input type="text" id="pm-address" placeholder="hostname or IP" required></label>
+      <label>Role
+        <select id="pm-role">
+          <option value="primary_sms">Primary SMS</option>
+          <option value="primary_mds">Primary MDS</option>
+        </select>
+      </label>
+      <label>SSH user<input type="text" id="pm-user" value="admin"></label>
+      <label>SSH port<input type="number" id="pm-port" value="22" min="1" max="65535"></label>
+      <div class="cred-modal-actions">
+        <button type="submit">Add primary server</button>
+        <button type="button" id="primary-cancel" class="secondary">Cancel</button>
       </div>
     </form>
   </div>
