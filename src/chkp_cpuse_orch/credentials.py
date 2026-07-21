@@ -72,6 +72,7 @@ class CredentialSetInfo(BaseModel):
     ssh_auth: str  # "password" | "key" | "none" — which SSH secret the set holds
     has_expert: bool = False
     has_api: bool = False
+    is_default: bool = False  # the environment's default set (assigned to new servers)
 
 
 def load_master_key(environ: os._Environ[str] | dict[str, str] | None = None) -> str:
@@ -145,22 +146,48 @@ class CredentialStore:
         expert_password: str | None = None,
         api_key: str | None = None,
     ) -> CredentialSetInfo:
-        """Create or replace a named login set. Requires exactly one SSH secret
-        (password or private key); optional expert password / API key. Secrets are
+        """Create a named login set, or update an existing one by name.
+
+        On an **update** (a set with this name already exists), any argument left
+        as ``None`` keeps the set's current value — so an operator can add just the
+        API key to a bootstrap entry without re-typing the SSH secret. The effective
+        row must still carry exactly one SSH secret (password or private key). The
+        set's id is preserved, so server assignments to it survive. Secrets are
         encrypted here and never leave this process in plaintext."""
-        if ssh_password and ssh_private_key:
+        existing = self._store.get_credential_set_by_name(environment, name)
+
+        def _keep(new_plain: str | None, current_ct: bytes | None) -> bytes | None:
+            # Provided value → (re)encrypt; omitted (None) → keep current ciphertext.
+            return self._enc(new_plain) if new_plain is not None else current_ct
+
+        if existing is not None:
+            ssh_username = existing.ssh_username if ssh_username is None else ssh_username
+            ssh_password_ct = _keep(ssh_password, existing.ssh_password_ct)
+            ssh_private_key_ct = _keep(ssh_private_key, existing.ssh_private_key_ct)
+            expert_password_ct = _keep(expert_password, existing.expert_password_ct)
+            api_key_ct = _keep(api_key, existing.api_key_ct)
+        else:
+            ssh_password_ct = self._enc(ssh_password)
+            ssh_private_key_ct = self._enc(ssh_private_key)
+            expert_password_ct = self._enc(expert_password)
+            api_key_ct = self._enc(api_key)
+
+        if ssh_password_ct is not None and ssh_private_key_ct is not None:
             raise CredentialError("provide an SSH password or a private key, not both")
-        if not ssh_password and not ssh_private_key:
+        if ssh_password_ct is None and ssh_private_key_ct is None:
             raise CredentialError("a credential set needs an SSH password or private key")
+
         row = CredentialSetRow(
             environment=environment,
             name=name,
             ssh_username=ssh_username or None,
-            ssh_password_ct=self._enc(ssh_password),
-            ssh_private_key_ct=self._enc(ssh_private_key),
-            expert_password_ct=self._enc(expert_password),
-            api_key_ct=self._enc(api_key),
+            ssh_password_ct=ssh_password_ct,
+            ssh_private_key_ct=ssh_private_key_ct,
+            expert_password_ct=expert_password_ct,
+            api_key_ct=api_key_ct,
         )
+        if existing is not None:
+            row.id = existing.id  # preserve id so server assignments survive
         return self._info(self._store.upsert_credential_set(row))
 
     def list_sets(self, environment: str) -> list[CredentialSetInfo]:
@@ -173,6 +200,16 @@ class CredentialStore:
 
     def delete_set(self, environment: str, name: str) -> bool:
         return self._store.delete_credential_set(environment, name)
+
+    def set_default(self, environment: str, name: str) -> bool:
+        """Make ``name`` the environment's default set (clears any previous one).
+        Returns False if the set doesn't exist."""
+        return self._store.set_default_credential_set(environment, name)
+
+    def default_set_name(self, environment: str) -> str | None:
+        """Name of the environment's default credential set, or None if unset."""
+        row = self._store.get_default_credential_set(environment)
+        return None if row is None else row.name
 
     def get_set_bundle(self, set_id: str, server_name: str) -> CredentialBundle:
         """Decrypt a credential set into a per-kind bundle for one server. Raises
@@ -237,6 +274,7 @@ class CredentialStore:
             ssh_auth=ssh_auth,
             has_expert=row.expert_password_ct is not None,
             has_api=row.api_key_ct is not None,
+            is_default=row.is_default,
         )
 
 

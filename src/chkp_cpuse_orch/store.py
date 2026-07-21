@@ -134,6 +134,7 @@ class CredentialSetRow(BaseModel):
     ssh_private_key_ct: bytes | None = None
     expert_password_ct: bytes | None = None
     api_key_ct: bytes | None = None
+    is_default: bool = False  # the environment's default set (auto-assigned to new servers)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -301,6 +302,12 @@ _MIGRATIONS: tuple[str, ...] = (
     ALTER TABLE env_hosts ADD COLUMN credential_set_id TEXT
         REFERENCES credential_sets (id) ON DELETE SET NULL;
     """,
+    # v9: one credential set per environment can be the "default" — auto-assigned
+    # to newly added/discovered management servers. At most one row per environment
+    # carries is_default = 1 (enforced in set_default_credential_set).
+    """
+    ALTER TABLE credential_sets ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0;
+    """,
 )
 
 
@@ -356,17 +363,20 @@ class Store:
 
     _CRED_SET_COLS = (
         "id, environment, name, ssh_username, ssh_password_ct, ssh_private_key_ct,"
-        " expert_password_ct, api_key_ct, created_at, updated_at"
+        " expert_password_ct, api_key_ct, is_default, created_at, updated_at"
     )
 
     def upsert_credential_set(self, rec: CredentialSetRow) -> CredentialSetRow:
         """Create or replace a named credential set (keyed by environment+name).
-        All secret columns are overwritten, so the caller passes the full set."""
+        All secret columns are overwritten, so the caller passes the full set.
+        ``is_default`` is set on INSERT only — an update keeps the current default
+        flag (managed via set_default_credential_set), so editing a set can't
+        accidentally clear/steal the default."""
         now = utcnow()
         with self._connect() as conn:
             conn.execute(
                 f"INSERT INTO credential_sets ({self._CRED_SET_COLS})"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (environment, name) DO UPDATE SET"
                 " ssh_username = excluded.ssh_username,"
                 " ssh_password_ct = excluded.ssh_password_ct,"
@@ -383,6 +393,7 @@ class Store:
                     rec.ssh_private_key_ct,
                     rec.expert_password_ct,
                     rec.api_key_ct,
+                    int(rec.is_default),
                     rec.created_at.isoformat(),
                     now.isoformat(),
                 ),
@@ -390,6 +401,35 @@ class Store:
         stored = self.get_credential_set_by_name(rec.environment, rec.name)
         assert stored is not None  # just written
         return stored
+
+    def set_default_credential_set(self, environment: str, name: str) -> bool:
+        """Make one set the environment's default (clearing any previous default).
+        Returns False if the named set doesn't exist."""
+        with self._connect() as conn:
+            exists = conn.execute(
+                "SELECT 1 FROM credential_sets WHERE environment = ? AND name = ?",
+                (environment, name),
+            ).fetchone()
+            if exists is None:
+                return False
+            conn.execute(
+                "UPDATE credential_sets SET is_default = 0 "
+                "WHERE environment = ? AND is_default = 1",
+                (environment,),
+            )
+            conn.execute(
+                "UPDATE credential_sets SET is_default = 1 WHERE environment = ? AND name = ?",
+                (environment, name),
+            )
+        return True
+
+    def get_default_credential_set(self, environment: str) -> CredentialSetRow | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM credential_sets WHERE environment = ? AND is_default = 1",
+                (environment,),
+            ).fetchone()
+        return None if row is None else _credential_set_from_row(row)
 
     def get_credential_set(self, set_id: str) -> CredentialSetRow | None:
         with self._connect() as conn:
@@ -514,6 +554,13 @@ class Store:
                 "SELECT * FROM env_hosts WHERE environment = ? ORDER BY name", (environment,)
             ).fetchall()
         return [_env_host_from_row(r) for r in rows]
+
+    def get_env_host(self, environment: str, name: str) -> EnvHostRow | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM env_hosts WHERE environment = ? AND name = ?", (environment, name)
+            ).fetchone()
+        return None if row is None else _env_host_from_row(row)
 
     def upsert_env_host(self, rec: EnvHostRow) -> None:
         with self._connect() as conn:
@@ -840,6 +887,7 @@ def _credential_set_from_row(row: sqlite3.Row) -> CredentialSetRow:
         ssh_private_key_ct=row["ssh_private_key_ct"],
         expert_password_ct=row["expert_password_ct"],
         api_key_ct=row["api_key_ct"],
+        is_default=bool(row["is_default"]),
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
     )

@@ -148,13 +148,11 @@ CLAUDE.md         project instructions
 
 ## To-do List
 
-- Provisioning: Collapse new credential set creating into a modal and a new Add Credential Set button
 - CPUSE: Management tab name change to "Direct Patching (CPUSE)"
 - CPUSE: Add concept of direct patching for gateways as well with a separate panel from mgmt servers
 - CPUSE: Gateways to direct patch should be added by admin on the CPUSE tab with a similar UI to adding mgmt servers on the provisioning tab. Management servers should be inherited from Prov tab
 - CPUSE: Add ability to edit existing direct patching targets
 - Provisioning: Conceptually adopt the terminology of patching targets for CPUSE patching screens
-- Provisioning: Move Delete Environment button to Manage Environments modal - make that modal physically larger
 - Environments: Stack enable credential and hint text on manage environments modal
 - Environments: Add enable credential storage option and hint to new deployment rename prompt modal
 - Jobs: tab "flickers" when a job is selected (because of the live view?)

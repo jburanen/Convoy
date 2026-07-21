@@ -203,6 +203,34 @@ def test_assign_credential_set_to_server(store: Store) -> None:
     assert store.list_env_hosts("corp")[0].credential_set_id is None
 
 
+def test_new_server_inherits_the_default_credential_set(store: Store) -> None:
+    registry = EnvironmentRegistry()
+    mgr = _manager(store, registry)
+    mgr.create_environment("corp")
+    mgr.set_credential_storage("corp", True)
+    _set(store, "corp", "primary")
+    assert store.set_default_credential_set("corp", "primary") is True
+
+    # A newly added server auto-inherits the environment's default set.
+    mgr.add_server("corp", name="m1", address="10.0.0.1", role="primary_sms", ssh_user="admin")
+    default_id = store.get_default_credential_set("corp").id
+    assert store.get_env_host("corp", "m1").credential_set_id == default_id
+
+    # Re-adding (update) an existing server does NOT overwrite its assignment.
+    mgr.assign_credential("corp", "m1", None)  # explicitly clear it
+    mgr.add_server("corp", name="m1", address="10.0.0.9", role="primary_sms", ssh_user="root")
+    assert store.get_env_host("corp", "m1").credential_set_id is None
+
+
+def test_new_server_without_a_default_stays_unassigned(store: Store) -> None:
+    mgr = _manager(store, EnvironmentRegistry())
+    mgr.create_environment("corp")
+    mgr.set_credential_storage("corp", True)
+    _set(store, "corp", "primary")  # a set exists, but none is marked default
+    mgr.add_server("corp", name="m1", address="10.0.0.1", role="primary_sms", ssh_user="admin")
+    assert store.get_env_host("corp", "m1").credential_set_id is None
+
+
 def test_rename_environment_moves_everything(store: Store) -> None:
     registry = EnvironmentRegistry()
     mgr = _manager(store, registry)

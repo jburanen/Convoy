@@ -144,6 +144,9 @@ class CredentialSetIn(BaseModel):
     ssh_private_key: SecretStr | None = None
     expert_password: SecretStr | None = None
     api_key: SecretStr | None = None
+    # Make this the environment's default set, but only if none is set yet. Used by
+    # the bootstrap flow so the first credentials become the default automatically.
+    default_if_none: bool = False
 
 
 class CredentialAssignmentIn(BaseModel):
@@ -835,7 +838,7 @@ def _register_routes(app: FastAPI) -> None:
             return value.get_secret_value() if value is not None else None
 
         try:
-            return store.put_set(
+            info = store.put_set(
                 env,
                 body.name,
                 ssh_username=body.ssh_username,
@@ -844,8 +847,24 @@ def _register_routes(app: FastAPI) -> None:
                 expert_password=_reveal(body.expert_password),
                 api_key=_reveal(body.api_key),
             )
+            # First credentials in an environment become its default automatically.
+            if body.default_if_none and store.default_set_name(env) is None:
+                store.set_default(env, body.name)
+                info = info.model_copy(update={"is_default": True})
+            return info
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
+
+    @app.post("/api/env/{env}/credentials/{name}/default")
+    def set_default_credential_set(
+        env: str, name: str, request: Request
+    ) -> dict[str, str | None]:
+        """Make a credential set the environment's default (assigned to new servers)."""
+        _require_env(request, env)
+        store = _credentials_or_503(request)
+        if not store.set_default(env, name):
+            raise HTTPException(status_code=404, detail=f"credential set {name!r} not found")
+        return {"default": name}
 
     @app.delete("/api/env/{env}/credentials/{name}")
     def delete_credential_set(env: str, name: str, request: Request) -> dict[str, bool]:

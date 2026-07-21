@@ -187,6 +187,68 @@ def test_storage_disabled_env_rejects_stored_credentials(client: TestClient) -> 
     assert "storage is disabled" in resp.json()["detail"]
 
 
+def test_edit_credential_set_adds_api_key_without_resending_secret(client: TestClient) -> None:
+    # Bootstrap entry (SSH password only), like the provisioning flow creates.
+    _put_set(client)
+    sets = client.get("/api/env/default/credentials").json()
+    assert sets[0]["has_api"] is False
+
+    # "Edit" it to add just the API key — no SSH secret in the body.
+    resp = client.put(
+        "/api/env/default/credentials", json={"name": "primary", "api_key": "APIKEY123"}
+    )
+    assert resp.status_code == 201, resp.text
+    sets = client.get("/api/env/default/credentials").json()
+    assert len(sets) == 1  # merged into the same set, not a second one
+    assert sets[0]["has_api"] is True
+    assert sets[0]["ssh_auth"] == "password"  # SSH password preserved
+
+
+def test_bootstrap_credentials_become_the_default(client: TestClient) -> None:
+    # First set with default_if_none → becomes the environment default.
+    resp = client.put(
+        "/api/env/default/credentials",
+        json={"name": "primary", "ssh_password": "pw", "default_if_none": True},
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["is_default"] is True
+
+    # A second set also asking default_if_none does NOT steal the default.
+    client.put(
+        "/api/env/default/credentials",
+        json={"name": "backup", "ssh_password": "pw", "default_if_none": True},
+    )
+    defaults = [
+        s["name"] for s in client.get("/api/env/default/credentials").json() if s["is_default"]
+    ]
+    assert defaults == ["primary"]
+
+
+def test_set_default_endpoint_switches_the_default(client: TestClient) -> None:
+    _put_set(client, name="a")
+    _put_set(client, name="b")
+    assert client.post("/api/env/default/credentials/a/default").json() == {"default": "a"}
+    assert client.post("/api/env/default/credentials/b/default").json() == {"default": "b"}
+    defaults = [
+        s["name"] for s in client.get("/api/env/default/credentials").json() if s["is_default"]
+    ]
+    assert defaults == ["b"]
+    assert client.post("/api/env/default/credentials/ghost/default").status_code == 404
+
+
+def test_new_server_gets_the_default_credential(client: TestClient) -> None:
+    _put_set(client, name="primary")
+    client.post("/api/env/default/credentials/primary/default")
+    client.post(
+        "/api/environments/default/servers",
+        json={"name": "m9", "address": "192.0.2.99", "role": "primary_sms"},
+    )
+    servers = {
+        s["name"]: s.get("credential_set") for s in client.get("/api/env/default/servers").json()
+    }
+    assert servers["m9"] == "primary"
+
+
 def test_toggle_credential_storage_purges_on_disable(client: TestClient) -> None:
     client.post("/api/environments", json={"name": "corp"})
     _enable_storage(client, "corp")
@@ -356,6 +418,7 @@ def test_credential_sets_roundtrip_never_echoes_secret(client: TestClient) -> No
             "ssh_auth": "password",
             "has_expert": True,
             "has_api": False,
+            "is_default": False,
         }
     ]
     assert "pw" not in str(listing) and "rootpw" not in str(listing)

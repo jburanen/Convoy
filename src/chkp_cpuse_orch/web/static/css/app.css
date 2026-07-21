@@ -166,12 +166,24 @@ footer {
 /* ---- tab guide: descriptive row under the tab bar ----
    Five equal-width blocks (one per tab), always visible on every tab, with a
    right-pointing chevron between them to signal the left-to-right sequence.
-   Text uses the disabled/CDT-tab color (muted + 0.4 opacity) at footer size. */
+   Text uses the disabled/CDT-tab color (muted + 0.4 opacity) at footer size.
+   The row slides horizontally so the active block centers under its tab; the
+   viewport clips the overflow and (when slid) fades content off the left edge. */
+#tab-guide-viewport {
+  margin-top: 0.75rem;
+  overflow: hidden;
+}
+#tab-guide-viewport.slid {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 90px);
+  mask-image: linear-gradient(to right, transparent 0, #000 90px);
+}
 #tab-guide {
   display: flex;
   align-items: flex-start; /* blocks top-align; unequal-length text hangs down */
   gap: 0.5rem;
-  margin-top: 0.75rem;
+  transform: translateX(0);
+  transition: transform 0.35s ease;
+  will-change: transform;
 }
 .tab-guide-item {
   flex: 1 1 0; /* five equal-width columns */
@@ -195,7 +207,7 @@ footer {
 }
 /* Too cramped for five text columns on narrow screens — hide the whole row. */
 @media (max-width: 720px) {
-  #tab-guide { display: none; }
+  #tab-guide-viewport { display: none; }
 }
 
 /* panels: only the active tab's panel is shown */
@@ -347,7 +359,7 @@ button.secondary:hover { color: var(--text); filter: none; }
 #provision-form { flex-direction: column; align-items: stretch; }
 .field-grid {
   display: grid;
-  grid-template-columns: 2fr 2fr 1fr; /* username, password, uid */
+  grid-template-columns: 2fr 2fr 2fr 1fr; /* credential name, username, password, uid */
   gap: 0.25rem 0.6rem;
   align-items: end;
 }
@@ -373,6 +385,23 @@ button.secondary:hover { color: var(--text); filter: none; }
 .prov-note-list { margin: 0; padding-left: 1.2rem; }
 .prov-note-list li { margin: 0.15rem 0; }
 .prov-note-warn { color: var(--warn); font-weight: 600; } /* capture-the-API-key call-out */
+
+/* Credential row actions: Make default + Edit + Delete side by side. */
+.cs-actions { white-space: nowrap; }
+.cs-actions button + button { margin-left: 0.35rem; }
+
+/* "default" pill next to the name of the environment's default credential set. */
+.pill {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0.05rem 0.5rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 0.72rem;
+  font-weight: 700;
+  vertical-align: middle;
+}
 
 /* Provisioning output boxes (one per console). Each grows to fit its commands so
    there's no scrollbar overlapping the copy icon. */

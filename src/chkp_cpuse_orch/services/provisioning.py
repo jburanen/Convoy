@@ -70,8 +70,6 @@ PROVISIONING_NOTES = [
     "The shell is /bin/bash so SCP/SFTP staging works; this tool wraps its "
     "CPUSE commands in `clish -c` accordingly.",
     "The password appears only as a salted SHA-512 hash, never in plaintext.",
-    "Afterwards, store the same username/password in the Credentials section "
-    "below (kind: SSH password) so the tool can log in.",
 ]
 
 
@@ -124,8 +122,8 @@ MGMT_API_NOTES = [
     "Run these in EXPERT mode on the management server (a Security Management Server, "
     "or on an MDS after `mdsenv` for the global context) — NOT on gateways.",
     NOTE_EMPHASIS + '`add administrator … authentication-method "api key"` prints the '
-    "API key in its JSON output. Copy it ONCE (it cannot be retrieved later) and store "
-    "it in the Credentials section as the API key.",
+    "API key in its JSON output. Copy it ONCE (it cannot be retrieved later), then Edit "
+    "the credential entry added below and paste it as the API key.",
     "`mgmt_cli login -r true` authenticates as root on the box (no password). If root "
     "login is disabled, replace it with `mgmt_cli login -u <admin> > …` and enter the "
     "SmartConsole administrator password when prompted.",

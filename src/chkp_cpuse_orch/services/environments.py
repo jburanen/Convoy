@@ -202,13 +202,16 @@ class EnvironmentManager:
         ssh_port: int = 22,
         notes: str | None = None,
     ) -> None:
-        """Add or update a management server. Validates via the Host model."""
+        """Add or update a management server. Validates via the Host model. A newly
+        added server inherits the environment's default credential set (if one is
+        set), so manually-added and discovered servers are ready to use at once."""
         self._require_env(environment)
         parsed_role = _parse_management_role(role)
         # Reuse Host for field validation (name/address non-empty, port range).
         host = Host(
             name=name, address=address, role=parsed_role, ssh_port=ssh_port, ssh_user=ssh_user
         )
+        is_new = self._store.get_env_host(environment, host.name) is None
         self._store.upsert_env_host(
             EnvHostRow(
                 environment=environment,
@@ -220,6 +223,10 @@ class EnvironmentManager:
                 notes=notes,
             )
         )
+        if is_new:
+            default = self._store.get_default_credential_set(environment)
+            if default is not None:
+                self._store.assign_credential_set(environment, host.name, default.id)
         self.rebuild()
 
     def remove_server(self, environment: str, name: str) -> None:

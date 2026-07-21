@@ -734,8 +734,40 @@ function selectTab(name) {
   for (const item of document.querySelectorAll("#tab-guide .tab-guide-item")) {
     item.classList.toggle("active", item.dataset.tab === name);
   }
+  positionTabGuide();
   tabChosen = true;
 }
+
+// Slide the tab-guide row so the active tab's block centers under its tab. The
+// left-most tab yields translateX(0) (the row's natural, full-width layout); other
+// tabs slide left by the same amount that would bring their block under their tab,
+// anchored to the left-most so it never slides right past the natural position.
+let guideTranslate = 0;
+function positionTabGuide() {
+  const guide = document.getElementById("tab-guide");
+  const viewport = document.getElementById("tab-guide-viewport");
+  const activeItem = guide.querySelector(".tab-guide-item.active");
+  const activeBtn = document.querySelector("#tabs .tab-btn.active");
+  const firstItem = guide.querySelector(".tab-guide-item");
+  const firstBtn = document.querySelector("#tabs .tab-btn");
+  if (!activeItem || !activeBtn || !firstItem || !firstBtn) return;
+  if (!guide.offsetParent) return; // hidden (narrow screens) — nothing to place
+
+  // getBoundingClientRect() includes the current transform, so subtract it to
+  // recover each block's natural (untranslated) center. Tab buttons never move.
+  const centerOf = (el) => { const r = el.getBoundingClientRect(); return r.left + r.width / 2; };
+  const itemCenter = (el) => centerOf(el) - guideTranslate;
+
+  const offsetActive = centerOf(activeBtn) - itemCenter(activeItem);
+  const offsetFirst = centerOf(firstBtn) - itemCenter(firstItem);
+  const translate = Math.min(0, offsetActive - offsetFirst); // never slide right
+  guideTranslate = translate;
+  guide.style.transform = `translateX(${translate}px)`;
+  viewport.classList.toggle("slid", translate < -1);
+}
+
+window.addEventListener("resize", positionTabGuide);
+window.addEventListener("load", positionTabGuide); // reflow after fonts settle
 
 function chooseDefaultTab(serverCount) {
   if (tabChosen) return; // user (or a #tab- link) already picked one
@@ -785,8 +817,9 @@ function addChip(box, text, cls) {
 const PROV_NOTE_EMPHASIS = "[!] ";
 
 // Render the explanatory notes as normal text (not comments in the code output),
-// grouped by which command block they describe.
-function renderProvNotes(resp) {
+// grouped by which command block they describe. `credStatus` reports how saving
+// the bootstrap credential set went.
+function renderProvNotes(resp, credStatus) {
   const box = document.getElementById("prov-notes");
   box.replaceChildren();
   const group = (title, notes) => {
@@ -811,6 +844,19 @@ function renderProvNotes(resp) {
   };
   group("SSH / Gaia access — run in clish on each management server", resp.notes);
   group("Management API access — run in expert mode on the management server", resp.api_notes);
+  if (credStatus) {
+    const hasApi = resp.api_commands && resp.api_commands.length;
+    if (credStatus.ok) {
+      const msg = hasApi
+        ? `Saved credential set “${credStatus.name}” to the Credentials table below — ` +
+          "Edit it to paste the API key after you generate one."
+        : `Saved credential set “${credStatus.name}” to the Credentials table below.`;
+      group("Credentials", [msg]);
+    } else {
+      group("Credentials", [PROV_NOTE_EMPHASIS +
+        `Credentials not saved (${credStatus.reason}). Add them in the Credentials table.`]);
+    }
+  }
   box.classList.remove("hidden");
 }
 
@@ -839,22 +885,52 @@ function flashCopied(btn) {
   setTimeout(() => btn.classList.remove("copied"), 1500);
 }
 
+// Save the bootstrap username/password as a named credential set so the operator
+// doesn't re-enter them. Best-effort: needs a current environment with credential
+// storage enabled. Returns a status for the notes area.
+async function saveBootstrapCredential(setName, username, password) {
+  if (!currentEnv) return { ok: false, reason: "no environment selected" };
+  if (!storageEnabled()) return { ok: false, reason: "credential storage is disabled for this environment" };
+  try {
+    await api(envUrl("/credentials"), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: setName,
+        ssh_username: username,
+        ssh_password: password,
+        default_if_none: true, // first credentials become the environment default
+      }),
+    });
+    await Promise.all([loadCredentialSets(), loadServers()]);
+    return { ok: true, name: setName };
+  } catch (e) {
+    return { ok: false, reason: e.message };
+  }
+}
+
 document.getElementById("provision-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const passwordInput = document.getElementById("prov-password");
+  const username = document.getElementById("prov-username").value.trim();
+  const password = passwordInput.value;
+  // Credential-set label; defaults to the username when left blank.
+  const credName = document.getElementById("prov-cred-name").value.trim() || username;
   try {
     const resp = await api("/api/provision", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        username: document.getElementById("prov-username").value.trim(),
-        password: passwordInput.value,
+        username,
+        password,
         uid: Number(document.getElementById("prov-uid").value) || 2600,
         mgmt_api: document.getElementById("prov-api").checked,
       }),
     });
     passwordInput.value = ""; // plaintext leaves the page as soon as possible
-    renderProvNotes(resp);
+    // Save the same credentials to the table so the operator needn't re-enter them.
+    const credStatus = await saveBootstrapCredential(credName, username, password);
+    renderProvNotes(resp, credStatus);
     // Commands only (no comment lines) — clish and expert in separate boxes.
     document.getElementById("prov-clish-output").textContent = resp.commands.join("\n");
     document.getElementById("prov-clish-wrap").classList.remove("hidden");
@@ -1418,11 +1494,22 @@ async function loadCredentialSets() {
   const tick = (b) => (b ? "✓" : "—");
   for (const set of credentialSets) {
     const row = el("tpl-credential-row");
-    row.querySelector(".cs-name").textContent = set.name;
+    row.querySelector(".cs-name-text").textContent = set.name;
+    // The env's default set carries a pill and hides its "Make default" button.
+    row.querySelector(".cs-default-pill").classList.toggle("hidden", !set.is_default);
+    const defaultBtn = row.querySelector(".btn-default");
+    defaultBtn.classList.toggle("hidden", set.is_default);
+    defaultBtn.addEventListener("click", async () => {
+      try {
+        await api(envUrl(`/credentials/${encodeURIComponent(set.name)}/default`), { method: "POST" });
+        await loadCredentialSets();
+      } catch (e) { toast("Could not set default: " + e.message); }
+    });
     row.querySelector(".cs-user").textContent = set.ssh_username ?? "";
     row.querySelector(".cs-auth").textContent = set.ssh_auth; // password | key | none
     row.querySelector(".cs-expert").textContent = tick(set.has_expert);
     row.querySelector(".cs-api").textContent = tick(set.has_api);
+    row.querySelector(".btn-edit").addEventListener("click", () => openCredEditModal(set));
     row.querySelector(".btn-delete").addEventListener("click", async () => {
       if (!confirm(`Delete credential set "${set.name}"? Servers using it lose access.`)) return;
       try {
@@ -1434,13 +1521,19 @@ async function loadCredentialSets() {
   }
 }
 
+// Whether the credential modal is editing an existing set (vs. adding a new one).
+// In edit mode, blank secret fields keep the set's current value (backend merges).
+let credEditMode = false;
+
 document.getElementById("credential-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const pwInput = document.getElementById("cs-ssh-password");
   const keyInput = document.getElementById("cs-ssh-key");
   const password = pwInput.value;
   const key = keyInput.value.trim();
-  if (!password && !key) { toast("Enter an SSH password or a private key."); return; }
+  // Adding a new set needs an SSH secret; editing may leave them blank to keep
+  // the existing ones (e.g. adding only the API key to a bootstrap entry).
+  if (!password && !key && !credEditMode) { toast("Enter an SSH password or a private key."); return; }
   if (password && key) { toast("Enter an SSH password OR a private key, not both."); return; }
   const expertInput = document.getElementById("cs-expert");
   const apiInput = document.getElementById("cs-api");
@@ -1466,13 +1559,40 @@ document.getElementById("credential-form").addEventListener("submit", async (ev)
 
 // The credential-set editor lives in a modal opened from the panel's header.
 function openCredAddModal() {
-  document.getElementById("credential-form").reset(); // fresh, empty each open
+  const form = document.getElementById("credential-form");
+  form.reset(); // fresh, empty each open
+  credEditMode = false;
+  document.getElementById("cred-add-title").textContent = "Add credential set";
+  document.getElementById("cred-add-hint").classList.remove("hidden");
+  document.getElementById("cred-edit-hint").classList.add("hidden");
+  document.getElementById("cs-name").readOnly = false;
   document.getElementById("cred-add-modal").classList.remove("hidden");
   document.getElementById("cs-name").focus();
+}
+// Edit an existing set: prefill name (locked) + SSH username; blank secret fields
+// are kept. Handy for pasting the API key into a bootstrapped entry afterwards.
+function openCredEditModal(set) {
+  const form = document.getElementById("credential-form");
+  form.reset();
+  credEditMode = true;
+  document.getElementById("cred-add-title").textContent = "Edit credential set";
+  document.getElementById("cred-add-hint").classList.add("hidden");
+  const editHint = document.getElementById("cred-edit-hint");
+  editHint.textContent =
+    `Editing "${set.name}". Leave a secret field blank to keep its current value.`;
+  editHint.classList.remove("hidden");
+  const nameInput = document.getElementById("cs-name");
+  nameInput.value = set.name;
+  nameInput.readOnly = true; // name identifies the set being updated
+  document.getElementById("cs-ssh-user").value = set.ssh_username ?? "";
+  document.getElementById("cred-add-modal").classList.remove("hidden");
+  document.getElementById("cs-api").focus(); // the common edit is pasting the API key
 }
 function closeCredAddModal() {
   document.getElementById("cred-add-modal").classList.add("hidden");
   document.getElementById("credential-form").reset(); // never leave secrets in the DOM
+  document.getElementById("cs-name").readOnly = false;
+  credEditMode = false;
 }
 document.getElementById("cred-add-btn").addEventListener("click", openCredAddModal);
 document.getElementById("cred-add-close").addEventListener("click", closeCredAddModal);

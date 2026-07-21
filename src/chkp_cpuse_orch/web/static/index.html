@@ -60,18 +60,22 @@
 
   <!-- Descriptive guide under the tab bar: one block per tab, always visible on
        every tab, distributed in five equal columns with a right-pointing chevron
-       between them to signal the intended left-to-right sequential workflow.
-       Placeholder (lorem ipsum) copy — final wording TBD. -->
-  <div id="tab-guide">
-    <p class="tab-guide-item" data-tab="provisioning">Bootstrap initial access to primary management and discover all management servers</p>
-    <span class="tab-guide-chevron" aria-hidden="true">&rsaquo;</span>
-    <p class="tab-guide-item" data-tab="packages">Upload and manage packages for deployment</p>
-    <span class="tab-guide-chevron" aria-hidden="true">&rsaquo;</span>
-    <p class="tab-guide-item" data-tab="management">Deploy patches to management servers and firewalls using CPUSE</p>
-    <span class="tab-guide-chevron" aria-hidden="true">&rsaquo;</span>
-    <p class="tab-guide-item" data-tab="gateways">Perform bulk patching operations on firewalls using the Central Deployment Tool</p>
-    <span class="tab-guide-chevron" aria-hidden="true">&rsaquo;</span>
-    <p class="tab-guide-item" data-tab="jobs">Monitor job status and results</p>
+       between them to signal the intended left-to-right sequential workflow. The
+       whole row slides horizontally (positionTabGuide in app.js) so the active
+       tab's block centers under its tab; content sliding off the left edge fades
+       out via the viewport's mask. -->
+  <div id="tab-guide-viewport">
+    <div id="tab-guide">
+      <p class="tab-guide-item" data-tab="provisioning">Bootstrap initial access to primary management and discover other servers</p>
+      <span class="tab-guide-chevron" aria-hidden="true">&rsaquo;</span>
+      <p class="tab-guide-item" data-tab="packages">Upload and manage packages for deployment</p>
+      <span class="tab-guide-chevron" aria-hidden="true">&rsaquo;</span>
+      <p class="tab-guide-item" data-tab="management">Deploy patches to management and firewalls using CPUSE</p>
+      <span class="tab-guide-chevron" aria-hidden="true">&rsaquo;</span>
+      <p class="tab-guide-item" data-tab="gateways">Perform bulk patching operations on firewalls using the Central Deployment Tool</p>
+      <span class="tab-guide-chevron" aria-hidden="true">&rsaquo;</span>
+      <p class="tab-guide-item" data-tab="jobs">Monitor job status and results</p>
+    </div>
   </div>
 </header>
 
@@ -82,23 +86,21 @@
 
     <section id="provision">
       <div class="section-head">
-        <h2>Provision management server access</h2>
+        <h2>Bootstrap initial management access</h2>
         <button type="submit" form="provision-form" id="prov-generate" class="small">Generate commands</button>
       </div>
       <p class="hint">
-        Generates the clish commands that create this tool's service account on a
-        management server — paste them into clish on <strong>each</strong> server.
-        The account's shell is <code>/bin/bash</code> so SCP package staging works
-        (the tool wraps its CPUSE commands in <code>clish&nbsp;-c</code> to match).
-        The password appears in the output only as a salted SHA-512 hash.
-        Afterwards, save the same username/password in the
-        <strong>Credentials</strong> panel below.
+        Generates clish commands to provisionthis tool's service account on 
+        management servers. These credentials are saved to the <strong>Credentials</strong>
+        table below automatically; edit that entry to add the API key once you generate one.
       </p>
       <form id="provision-form">
         <div class="field-grid">
+          <label for="prov-cred-name">Credential name</label>
           <label for="prov-username">Username</label>
           <label for="prov-password">Password</label>
           <label for="prov-uid">UID</label>
+          <input type="text" id="prov-cred-name" placeholder="e.g. primary-admin">
           <input type="text" id="prov-username" placeholder="e.g. svc-patch" required>
           <input type="password" id="prov-password" placeholder="8+ characters" required>
           <input type="number" id="prov-uid" value="2600" min="1000" max="65000">
@@ -407,11 +409,12 @@
       <h2 id="cred-add-title">Add credential set</h2>
       <button id="cred-add-close" class="small" title="Close">✕</button>
     </div>
-    <p class="hint">
+    <p class="hint" id="cred-add-hint">
       A named <strong>login set</strong>, stored encrypted at rest; secrets are never
       displayed again after saving. Give it an SSH password <em>or</em> a private key,
       plus an optional expert password for privileged CPUSE steps.
     </p>
+    <p class="hint hidden" id="cred-edit-hint"></p>
     <form id="credential-form" class="stacked">
       <label>Name<input type="text" id="cs-name" placeholder="e.g. primary-admin" required></label>
       <label>SSH username<input type="text" id="cs-ssh-user" placeholder="admin"></label>
@@ -653,12 +656,16 @@
 
 <template id="tpl-credential-row">
   <tr>
-    <td class="cs-name"></td>
+    <td><span class="cs-name-text"></span><span class="cs-default-pill pill hidden">default</span></td>
     <td class="cs-user"></td>
     <td class="cs-auth"></td>
     <td class="cs-expert"></td>
     <td class="cs-api"></td>
-    <td><button class="btn-delete small danger">Delete</button></td>
+    <td class="cs-actions">
+      <button class="btn-default small secondary">Make default</button>
+      <button class="btn-edit small">Edit</button>
+      <button class="btn-delete small danger">Delete</button>
+    </td>
   </tr>
 </template>
 

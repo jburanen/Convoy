@@ -98,6 +98,55 @@ def test_ssh_secret_required(creds: CredentialStore) -> None:
         creds.put_set("default", "noauth", expert_password="only-expert")
 
 
+def test_update_merges_and_preserves_id(creds: CredentialStore, store: Store) -> None:
+    # Bootstrap entry: SSH password only.
+    creds.put_set("default", "primary", ssh_username="admin", ssh_password="hunter22")
+    original_id = _set_id(store)
+
+    # "Edit" it to add just the API key — no SSH secret re-entered.
+    info = creds.put_set("default", "primary", api_key="APIKEY123")
+
+    assert info.has_api is True
+    assert _set_id(store) == original_id  # id preserved → server assignments survive
+    bundle = creds.get_set_bundle(original_id, "mgmt-01")
+    # The SSH password is kept (merge), and the API key was added.
+    assert bundle[CredentialKind.SSH_PASSWORD].reveal() == "hunter22"
+    assert bundle[CredentialKind.SSH_PASSWORD].username == "admin"
+    assert bundle[CredentialKind.API_KEY].reveal() == "APIKEY123"
+
+
+def test_update_can_replace_a_secret(creds: CredentialStore, store: Store) -> None:
+    creds.put_set("default", "primary", ssh_username="admin", ssh_password="old-pw")
+    creds.put_set("default", "primary", ssh_password="new-pw")  # username kept
+    bundle = creds.get_set_bundle(_set_id(store), "mgmt-01")
+    assert bundle[CredentialKind.SSH_PASSWORD].reveal() == "new-pw"
+    assert bundle[CredentialKind.SSH_PASSWORD].username == "admin"
+
+
+def test_set_default_is_exclusive_per_environment(creds: CredentialStore) -> None:
+    _put(creds, "a")
+    _put(creds, "b")
+    assert creds.default_set_name("default") is None
+
+    assert creds.set_default("default", "a") is True
+    assert creds.default_set_name("default") == "a"
+    assert [i.name for i in creds.list_sets("default") if i.is_default] == ["a"]
+
+    # Switching the default clears the previous one (at most one per environment).
+    assert creds.set_default("default", "b") is True
+    assert creds.default_set_name("default") == "b"
+    assert [i.name for i in creds.list_sets("default") if i.is_default] == ["b"]
+
+    assert creds.set_default("default", "ghost") is False  # unknown set
+
+
+def test_editing_a_set_preserves_its_default_flag(creds: CredentialStore) -> None:
+    _put(creds, "primary")
+    creds.set_default("default", "primary")
+    creds.put_set("default", "primary", api_key="APIKEY")  # edit to add an API key
+    assert creds.default_set_name("default") == "primary"  # still the default
+
+
 def test_password_xor_private_key(creds: CredentialStore) -> None:
     with pytest.raises(CredentialError, match="not both"):
         creds.put_set("default", "both", ssh_password="pw", ssh_private_key="key")
