@@ -174,12 +174,6 @@
         <input type="number" id="es-port" value="22" min="1" max="65535" title="ssh port">
         <button type="submit" class="small">Add / update server</button>
       </form>
-      <div id="env-danger">
-        <button id="env-delete" class="small danger">Delete this environment</button>
-        <span class="muted">
-          Removes its server list AND all stored credentials for it — permanent.
-        </span>
-      </div>
     </section>
 
   </div>
@@ -348,7 +342,7 @@
      and job history to the new name atomically. Server add/remove, deletion, and
      credentials all live on the Provisioning tab. -->
 <div id="env-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="env-modal-title">
-  <div class="modal-card narrow">
+  <div class="modal-card">
     <div class="modal-head">
       <h2 id="env-modal-title">Manage environments</h2>
       <button id="env-modal-close" class="small" title="Close">✕</button>
@@ -651,11 +645,14 @@
     <div class="env-manage-name">
       <input type="text" class="env-rename-input">
       <button class="env-rename-btn small">Rename</button>
+      <button class="env-delete-btn small danger" title="Delete this environment — removes its servers and stored credentials">Delete</button>
     </div>
     <label class="env-storage-toggle">
       <input type="checkbox" class="env-storage-input">
-      Enable encrypted credential storage<br>
-      <span class="hint env-storage-note"></span>
+      <span class="env-storage-main">
+        Enable encrypted credential storage
+        <span class="hint env-storage-note"></span>
+      </span>
     </label>
   </li>
 </template>

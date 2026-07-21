@@ -332,7 +332,8 @@ button.secondary:hover { color: var(--text); filter: none; }
   padding: 1.25rem 1.5rem;
   width: min(880px, 100%);
 }
-.modal-card.narrow { width: min(480px, 100%); } /* manage-environments / welcome dialogs */
+.modal-card.narrow { width: min(480px, 100%); } /* welcome / credential dialogs */
+#env-modal .modal-card { width: min(600px, 100%); } /* a little wider than narrow */
 
 /* ---- discover-servers review table ---- */
 #discover-table input[type="text"] { width: 100%; box-sizing: border-box; }
@@ -352,12 +353,14 @@ button.secondary:hover { color: var(--text); filter: none; }
 .env-manage-name input { flex: 1; }
 .env-storage-toggle {
   display: flex;
-  align-items: center;
+  align-items: flex-start; /* checkbox aligns with the first line of the label */
   gap: 0.4rem;
   font-size: 0.9rem;
 }
-.env-storage-toggle input { flex: none; }
-.env-storage-note { margin-left: 0.1rem; }
+.env-storage-toggle input { flex: none; margin-top: 0.15rem; }
+/* Label text with the muted hint stacked underneath it. */
+.env-storage-main { display: flex; flex-direction: column; gap: 0.1rem; }
+.env-storage-note { margin: 0; }
 
 /* Inline credential prompt (storage-disabled environments). */
 #cred-modal-form label { display: block; margin-bottom: 0.6rem; }
@@ -392,16 +395,6 @@ button.secondary:hover { color: var(--text); filter: none; }
 .modal-head h2 { margin: 0; }
 .modal-head button { background: transparent; color: var(--muted); }
 .modal-head button:hover { color: var(--text); filter: none; }
-
-/* delete-environment control on the Provisioning tab */
-#env-danger {
-  display: flex;
-  gap: 0.6rem;
-  align-items: center;
-  margin-top: 1rem;
-  padding-top: 0.75rem;
-  border-top: 1px solid var(--border);
-}
 
 /* ---- per-job progress log ---- */
 .job-events {

@@ -382,6 +382,30 @@ async function renderEnvManageList() {
       } catch (e) { toast("Rename failed: " + e.message); }
     });
 
+    // Per-row delete: removes this environment (its servers AND stored credentials).
+    row.querySelector(".env-delete-btn").addEventListener("click", async () => {
+      if (!confirm(
+        `Delete environment "${env.name}"?\n\nIts management-server list AND all ` +
+        "stored credentials for it are permanently removed. This cannot be undone."
+      )) return;
+      try {
+        await api(`/api/environments/${encodeURIComponent(env.name)}`, { method: "DELETE" });
+        const wasCurrent = currentEnv === env.name;
+        if (wasCurrent) {
+          cacheClearCreds(); // deleted the active env — nothing cached should linger
+          currentEnv = null;
+          localStorage.removeItem("currentEnv");
+        }
+        await loadEnvironments(); // falls back to the first remaining environment
+        if (currentEnv) {
+          await selectEnvironment(currentEnv);
+        } else {
+          await Promise.all([loadServers(), loadCredentialSets(), refreshStatus()]);
+        }
+        await renderEnvManageList();
+      } catch (e) { toast("Delete failed: " + e.message); }
+    });
+
     // Credential-storage toggle. Disabling purges any stored credentials, so we
     // confirm first; the note reminds the operator what each mode means.
     const toggle = row.querySelector(".env-storage-input");
@@ -523,26 +547,6 @@ document.getElementById("primary-close").addEventListener("click", closePrimaryM
 document.getElementById("primary-cancel").addEventListener("click", closePrimaryModal);
 document.getElementById("primary-modal").addEventListener("click", (ev) => {
   if (ev.target.id === "primary-modal") closePrimaryModal(); // backdrop closes
-});
-
-document.getElementById("env-delete").addEventListener("click", async () => {
-  if (!currentEnv) { toast("No environment selected."); return; }
-  if (!confirm(
-    `Delete environment "${currentEnv}"?\n\nIts management-server list AND all ` +
-    "stored credentials for it are permanently removed. This cannot be undone."
-  )) return;
-  try {
-    await api(`/api/environments/${encodeURIComponent(currentEnv)}`, { method: "DELETE" });
-    cacheClearCreds(); // deleted env — nothing cached for it should linger
-    currentEnv = null;
-    localStorage.removeItem("currentEnv");
-    await loadEnvironments(); // falls back to the first remaining environment
-    if (currentEnv) {
-      await selectEnvironment(currentEnv);
-    } else {
-      await Promise.all([loadServers(), loadCredentialSets(), refreshStatus()]);
-    }
-  } catch (e) { toast("Delete failed: " + e.message); }
 });
 
 /* ---------- 1c. discover servers ---------- */
