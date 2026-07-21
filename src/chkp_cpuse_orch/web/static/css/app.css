@@ -211,6 +211,15 @@ section {
 section h2 { margin: 0 0 0.25rem; font-size: 1.15rem; }
 .hint { color: var(--muted); font-size: 0.9rem; margin-top: 0; }
 
+/* Panel header row: title left, an action button on the right edge, in line. */
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.section-head h2 { margin-bottom: 0.25rem; }
+
 /* ---- tables ---- */
 table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
 th, td {

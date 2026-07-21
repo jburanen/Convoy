@@ -433,6 +433,7 @@ document.addEventListener("keydown", (ev) => {
   if (ev.key !== "Escape") return;
   closeCredModal(null); // cancels a pending credential prompt (no-op otherwise)
   closeEnvModal();
+  closeCredAddModal();
   hideWelcome(); // soft close — the welcome dialog returns next load if still fresh
 });
 
@@ -1104,7 +1105,7 @@ async function loadCredentialSets() {
   // for an explanatory notice.
   const enabled = storageEnabled();
   document.getElementById("cred-storage-notice").classList.toggle("hidden", enabled);
-  document.getElementById("credential-form").classList.toggle("hidden", !enabled);
+  document.getElementById("cred-add-btn").classList.toggle("hidden", !enabled);
   if (!currentEnv || !enabled) { credentialSets = []; return; }
   credentialSets = await fetchCredentialSets();
   const tick = (b) => (b ? "✓" : "—");
@@ -1149,12 +1150,28 @@ document.getElementById("credential-form").addEventListener("submit", async (ev)
         api_key: apiInput.value || null,
       }),
     });
-    // Secrets never linger in the form.
-    for (const i of [pwInput, keyInput, expertInput, apiInput]) i.value = "";
+    closeCredAddModal(); // resets the form so no secrets linger in the DOM
     await Promise.all([loadCredentialSets(), loadServers()]);
   } catch (e) {
     toast("Save failed: " + e.message);
   }
+});
+
+// The credential-set editor lives in a modal opened from the panel's header.
+function openCredAddModal() {
+  document.getElementById("credential-form").reset(); // fresh, empty each open
+  document.getElementById("cred-add-modal").classList.remove("hidden");
+  document.getElementById("cs-name").focus();
+}
+function closeCredAddModal() {
+  document.getElementById("cred-add-modal").classList.add("hidden");
+  document.getElementById("credential-form").reset(); // never leave secrets in the DOM
+}
+document.getElementById("cred-add-btn").addEventListener("click", openCredAddModal);
+document.getElementById("cred-add-close").addEventListener("click", closeCredAddModal);
+document.getElementById("cred-add-cancel").addEventListener("click", closeCredAddModal);
+document.getElementById("cred-add-modal").addEventListener("click", (ev) => {
+  if (ev.target.id === "cred-add-modal") closeCredAddModal(); // backdrop click closes
 });
 
 /* ---------- 6. jobs ---------- */

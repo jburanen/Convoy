@@ -63,15 +63,15 @@
        between them to signal the intended left-to-right sequential workflow.
        Placeholder (lorem ipsum) copy — final wording TBD. -->
   <div id="tab-guide">
-    <p class="tab-guide-item" data-tab="provisioning">Lorem ipsum dolor sit amet, consectetur adipiscing elit sed do eiusmod.</p>
+    <p class="tab-guide-item" data-tab="provisioning">Generate bootstrapping configuration for tool access, establish initial connection to management.</p>
     <span class="tab-guide-chevron" aria-hidden="true">&rsaquo;</span>
-    <p class="tab-guide-item" data-tab="packages">Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris.</p>
+    <p class="tab-guide-item" data-tab="packages">Upload and manage packages for deployment.</p>
     <span class="tab-guide-chevron" aria-hidden="true">&rsaquo;</span>
-    <p class="tab-guide-item" data-tab="management">Duis aute irure dolor in reprehenderit in voluptate velit esse.</p>
+    <p class="tab-guide-item" data-tab="management">Directly patch management servers and firewalls using CPUSE.</p>
     <span class="tab-guide-chevron" aria-hidden="true">&rsaquo;</span>
-    <p class="tab-guide-item" data-tab="gateways">Excepteur sint occaecat cupidatat non proident sunt in culpa qui.</p>
+    <p class="tab-guide-item" data-tab="gateways">Perform bulk patching operations on firewall devices using the Central Deployment Tool.</p>
     <span class="tab-guide-chevron" aria-hidden="true">&rsaquo;</span>
-    <p class="tab-guide-item" data-tab="jobs">Officia deserunt mollit anim id est laborum et dolore magna.</p>
+    <p class="tab-guide-item" data-tab="jobs">Monitor job status and results.</p>
   </div>
 </header>
 
@@ -102,7 +102,11 @@
     </section>
 
     <section id="credentials">
-      <h2>Credentials</h2>
+      <div class="section-head">
+        <h2>Credentials</h2>
+        <!-- Opens the Add Credential modal; hidden when storage is disabled. -->
+        <button type="button" id="cred-add-btn" class="small">Add Credential</button>
+      </div>
       <p class="hint">
         Named <strong>login sets</strong>, stored encrypted at rest; secrets are never
         displayed again after saving. Give one an SSH password <em>or</em> a private key
@@ -116,15 +120,6 @@
         an action; they stay in memory only until it finishes. Enable storage from
         the environment picker → <strong>Manage Environments…</strong>.
       </p>
-      <form id="credential-form" class="stacked">
-        <label>Name<input type="text" id="cs-name" placeholder="e.g. primary-admin" required></label>
-        <label>SSH username<input type="text" id="cs-ssh-user" placeholder="admin"></label>
-        <label>SSH password<input type="password" id="cs-ssh-password" autocomplete="new-password"></label>
-        <label>SSH private key (instead of a password)<textarea id="cs-ssh-key" rows="3" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea></label>
-        <label>Expert password (optional)<input type="password" id="cs-expert" autocomplete="new-password"></label>
-        <label>API key (optional)<input type="password" id="cs-api" autocomplete="new-password"></label>
-        <button type="submit">Save credential set</button>
-      </form>
       <table id="credentials-table">
         <thead>
           <tr><th>Name</th><th>SSH user</th><th>SSH auth</th><th>Expert</th><th>API</th><th></th></tr>
@@ -356,6 +351,36 @@
     <form id="env-add-form">
       <input type="text" id="env-add-name" placeholder="new environment name (e.g. Corp HQ)" required>
       <button type="submit">Create</button>
+    </form>
+  </div>
+</div>
+
+<!-- ============ Add Credential modal (opened from the Credentials panel) ===== -->
+<!-- The credential-set editor lives here (not inline in the panel); the panel's
+     "Add Credential" button opens it. Saving a set closes the modal and resets
+     the form so no secrets linger in the DOM. -->
+<div id="cred-add-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="cred-add-title">
+  <div class="modal-card narrow">
+    <div class="modal-head">
+      <h2 id="cred-add-title">Add credential set</h2>
+      <button id="cred-add-close" class="small" title="Close">✕</button>
+    </div>
+    <p class="hint">
+      A named <strong>login set</strong>, stored encrypted at rest; secrets are never
+      displayed again after saving. Give it an SSH password <em>or</em> a private key,
+      plus an optional expert password for privileged CPUSE steps.
+    </p>
+    <form id="credential-form" class="stacked">
+      <label>Name<input type="text" id="cs-name" placeholder="e.g. primary-admin" required></label>
+      <label>SSH username<input type="text" id="cs-ssh-user" placeholder="admin"></label>
+      <label>SSH password<input type="password" id="cs-ssh-password" autocomplete="new-password"></label>
+      <label>SSH private key (instead of a password)<textarea id="cs-ssh-key" rows="3" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea></label>
+      <label>Expert password (optional)<input type="password" id="cs-expert" autocomplete="new-password"></label>
+      <label>API key (optional)<input type="password" id="cs-api" autocomplete="new-password"></label>
+      <div class="cred-modal-actions">
+        <button type="submit">Save credential set</button>
+        <button type="button" id="cred-add-cancel" class="secondary">Cancel</button>
+      </div>
     </form>
   </div>
 </div>
