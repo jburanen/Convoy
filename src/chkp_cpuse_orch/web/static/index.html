@@ -110,15 +110,30 @@
       </form>
       <!-- Explanatory notes (normal text), shown between the inputs and the output. -->
       <div id="prov-notes" class="prov-notes hidden"></div>
-      <!-- Output pane: just the commands, with a copy icon in its top-right corner. -->
-      <div id="prov-output-wrap" class="output-pane hidden">
-        <button type="button" id="prov-copy" class="copy-icon" title="Copy to clipboard" aria-label="Copy to clipboard">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-          </svg>
-        </button>
-        <pre id="prov-output" class="job-events mono"></pre>
+      <!-- Two output boxes: clish (SSH/Gaia account) and expert (Management API). -->
+      <div id="prov-clish-wrap" class="output-pane hidden">
+        <div class="output-caption">clish — run on each management server</div>
+        <div class="output-body">
+          <button type="button" class="copy-icon" data-copy="prov-clish-output" title="Copy to clipboard" aria-label="Copy to clipboard">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+          </button>
+          <pre id="prov-clish-output" class="job-events mono"></pre>
+        </div>
+      </div>
+      <div id="prov-expert-wrap" class="output-pane hidden">
+        <div class="output-caption">expert mode — run on the management server</div>
+        <div class="output-body">
+          <button type="button" class="copy-icon" data-copy="prov-expert-output" title="Copy to clipboard" aria-label="Copy to clipboard">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+          </button>
+          <pre id="prov-expert-output" class="job-events mono"></pre>
+        </div>
       </div>
     </section>
 

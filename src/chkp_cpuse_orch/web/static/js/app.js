@@ -781,6 +781,9 @@ function addChip(box, text, cls) {
 
 /* ---------- 2b. service-account provisioning ---------- */
 
+// Notes prefixed with this marker (from the backend) render emphasized (orange).
+const PROV_NOTE_EMPHASIS = "[!] ";
+
 // Render the explanatory notes as normal text (not comments in the code output),
 // grouped by which command block they describe.
 function renderProvNotes(resp) {
@@ -796,7 +799,12 @@ function renderProvNotes(resp) {
     ul.className = "prov-note-list";
     for (const n of notes) {
       const li = document.createElement("li");
-      li.textContent = n;
+      if (n.startsWith(PROV_NOTE_EMPHASIS)) {
+        li.textContent = n.slice(PROV_NOTE_EMPHASIS.length);
+        li.classList.add("prov-note-warn");
+      } else {
+        li.textContent = n;
+      }
       ul.appendChild(li);
     }
     box.appendChild(ul);
@@ -834,7 +842,6 @@ function flashCopied(btn) {
 document.getElementById("provision-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const passwordInput = document.getElementById("prov-password");
-  const output = document.getElementById("prov-output");
   try {
     const resp = await api("/api/provision", {
       method: "POST",
@@ -847,31 +854,31 @@ document.getElementById("provision-form").addEventListener("submit", async (ev) 
       }),
     });
     passwordInput.value = ""; // plaintext leaves the page as soon as possible
-    // Commands only — no comment lines; the notes render as normal text above.
-    let cmds = resp.commands.slice();
-    if (resp.api_commands && resp.api_commands.length) {
-      cmds = cmds.concat("", resp.api_commands); // blank line between the two blocks
-    }
-    const text = cmds.join("\n");
-    output.textContent = text;
     renderProvNotes(resp);
-    document.getElementById("prov-output-wrap").classList.remove("hidden");
-    // Auto-copy to the clipboard (best-effort — silent if the browser blocks it,
-    // e.g. over plain HTTP; the copy icon remains for a manual retry).
-    try { await copyText(text); flashCopied(document.getElementById("prov-copy")); } catch { /* ignore */ }
+    // Commands only (no comment lines) — clish and expert in separate boxes.
+    document.getElementById("prov-clish-output").textContent = resp.commands.join("\n");
+    document.getElementById("prov-clish-wrap").classList.remove("hidden");
+    const hasApi = resp.api_commands && resp.api_commands.length;
+    if (hasApi) {
+      document.getElementById("prov-expert-output").textContent = resp.api_commands.join("\n");
+    }
+    document.getElementById("prov-expert-wrap").classList.toggle("hidden", !hasApi);
   } catch (e) {
     toast("Generate failed: " + e.message);
   }
 });
 
-document.getElementById("prov-copy").addEventListener("click", async () => {
-  try {
-    await copyText(document.getElementById("prov-output").textContent);
-    flashCopied(document.getElementById("prov-copy"));
-  } catch {
-    toast("Clipboard unavailable — select and copy manually.");
-  }
-});
+// Copy icons: each carries data-copy = the id of the <pre> it copies. Manual only.
+for (const btn of document.querySelectorAll(".copy-icon[data-copy]")) {
+  btn.addEventListener("click", async () => {
+    try {
+      await copyText(document.getElementById(btn.dataset.copy).textContent);
+      flashCopied(btn);
+    } catch {
+      toast("Clipboard unavailable — select and copy manually.");
+    }
+  });
+}
 
 /* ---------- 3. servers ---------- */
 

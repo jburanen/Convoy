@@ -70,8 +70,8 @@ def test_mgmt_api_commands_single_session_and_api_key() -> None:
     # Every mutating call reuses the one session file (so the add is published).
     session_calls = [c for c in cmds if c.startswith("mgmt_cli -s ")]
     assert len({c.split()[2] for c in session_calls}) == 1
-    # Opens the API for remote callers (discovery connects over the network).
-    assert any("accepted-api-calls-from" in c for c in cmds)
+    # The API-settings change was removed — the operator manages that separately.
+    assert not any("accepted-api-calls-from" in c for c in cmds)
 
 
 def test_mgmt_api_rejects_bad_username() -> None:

@@ -83,6 +83,9 @@ PROVISIONING_NOTES = [
 _API_SESSION_FILE = "/tmp/cpuse_orch_mgmt_api.sid"
 DEFAULT_API_PROFILE = "Super User"  # built-in profile; read access is enough for discovery
 
+# A note prefixed with this marker is rendered emphasized (orange) in the UI.
+NOTE_EMPHASIS = "[!] "
+
 
 def render_mgmt_api_commands(
     username: str,
@@ -90,7 +93,7 @@ def render_mgmt_api_commands(
     permissions_profile: str = DEFAULT_API_PROFILE,
 ) -> list[str]:
     """Expert-mode commands that create a Management API administrator (API-key auth)
-    and open the API to remote callers, on ONE Security Management Server / MDS.
+    on ONE Security Management Server / MDS.
 
     All mutations share a single ``mgmt_cli`` session so the ``add administrator``
     is actually published; ``-r true`` logs in as root on the box (no password).
@@ -110,7 +113,6 @@ def render_mgmt_api_commands(
         f"mgmt_cli -s {sid} add administrator name {username} "
         f'authentication-method "api key" permissions-profile "{permissions_profile}" '
         "--format json",
-        f'mgmt_cli -s {sid} set api-settings accepted-api-calls-from "All IP addresses"',
         f"mgmt_cli -s {sid} publish",
         f"mgmt_cli -s {sid} logout",
         f"rm -f {sid}",
@@ -121,11 +123,9 @@ def render_mgmt_api_commands(
 MGMT_API_NOTES = [
     "Run these in EXPERT mode on the management server (a Security Management Server, "
     "or on an MDS after `mdsenv` for the global context) — NOT on gateways.",
-    '`add administrator … authentication-method "api key"` prints the API key in its '
-    "JSON output. Copy it ONCE (it cannot be retrieved later) and store it in the "
-    "Credentials section as the API key.",
-    '`accepted-api-calls-from "All IP addresses"` opens the Management API to remote '
-    "callers; narrow it to this tool's host/IP if your policy requires it.",
+    NOTE_EMPHASIS + '`add administrator … authentication-method "api key"` prints the '
+    "API key in its JSON output. Copy it ONCE (it cannot be retrieved later) and store "
+    "it in the Credentials section as the API key.",
     "`mgmt_cli login -r true` authenticates as root on the box (no password). If root "
     "login is disabled, replace it with `mgmt_cli login -u <admin> > …` and enter the "
     "SmartConsole administrator password when prompted.",

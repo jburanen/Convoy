@@ -372,10 +372,18 @@ button.secondary:hover { color: var(--text); filter: none; }
 .prov-note-title:first-child { margin-top: 0; }
 .prov-note-list { margin: 0; padding-left: 1.2rem; }
 .prov-note-list li { margin: 0.15rem 0; }
+.prov-note-warn { color: var(--warn); font-weight: 600; } /* capture-the-API-key call-out */
 
-/* Output pane with a copy icon anchored top-right. */
-.output-pane { position: relative; }
-.output-pane .job-events { padding-right: 2.75rem; } /* keep text clear of the icon */
+/* Provisioning output boxes (one per console). Each grows to fit its commands so
+   there's no scrollbar overlapping the copy icon. */
+.output-pane { margin: 0.75rem 0; }
+.output-caption { font-size: 0.8rem; font-weight: 600; color: var(--muted); margin-bottom: 0.25rem; }
+.output-body { position: relative; }
+.output-body .job-events {
+  padding-right: 2.75rem; /* keep long lines clear of the copy icon */
+  max-height: none; /* grow to content — no vertical scrollbar */
+  overflow: visible;
+}
 .copy-icon {
   position: absolute;
   top: 0.5rem;
