@@ -434,6 +434,7 @@ document.addEventListener("keydown", (ev) => {
   closeCredModal(null); // cancels a pending credential prompt (no-op otherwise)
   closeEnvModal();
   closeCredAddModal();
+  closeDiscoverModal();
   hideWelcome(); // soft close — the welcome dialog returns next load if still fresh
 });
 
@@ -461,12 +462,17 @@ document.getElementById("env-add-form").addEventListener("submit", async (ev) =>
 document.getElementById("env-server-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   if (!currentEnv) { toast("Create an environment first (picker → New Environment…)."); return; }
+  // Was the inventory empty before this add? If so, this is the primary — offer to
+  // discover the rest of the estate from it once it's saved.
+  const wasEmpty =
+    document.querySelectorAll("#servers-info-table tbody .srv-name").length === 0;
+  const name = document.getElementById("es-name").value.trim();
   try {
     await api(`/api/environments/${encodeURIComponent(currentEnv)}/servers`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        name: document.getElementById("es-name").value.trim(),
+        name,
         address: document.getElementById("es-address").value.trim(),
         role: document.getElementById("es-role").value,
         ssh_user: document.getElementById("es-user").value.trim() || "admin",
@@ -476,6 +482,9 @@ document.getElementById("env-server-form").addEventListener("submit", async (ev)
     document.getElementById("es-name").value = "";
     document.getElementById("es-address").value = "";
     await Promise.all([loadServers(), refreshStatus()]);
+    // Offer discovery from the just-defined primary (operator can Close to keep
+    // adding manually).
+    if (wasEmpty) openDiscoverModal(name);
   } catch (e) { toast("Save failed: " + e.message); }
 });
 
@@ -497,6 +506,165 @@ document.getElementById("env-delete").addEventListener("click", async () => {
       await Promise.all([loadServers(), loadCredentialSets(), refreshStatus()]);
     }
   } catch (e) { toast("Delete failed: " + e.message); }
+});
+
+/* ---------- 1c. discover servers ---------- */
+
+// Open the Discover modal, populating the "Discover from" picker with the
+// environment's current servers. `preselectName` pre-picks the just-added primary.
+async function openDiscoverModal(preselectName) {
+  if (!currentEnv) { toast("Create an environment and add a primary server first."); return; }
+  let servers = [];
+  try {
+    servers = await api(`/api/environments/${encodeURIComponent(currentEnv)}/servers`);
+  } catch (e) { toast("Could not load servers: " + e.message); return; }
+  if (!servers.length) {
+    toast("Add a primary management server before discovering the rest.");
+    return;
+  }
+  const select = document.getElementById("discover-primary");
+  select.replaceChildren();
+  for (const s of servers) {
+    const opt = document.createElement("option");
+    opt.value = s.name;
+    opt.textContent = `${s.name} (${roleLabel(s.role)})`;
+    select.appendChild(opt);
+  }
+  if (preselectName) select.value = preselectName;
+  resetDiscoverResults();
+  document.getElementById("discover-modal").classList.remove("hidden");
+}
+
+function resetDiscoverResults() {
+  document.getElementById("discover-status").textContent = "";
+  const warn = document.getElementById("discover-warnings");
+  warn.classList.add("hidden");
+  warn.replaceChildren();
+  const table = document.getElementById("discover-table");
+  table.classList.add("hidden");
+  table.querySelector("tbody").replaceChildren();
+  document.getElementById("discover-import").disabled = true;
+}
+
+function closeDiscoverModal() {
+  document.getElementById("discover-modal").classList.add("hidden");
+}
+
+document.getElementById("discover-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const primary = document.getElementById("discover-primary").value;
+  if (!primary || !currentEnv) return;
+  resetDiscoverResults();
+  const status = document.getElementById("discover-status");
+  status.textContent = `Scanning from ${primary}…`;
+  const runBtn = document.getElementById("discover-run");
+  runBtn.disabled = true;
+  try {
+    const result = await api(`/api/environments/${encodeURIComponent(currentEnv)}/discover`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ primary }),
+    });
+    renderDiscoverResults(result);
+  } catch (e) {
+    status.textContent = "Discovery failed: " + e.message;
+  } finally {
+    runBtn.disabled = false;
+  }
+});
+
+function renderDiscoverResults(result) {
+  const status = document.getElementById("discover-status");
+  const warn = document.getElementById("discover-warnings");
+  for (const w of result.warnings || []) {
+    warn.classList.remove("hidden");
+    const line = document.createElement("div");
+    line.textContent = "⚠ " + w;
+    warn.appendChild(line);
+  }
+  const servers = result.servers || [];
+  if (!servers.length) {
+    status.textContent = "No additional servers found.";
+    return;
+  }
+  const already = servers.filter((s) => s.already_in_inventory).length;
+  status.textContent =
+    `Found ${servers.length} server${servers.length === 1 ? "" : "s"}` +
+    (already ? ` (${already} already in inventory)` : "") +
+    ". Review roles, then import the ones you want.";
+  const table = document.getElementById("discover-table");
+  const tbody = table.querySelector("tbody");
+  tbody.replaceChildren();
+  for (const s of servers) {
+    const row = el("tpl-discovered-row");
+    const pick = row.querySelector(".disc-pick");
+    const name = row.querySelector(".disc-name");
+    const address = row.querySelector(".disc-address");
+    const roleSel = row.querySelector(".disc-role");
+    const note = row.querySelector(".disc-note");
+    name.value = s.name;
+    address.value = s.address;
+    roleSel.value = s.role;
+    let noteText = s.note || "";
+    if (s.already_in_inventory) {
+      noteText = "already in inventory";
+      pick.checked = false;
+      pick.disabled = name.disabled = address.disabled = roleSel.disabled = true;
+      row.classList.add("disc-existing");
+    } else {
+      pick.checked = true;
+      if (s.needs_review) {
+        noteText = noteText ? noteText + " — review" : "review the detected role";
+        row.classList.add("disc-review");
+      }
+    }
+    note.textContent = noteText;
+    tbody.appendChild(row);
+  }
+  table.classList.remove("hidden");
+  document.getElementById("discover-import").disabled =
+    servers.length === already; // nothing new to import
+}
+
+document.getElementById("discover-import").addEventListener("click", async () => {
+  const rows = [...document.querySelectorAll("#discover-table tbody tr")];
+  const picks = rows.filter((r) => {
+    const pick = r.querySelector(".disc-pick");
+    return pick.checked && !pick.disabled;
+  });
+  if (!picks.length) { toast("Nothing selected to import."); return; }
+  const importBtn = document.getElementById("discover-import");
+  importBtn.disabled = true;
+  let ok = 0;
+  const failed = [];
+  for (const r of picks) {
+    const name = r.querySelector(".disc-name").value.trim();
+    const address = r.querySelector(".disc-address").value.trim();
+    const role = r.querySelector(".disc-role").value;
+    if (!name || !address) { failed.push(name || address || "(unnamed)"); continue; }
+    try {
+      await api(`/api/environments/${encodeURIComponent(currentEnv)}/servers`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, address, role }),
+      });
+      ok++;
+    } catch (e) { failed.push(`${name}: ${e.message}`); }
+  }
+  await Promise.all([loadServers(), refreshStatus()]);
+  if (failed.length) {
+    toast(`Imported ${ok}. Failed: ${failed.join("; ")}`);
+    importBtn.disabled = false;
+  } else {
+    closeDiscoverModal();
+  }
+});
+
+document.getElementById("discover-btn").addEventListener("click", () => openDiscoverModal());
+document.getElementById("discover-close").addEventListener("click", closeDiscoverModal);
+document.getElementById("discover-cancel").addEventListener("click", closeDiscoverModal);
+document.getElementById("discover-modal").addEventListener("click", (ev) => {
+  if (ev.target.id === "discover-modal") closeDiscoverModal(); // backdrop click closes
 });
 
 /* ---------- 1b. tabs ---------- */
@@ -606,6 +774,21 @@ document.getElementById("prov-copy").addEventListener("click", async () => {
 
 /* ---------- 3. servers ---------- */
 
+// Pretty labels for the role values the API stores. Legacy management/mds rows
+// (pre-dating the granular roles) still render sensibly.
+const ROLE_LABELS = {
+  primary_sms: "Primary SMS",
+  secondary_sms: "Secondary SMS",
+  log_server: "Log Server",
+  primary_mds: "Primary MDS",
+  secondary_mds: "Secondary MDS",
+  mlm: "MLM",
+  smartevent: "SmartEvent",
+  management: "Management (legacy)",
+  mds: "MDS (legacy)",
+};
+const roleLabel = (role) => ROLE_LABELS[role] ?? role;
+
 async function loadServers() {
   const tbody = document.querySelector("#servers-table tbody");
   const infoTbody = document.querySelector("#servers-info-table tbody");
@@ -639,7 +822,7 @@ async function loadServers() {
     const info = el("tpl-server-info-row");
     info.querySelector(".srv-name").textContent = srv.name;
     info.querySelector(".srv-address").textContent = srv.address;
-    info.querySelector(".srv-role").textContent = srv.role;
+    info.querySelector(".srv-role").textContent = roleLabel(srv.role);
     info.querySelector(".srv-user").textContent = srv.ssh_user;
     info.querySelector(".srv-port").textContent = srv.ssh_port;
     info.querySelector(".srv-creds").textContent =

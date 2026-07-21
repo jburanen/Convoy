@@ -129,7 +129,12 @@
     </section>
 
     <section id="servers-info">
-      <h2>Management servers in <span id="prov-env-name">—</span></h2>
+      <div class="section-head">
+        <h2>Management servers in <span id="prov-env-name">—</span></h2>
+        <!-- Scans the estate from a chosen primary via the Management API (+ SSH for
+             MDS) and offers the discovered servers for review before import. -->
+        <button type="button" id="discover-btn" class="small">Discover servers</button>
+      </div>
       <p class="hint">
         The inventory of the environment selected in the top-right picker. Add or
         remove servers here; patching actions live on the <strong>Management</strong>
@@ -155,8 +160,13 @@
         <input type="text" id="es-name" placeholder="name" required>
         <input type="text" id="es-address" placeholder="address / IP" required>
         <select id="es-role">
-          <option value="management">management</option>
-          <option value="mds">mds</option>
+          <option value="primary_sms">Primary SMS</option>
+          <option value="secondary_sms">Secondary SMS</option>
+          <option value="log_server">Log Server</option>
+          <option value="primary_mds">Primary MDS</option>
+          <option value="secondary_mds">Secondary MDS</option>
+          <option value="mlm">MLM</option>
+          <option value="smartevent">SmartEvent</option>
         </select>
         <input type="text" id="es-user" placeholder="ssh user" value="admin">
         <input type="number" id="es-port" value="22" min="1" max="65535" title="ssh port">
@@ -421,6 +431,44 @@
   </div>
 </div>
 
+<!-- ============ Discover servers modal (opened from the Provisioning tab) ==== -->
+<!-- Scans the estate from a chosen primary and lets the operator review/correct the
+     detected servers + roles before importing. Import reuses the add-server API. -->
+<div id="discover-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="discover-title">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2 id="discover-title">Discover servers</h2>
+      <button id="discover-close" class="small" title="Close">✕</button>
+    </div>
+    <p class="hint">
+      Connects to a primary management server and enumerates the rest of the estate —
+      other management servers, Log Servers, and SmartEvent servers via the Management
+      API, plus MDS/MLM peers over SSH. Uses the credential set assigned to the primary.
+      Review the detected roles and import the ones you want.
+    </p>
+    <form id="discover-form">
+      <label>Discover from
+        <select id="discover-primary"><!-- filled with the environment's servers --></select>
+      </label>
+      <button type="submit" id="discover-run">Scan</button>
+    </form>
+    <p class="hint" id="discover-status"></p>
+    <div id="discover-warnings" class="hint warn hidden"></div>
+    <table id="discover-table" class="hidden">
+      <thead>
+        <tr>
+          <th></th><th>Name</th><th>Address</th><th>Detected role</th><th>Notes</th>
+        </tr>
+      </thead>
+      <tbody><!-- tpl-discovered-row instances --></tbody>
+    </table>
+    <div class="cred-modal-actions">
+      <button type="button" id="discover-import" disabled>Import selected</button>
+      <button type="button" id="discover-cancel" class="secondary">Close</button>
+    </div>
+  </div>
+</div>
+
 <footer>
   <div class="footer-main">
   <a id="footer-repo" href="https://github.com/jburanen/chkp-cpuse-orch" target="_blank" rel="noopener">
@@ -455,6 +503,28 @@
     <td class="srv-port"></td>
     <td class="srv-creds"></td>
     <td><button class="btn-remove small danger" title="remove from environment">Remove</button></td>
+  </tr>
+</template>
+
+<!-- One reviewable candidate in the Discover modal: pick + editable name/address +
+     role dropdown (defaulted to the detected role) + a note. -->
+<template id="tpl-discovered-row">
+  <tr>
+    <td><input type="checkbox" class="disc-pick"></td>
+    <td><input type="text" class="disc-name" required></td>
+    <td><input type="text" class="disc-address mono"></td>
+    <td>
+      <select class="disc-role">
+        <option value="primary_sms">Primary SMS</option>
+        <option value="secondary_sms">Secondary SMS</option>
+        <option value="log_server">Log Server</option>
+        <option value="primary_mds">Primary MDS</option>
+        <option value="secondary_mds">Secondary MDS</option>
+        <option value="mlm">MLM</option>
+        <option value="smartevent">SmartEvent</option>
+      </select>
+    </td>
+    <td class="disc-note muted"></td>
   </tr>
 </template>
 

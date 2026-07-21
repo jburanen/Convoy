@@ -19,7 +19,7 @@ import sqlite3
 from ..config import Config
 from ..credentials import CredentialStore
 from ..errors import InventoryError
-from ..inventory import Host, Inventory, Role, Site
+from ..inventory import MANAGEMENT_PLANE_ROLES, Host, Inventory, Role, Site
 from ..reporting import get_logger
 from ..store import EnvHostRow, Store
 from .common import ClientFactory, EnvironmentRegistry, HostConnector
@@ -34,8 +34,9 @@ logger = get_logger(__name__)
 _ENV_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _-]{0,31}")
 _SEEDED_META_KEY = "environments_seeded"
 
-# Roles a management environment's inventory may hold (what this tool connects to).
-MANAGEMENT_ROLES = (Role.MANAGEMENT, Role.MDS)
+# Roles a management environment's inventory may hold (what this tool connects to
+# and patches locally via CPUSE) — shared with services/common.py via inventory.
+MANAGEMENT_ROLES = MANAGEMENT_PLANE_ROLES
 
 
 class EnvironmentManager:
@@ -262,13 +263,26 @@ def _host_from_row(row: EnvHostRow) -> Host:
     )
 
 
+# Roles the UI offers when adding a server (legacy management/mds are accepted but
+# not advertised). Used only to build the validation error message.
+_OFFERED_ROLES = (
+    Role.PRIMARY_SMS,
+    Role.SECONDARY_SMS,
+    Role.LOG_SERVER,
+    Role.PRIMARY_MDS,
+    Role.SECONDARY_MDS,
+    Role.MLM,
+    Role.SMARTEVENT,
+)
+
+
 def _parse_management_role(role: str) -> Role:
     try:
         parsed = Role(role)
     except ValueError:
         raise InventoryError(
             f"invalid role {role!r}: management environments hold "
-            f"{' or '.join(r.value for r in MANAGEMENT_ROLES)} servers"
+            f"{', '.join(r.value for r in _OFFERED_ROLES)} servers"
         ) from None
     if parsed not in MANAGEMENT_ROLES:
         raise InventoryError(

@@ -16,10 +16,39 @@ from .errors import InventoryError
 
 
 class Role(StrEnum):
-    MANAGEMENT = "management"  # Security Management Server (patched via CPUSE)
-    MDS = "mds"  # Multi-Domain Server
+    # Management-plane roles — Gaia hosts this tool connects to and patches locally
+    # via CPUSE. All seven are offered in the UI role picker.
+    PRIMARY_SMS = "primary_sms"  # Primary Security Management Server
+    SECONDARY_SMS = "secondary_sms"  # Secondary (HA) Security Management Server
+    LOG_SERVER = "log_server"  # dedicated Log Server
+    PRIMARY_MDS = "primary_mds"  # Primary Multi-Domain Server
+    SECONDARY_MDS = "secondary_mds"  # Secondary (HA) Multi-Domain Server
+    MLM = "mlm"  # Multi-Domain Log Module
+    SMARTEVENT = "smartevent"  # dedicated SmartEvent server
+    # Legacy coarse roles — kept so pre-existing DB rows still load. Not offered in
+    # the UI picker anymore; treated as management-plane for gating.
+    MANAGEMENT = "management"  # legacy: Security Management Server → see PRIMARY_SMS
+    MDS = "mds"  # legacy: Multi-Domain Server → see PRIMARY_MDS
+    # Gateways are discovered by CDT at deploy time, never added to this inventory.
     GATEWAY = "gateway"  # Security Gateway (patched via CDT)
     CLUSTER_MEMBER = "cluster_member"  # Gateway that is part of a ClusterXL/HA cluster
+
+
+# Roles that make a host a "management-plane" box this tool connects to and patches
+# locally via CPUSE (as opposed to gateways, which CDT discovers at deploy time).
+# The seven granular roles are offered in the UI; the two legacy coarse roles are
+# still accepted so pre-existing inventory/DB rows keep loading.
+MANAGEMENT_PLANE_ROLES: tuple[Role, ...] = (
+    Role.PRIMARY_SMS,
+    Role.SECONDARY_SMS,
+    Role.LOG_SERVER,
+    Role.PRIMARY_MDS,
+    Role.SECONDARY_MDS,
+    Role.MLM,
+    Role.SMARTEVENT,
+    Role.MANAGEMENT,  # legacy
+    Role.MDS,  # legacy
+)
 
 
 class Host(BaseModel):

@@ -55,6 +55,7 @@ from ..packages import PackageStore
 from ..reporting import configure_logging, get_logger
 from ..services.cdt_ops import CDTService
 from ..services.common import ClientFactory, EnvironmentRegistry
+from ..services.discovery import DiscoveryService, MgmtClientFactory
 from ..services.environments import EnvironmentManager
 from ..services.patching import PatchingService
 from ..services.provisioning import (
@@ -226,10 +227,16 @@ class EnvironmentIn(BaseModel):
 class EnvServerIn(BaseModel):
     name: str
     address: str
-    role: str = "management"  # management | mds
+    # One of the seven management-plane roles (see inventory.Role); legacy
+    # management/mds still accepted for back-compat.
+    role: str = "primary_sms"
     ssh_user: str = "admin"
     ssh_port: int = 22
     notes: str | None = None
+
+
+class DiscoverIn(BaseModel):
+    primary: str  # name of the already-defined management server to scan from
 
 
 # -- app factory -------------------------------------------------------------------
@@ -239,6 +246,7 @@ def create_app(
     config: Config | None = None,
     *,
     client_factory: ClientFactory | None = None,
+    mgmt_client_factory: MgmtClientFactory | None = None,
     authenticator: Authenticator | None = None,
     auth_settings: AuthSettings | None = None,
 ) -> FastAPI:
@@ -316,6 +324,7 @@ def create_app(
         runner = JobRunner(store, on_job_finished=vault.discard)
         service = PatchingService(registry=registry, packages=packages, runner=runner, vault=vault)
         cdt_service = CDTService(registry=registry, packages=packages, runner=runner, vault=vault)
+        discovery = DiscoveryService(registry=registry, mgmt_client_factory=mgmt_client_factory)
 
         app.state.store = store
         app.state.packages = packages
@@ -326,6 +335,7 @@ def create_app(
         app.state.runner = runner
         app.state.service = service
         app.state.cdt = cdt_service
+        app.state.discovery = discovery
 
         interrupted = runner.recover()
         if interrupted:
@@ -641,6 +651,33 @@ def _register_routes(app: FastAPI) -> None:
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
         return {"deleted": True}
+
+    @app.post("/api/environments/{env}/discover")
+    def discover_servers(env: str, body: DiscoverIn, request: Request) -> dict[str, Any]:
+        """Scan the estate from an already-defined primary and return candidate
+        servers (with a best-guess role) for the operator to review and import.
+        Read-only: nothing is added here — the UI posts confirmed rows back to the
+        add-server endpoint."""
+        discovery: DiscoveryService = request.app.state.discovery
+        try:
+            result = discovery.discover(env, body.primary)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        return {
+            "servers": [
+                {
+                    "name": s.name,
+                    "address": s.address,
+                    "role": s.detected_role.value,
+                    "source": s.source,
+                    "already_in_inventory": s.already_in_inventory,
+                    "needs_review": s.needs_review,
+                    "note": s.note,
+                }
+                for s in result.servers
+            ],
+            "warnings": result.warnings,
+        }
 
     # -- service-account provisioning (pure rendering; nothing stored) ---------
 

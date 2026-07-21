@@ -20,12 +20,12 @@ from ..credentials import (
     ensure_ssh_credential,
 )
 from ..errors import CredentialError, InventoryError
-from ..inventory import Host, Inventory, Role
+from ..inventory import MANAGEMENT_PLANE_ROLES, Host, Inventory
 from ..jobs import JobRunner
 from ..store import JobRecord, new_id
 from ..transport.ssh import CommandResult, SSHClient
 
-_MGMT_ROLES = (Role.MANAGEMENT, Role.MDS)
+_MGMT_ROLES = MANAGEMENT_PLANE_ROLES
 
 
 class Transport(Protocol):

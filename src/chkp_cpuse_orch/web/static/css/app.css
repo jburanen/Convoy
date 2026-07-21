@@ -208,7 +208,9 @@ section {
   padding: 1rem 1.25rem;
   margin: 1.25rem 0;
 }
-section h2 { margin: 0 0 0.25rem; font-size: 1.15rem; }
+/* 0.75rem below the header keeps panels visually consistent whether or not the
+   header is a .section-head row with a button (which uses the same value). */
+section h2 { margin: 0 0 0.75rem; font-size: 1.15rem; }
 .hint { color: var(--muted); font-size: 0.9rem; margin-top: 0; }
 
 /* Panel header row: title left, an action button on the right edge, in line. */
@@ -217,7 +219,7 @@ section h2 { margin: 0 0 0.25rem; font-size: 1.15rem; }
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  margin-bottom: 0.75rem; /* breathing room before the panel's text/content */
+  margin-bottom: 0.75rem; /* matches the plain section h2 spacing above */
 }
 .section-head h2 { margin-bottom: 0; } /* the row owns the spacing below */
 
@@ -331,6 +333,12 @@ button.secondary:hover { color: var(--text); filter: none; }
   width: min(880px, 100%);
 }
 .modal-card.narrow { width: min(480px, 100%); } /* manage-environments / welcome dialogs */
+
+/* ---- discover-servers review table ---- */
+#discover-table input[type="text"] { width: 100%; box-sizing: border-box; }
+#discover-table .disc-existing { opacity: 0.5; } /* already in inventory — greyed */
+#discover-table .disc-review .disc-note { color: var(--warn); }
+#discover-warnings div { margin: 0.1rem 0; }
 
 #env-manage-list { list-style: none; margin: 0 0 0.75rem; padding: 0; }
 .env-manage-row {

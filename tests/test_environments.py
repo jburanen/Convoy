@@ -114,6 +114,36 @@ def test_gateway_role_server_rejected(store: Store) -> None:
         mgr.add_server("corp", name="fw", address="10.0.0.2", role="gateway", ssh_user="admin")
 
 
+def test_granular_and_legacy_roles_accepted(store: Store) -> None:
+    registry = EnvironmentRegistry()
+    mgr = _manager(store, registry)
+    mgr.create_environment("corp")
+    roles = [
+        "primary_sms",
+        "secondary_sms",
+        "log_server",
+        "primary_mds",
+        "secondary_mds",
+        "mlm",
+        "smartevent",
+        "management",  # legacy, still accepted
+        "mds",  # legacy, still accepted
+    ]
+    for i, role in enumerate(roles):
+        mgr.add_server("corp", name=f"srv-{i}", address=f"10.0.0.{i}", role=role, ssh_user="admin")
+    stored = {h.name: h.role for h in registry.get("corp").management_servers()}
+    assert stored["srv-0"] == "primary_sms"
+    assert stored["srv-6"] == "smartevent"
+    assert len(stored) == len(roles)  # every role landed in the inventory
+
+
+def test_invalid_role_rejected(store: Store) -> None:
+    mgr = _manager(store, EnvironmentRegistry())
+    mgr.create_environment("corp")
+    with pytest.raises(InventoryError, match="invalid role"):
+        mgr.add_server("corp", name="x", address="10.0.0.9", role="nonsense", ssh_user="admin")
+
+
 def test_add_server_to_unknown_environment(store: Store) -> None:
     mgr = _manager(store, EnvironmentRegistry())
     with pytest.raises(InventoryError, match="unknown environment"):
