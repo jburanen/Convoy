@@ -781,11 +781,60 @@ function addChip(box, text, cls) {
 
 /* ---------- 2b. service-account provisioning ---------- */
 
+// Render the explanatory notes as normal text (not comments in the code output),
+// grouped by which command block they describe.
+function renderProvNotes(resp) {
+  const box = document.getElementById("prov-notes");
+  box.replaceChildren();
+  const group = (title, notes) => {
+    if (!notes || !notes.length) return;
+    const h = document.createElement("p");
+    h.className = "prov-note-title";
+    h.textContent = title;
+    box.appendChild(h);
+    const ul = document.createElement("ul");
+    ul.className = "prov-note-list";
+    for (const n of notes) {
+      const li = document.createElement("li");
+      li.textContent = n;
+      ul.appendChild(li);
+    }
+    box.appendChild(ul);
+  };
+  group("SSH / Gaia access — run in clish on each management server", resp.notes);
+  group("Management API access — run in expert mode on the management server", resp.api_notes);
+  box.classList.remove("hidden");
+}
+
+async function copyText(text) {
+  // Preferred path (secure contexts: HTTPS / localhost).
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  // Fallback for plain HTTP, where the async Clipboard API is unavailable.
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    if (!document.execCommand("copy")) throw new Error("copy rejected");
+  } finally {
+    ta.remove();
+  }
+}
+
+function flashCopied(btn) {
+  btn.classList.add("copied");
+  setTimeout(() => btn.classList.remove("copied"), 1500);
+}
+
 document.getElementById("provision-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const passwordInput = document.getElementById("prov-password");
   const output = document.getElementById("prov-output");
-  const copyBtn = document.getElementById("prov-copy");
   try {
     const resp = await api("/api/provision", {
       method: "POST",
@@ -798,30 +847,27 @@ document.getElementById("provision-form").addEventListener("submit", async (ev) 
       }),
     });
     passwordInput.value = ""; // plaintext leaves the page as soon as possible
-    let text =
-      "# === SSH / Gaia access (run in clish on each management server) ===\n" +
-      resp.commands.join("\n") +
-      "\n\n# " + resp.notes.join("\n# ");
+    // Commands only — no comment lines; the notes render as normal text above.
+    let cmds = resp.commands.slice();
     if (resp.api_commands && resp.api_commands.length) {
-      text +=
-        "\n\n# === Management API access (run in expert mode on the management server) ===\n" +
-        resp.api_commands.join("\n") +
-        "\n\n# " + resp.api_notes.join("\n# ");
+      cmds = cmds.concat("", resp.api_commands); // blank line between the two blocks
     }
+    const text = cmds.join("\n");
     output.textContent = text;
-    output.classList.remove("hidden");
-    copyBtn.classList.remove("hidden");
+    renderProvNotes(resp);
+    document.getElementById("prov-output-wrap").classList.remove("hidden");
+    // Auto-copy to the clipboard (best-effort — silent if the browser blocks it,
+    // e.g. over plain HTTP; the copy icon remains for a manual retry).
+    try { await copyText(text); flashCopied(document.getElementById("prov-copy")); } catch { /* ignore */ }
   } catch (e) {
     toast("Generate failed: " + e.message);
   }
 });
 
 document.getElementById("prov-copy").addEventListener("click", async () => {
-  const text = document.getElementById("prov-output").textContent;
   try {
-    await navigator.clipboard.writeText(text);
-    document.getElementById("prov-copy").textContent = "Copied";
-    setTimeout(() => { document.getElementById("prov-copy").textContent = "Copy to clipboard"; }, 1500);
+    await copyText(document.getElementById("prov-output").textContent);
+    flashCopied(document.getElementById("prov-copy"));
   } catch {
     toast("Clipboard unavailable — select and copy manually.");
   }

@@ -81,6 +81,8 @@ footer {
   text-decoration: none;
 }
 #footer-repo:hover { text-decoration: underline; } /* underline on hover only */
+.footer-link { color: inherit; text-decoration: none; }
+.footer-link:hover { text-decoration: underline; } /* underline on hover only */
 
 /* ---- status chips (top of page) ---- */
 #status-chips { display: flex; gap: 0.5rem; flex-wrap: wrap; }
@@ -341,7 +343,20 @@ button.secondary:hover { color: var(--text); filter: none; }
 #discover-table .disc-review .disc-note { color: var(--warn); }
 #discover-warnings div { margin: 0.1rem 0; }
 
-/* Provisioning form: inline "also provision Management API access" toggle. */
+/* Provisioning form: fields stacked over a table-style header row of labels. */
+#provision-form { flex-direction: column; align-items: stretch; }
+.field-grid {
+  display: grid;
+  grid-template-columns: 2fr 2fr 1fr; /* username, password, uid */
+  gap: 0.25rem 0.6rem;
+  align-items: end;
+}
+.field-grid label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+.field-grid input { width: 100%; box-sizing: border-box; }
 .prov-api-toggle {
   display: inline-flex;
   align-items: center;
@@ -350,6 +365,32 @@ button.secondary:hover { color: var(--text); filter: none; }
   font-size: 0.9rem;
 }
 .prov-api-toggle input { margin: 0; }
+
+/* Provisioning explanatory notes as normal text, between inputs and output. */
+.prov-notes { margin: 0.75rem 0; font-size: 0.9rem; color: var(--muted); }
+.prov-note-title { margin: 0.6rem 0 0.2rem; font-weight: 600; color: var(--text); }
+.prov-note-title:first-child { margin-top: 0; }
+.prov-note-list { margin: 0; padding-left: 1.2rem; }
+.prov-note-list li { margin: 0.15rem 0; }
+
+/* Output pane with a copy icon anchored top-right. */
+.output-pane { position: relative; }
+.output-pane .job-events { padding-right: 2.75rem; } /* keep text clear of the icon */
+.copy-icon {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.25rem;
+  line-height: 0;
+  cursor: pointer;
+}
+.copy-icon:hover { color: var(--text); background: var(--badge-bg); filter: none; }
+.copy-icon.copied { color: var(--accent); border-color: var(--accent); }
+.copy-icon svg { width: 16px; height: 16px; display: block; }
 
 /* New-environment form: let the name field grow so the row fills the modal and
    the placeholder example is fully readable. */

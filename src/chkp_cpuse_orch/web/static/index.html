@@ -81,7 +81,10 @@
   <div class="tab-panel" id="tab-provisioning">
 
     <section id="provision">
-      <h2>Provision management server access</h2>
+      <div class="section-head">
+        <h2>Provision management server access</h2>
+        <button type="submit" form="provision-form" id="prov-generate" class="small">Generate commands</button>
+      </div>
       <p class="hint">
         Generates the clish commands that create this tool's service account on a
         management server — paste them into clish on <strong>each</strong> server.
@@ -92,17 +95,31 @@
         <strong>Credentials</strong> panel below.
       </p>
       <form id="provision-form">
-        <input type="text" id="prov-username" placeholder="username (e.g. svc-patch)" required>
-        <input type="password" id="prov-password" placeholder="password (8+ chars)" required>
-        <input type="number" id="prov-uid" value="2600" min="1000" max="65000" title="uid">
+        <div class="field-grid">
+          <label for="prov-username">Username</label>
+          <label for="prov-password">Password</label>
+          <label for="prov-uid">UID</label>
+          <input type="text" id="prov-username" placeholder="e.g. svc-patch" required>
+          <input type="password" id="prov-password" placeholder="8+ characters" required>
+          <input type="number" id="prov-uid" value="2600" min="1000" max="65000">
+        </div>
         <label class="prov-api-toggle" title="Emit the expert-mode commands that grant Management API access — required for estate auto-discovery">
           <input type="checkbox" id="prov-api" checked>
           Also provision Management API access
         </label>
-        <button type="submit">Generate commands</button>
-        <button type="button" id="prov-copy" class="small hidden">Copy to clipboard</button>
       </form>
-      <pre id="prov-output" class="job-events mono hidden"></pre>
+      <!-- Explanatory notes (normal text), shown between the inputs and the output. -->
+      <div id="prov-notes" class="prov-notes hidden"></div>
+      <!-- Output pane: just the commands, with a copy icon in its top-right corner. -->
+      <div id="prov-output-wrap" class="output-pane hidden">
+        <button type="button" id="prov-copy" class="copy-icon" title="Copy to clipboard" aria-label="Copy to clipboard">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+          </svg>
+        </button>
+        <pre id="prov-output" class="job-events mono"></pre>
+      </div>
     </section>
 
     <section id="credentials">
@@ -522,7 +539,7 @@
   </div>
   <div class="footer-notes muted">
     <span>Written with Claude. Deploy and use this tool with appropriate caution.</span>
-    <span>Ideas? Submit an issue at Github with the Enhancement label.</span>
+    <span>Ideas? <a class="footer-link" href="https://github.com/jburanen/chkp-cpuse-orch/issues/new?labels=enhancement" target="_blank" rel="noopener">Submit an issue</a> at Github with the Enhancement label.</span>
   </div>
 </footer>
 
