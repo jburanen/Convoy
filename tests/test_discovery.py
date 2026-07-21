@@ -61,7 +61,7 @@ def test_map_gateways_and_servers_roles() -> None:
     assert all(s.source == "api" for s in servers)
 
 
-# ---- `mdsenv; mdsquerydb MDSs` parsing (pure) -----------------------------------
+# ---- `mdsquerydb MDSs` parsing (pure) --------------------------------------------
 
 ALL_MDSS_INFO = """\
 Name         IP

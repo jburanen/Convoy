@@ -12,8 +12,9 @@ Multi-Domain, never a mix.
 - **MDS side, Global domain** via the same API call, logged into the ``Global``
   domain instead of a specific Domain/CMA: SmartEvent servers shared across the
   Multi-Domain deployment live there rather than in any one Domain.
-- **MDS side, peer MDS/MLM boxes** via SSH on a Multi-Domain Server (``mdsenv;
-  mdsquerydb MDSs``):
+- **MDS side, peer MDS/MLM boxes** via SSH on a Multi-Domain Server
+  (``mdsquerydb MDSs`` — no ``mdsenv`` prefix needed; the account's shell already
+  has the MDS environment loaded, confirmed against a live MDS 2026-07-21):
   the other MDS/MLM peers by name + IP. The API does not expose these, and
   ``mdsquerydb`` itself doesn't report Primary/Secondary/MLM role — only the peer
   matching the address we connected to is inferred as primary; every other MDS peer
@@ -168,7 +169,7 @@ class DiscoveryService:
             result.warnings.append(f"MDS SSH discovery skipped: {exc}")
             return
         try:
-            out = client.run("mdsenv; mdsquerydb MDSs")
+            out = client.run("mdsquerydb MDSs")
         except TransportError as exc:
             result.warnings.append(f"MDS enumeration failed: {exc}")
             return
