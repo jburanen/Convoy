@@ -12,10 +12,13 @@ Multi-Domain, never a mix.
 - **MDS side, Global domain** via the same API call, logged into the ``Global``
   domain instead of a specific Domain/CMA: SmartEvent servers shared across the
   Multi-Domain deployment live there rather than in any one Domain.
-- **MDS side, peer MDS/MLM boxes** via SSH on a Multi-Domain Server
-  (``mdsquerydb MDSs`` — no ``mdsenv`` prefix needed; the account's shell already
-  has the MDS environment loaded, confirmed against a live MDS 2026-07-21):
-  the other MDS/MLM peers by name + IP. The API does not expose these, and
+- **MDS side, peer MDS/MLM boxes** via SSH on a Multi-Domain Server, run as
+  ``bash -lc "mdsquerydb MDSs"`` — a **login shell**, not a bare exec: a plain
+  non-login SSH exec skips the profile scripts that put ``mdsquerydb`` on
+  ``PATH``, so it works when the operator is logged in interactively but fails
+  silently (nonzero exit, no output) over a bare ``exec_command`` (confirmed
+  against a live MDS 2026-07-21). The other MDS/MLM peers come back by name +
+  IP. The API does not expose these, and
   ``mdsquerydb`` itself doesn't report Primary/Secondary/MLM role — only the peer
   matching the address we connected to is inferred as primary; every other MDS peer
   is flagged ``needs_review`` for the operator to classify.
@@ -169,7 +172,12 @@ class DiscoveryService:
             result.warnings.append(f"MDS SSH discovery skipped: {exc}")
             return
         try:
-            out = client.run("mdsquerydb MDSs")
+            # A plain SSH exec is a non-login shell, which skips the profile
+            # scripts that put mdsquerydb's PATH/MDS env vars in place — force a
+            # login shell so it runs the same environment an interactive session
+            # gets (confirmed against a live MDS 2026-07-21: bare `mdsquerydb
+            # MDSs` fails non-interactively but works when logged in normally).
+            out = client.run('bash -lc "mdsquerydb MDSs"')
         except TransportError as exc:
             result.warnings.append(f"MDS enumeration failed: {exc}")
             return

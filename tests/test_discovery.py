@@ -233,4 +233,7 @@ def test_discover_mds_over_ssh() -> None:
     assert by_name["mds-primary"].already_in_inventory is True
     assert by_name["mds-second"].detected_role is Role.SECONDARY_MDS
     assert by_name["mlm-01"].detected_role is Role.SECONDARY_MDS
+    # Must run as a login shell (bash -lc) — a bare exec skips the profile
+    # scripts that put mdsquerydb on PATH and silently returns nothing.
+    assert ssh.commands[-1] == 'bash -lc "mdsquerydb MDSs"'
     assert ssh.closed is True  # transport is always closed
