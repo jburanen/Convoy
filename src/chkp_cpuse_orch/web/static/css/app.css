@@ -167,7 +167,7 @@ footer {
    Text uses the disabled/CDT-tab color (muted + 0.4 opacity) at footer size. */
 #tab-guide {
   display: flex;
-  align-items: center;
+  align-items: flex-start; /* blocks top-align; unequal-length text hangs down */
   gap: 0.5rem;
   margin-top: 0.75rem;
 }
@@ -217,8 +217,9 @@ section h2 { margin: 0 0 0.25rem; font-size: 1.15rem; }
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
+  margin-bottom: 0.75rem; /* breathing room before the panel's text/content */
 }
-.section-head h2 { margin-bottom: 0.25rem; }
+.section-head h2 { margin-bottom: 0; } /* the row owns the spacing below */
 
 /* ---- tables ---- */
 table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
