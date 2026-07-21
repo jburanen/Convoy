@@ -103,7 +103,7 @@
           <input type="text" id="prov-cred-name" placeholder="e.g. primary-admin">
           <input type="text" id="prov-username" placeholder="e.g. svc-patch" required>
           <input type="password" id="prov-password" placeholder="8+ characters" required>
-          <input type="number" id="prov-uid" value="2600" min="1000" max="65000">
+          <input type="number" id="prov-uid" value="2600" min="0" max="65000" title="0 is allowed — some adminRole accounts use uid 0">
         </div>
         <label class="prov-api-toggle" title="Emit the expert-mode commands that grant Management API access — required for estate auto-discovery">
           <input type="checkbox" id="prov-api" checked>
@@ -169,7 +169,7 @@
 
     <section id="servers-info">
       <div class="section-head">
-        <h2>Management servers in <span id="prov-env-name">—</span></h2>
+        <h2>Direct CPUSE patching targets in <span id="prov-env-name">—</span></h2>
         <div class="section-head-actions">
           <!-- Shown once a primary exists (the first server is added via the
                Connect-to-Primary modal); opens the same modal as Edit, in add mode. -->

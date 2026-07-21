@@ -1062,7 +1062,15 @@ document.getElementById("provision-form").addEventListener("submit", async (ev) 
       body: JSON.stringify({
         username,
         password,
-        uid: Number(document.getElementById("prov-uid").value) || 2600,
+        // `|| 2600` would silently turn a deliberately-entered 0 back into the
+        // default (0 is falsy in JS, and Number("") is 0 too) — some adminRole
+        // accounts really are uid 0.
+        uid: (() => {
+          const raw = document.getElementById("prov-uid").value.trim();
+          if (raw === "") return 2600;
+          const n = Number(raw);
+          return Number.isNaN(n) ? 2600 : n;
+        })(),
         mgmt_api: document.getElementById("prov-api").checked,
       }),
     });

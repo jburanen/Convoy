@@ -48,9 +48,16 @@ def test_short_password_rejected() -> None:
 
 
 def test_uid_out_of_range_rejected() -> None:
-    for uid in (0, 999, 65001):
+    for uid in (-1, 65001):
         with pytest.raises(ProvisioningError, match="uid must be"):
             render_gaia_user_commands("svc", "longenough", uid=uid)
+
+
+def test_uid_zero_allowed() -> None:
+    # Some adminRole accounts are uid 0 — the operator must be able to mirror
+    # that when provisioning this service account.
+    cmds = render_gaia_user_commands("svc", "longenough", uid=0)
+    assert "uid 0" in cmds[0]
 
 
 def test_bad_role_rejected() -> None:

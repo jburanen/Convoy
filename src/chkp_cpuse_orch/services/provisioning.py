@@ -24,7 +24,10 @@ _USERNAME_RE = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
 _ROLE_RE = re.compile(r"[A-Za-z0-9_-]+")
 
 _MIN_PASSWORD_LEN = 8
-_UID_RANGE = (1000, 65000)
+# 0 is allowed: Gaia's built-in superuser-equivalent admin accounts (adminRole)
+# are commonly uid 0, and operators provisioning this service account to mirror
+# an existing admin's privileges need to be able to enter that.
+_UID_RANGE = (0, 65000)
 DEFAULT_UID = 2600
 DEFAULT_ROLE = "adminRole"  # full admin: CPUSE installer verbs require it
 
