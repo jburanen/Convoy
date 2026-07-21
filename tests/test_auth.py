@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from chkp_cpuse_orch import __version__
 from chkp_cpuse_orch.config import Config, Paths
 from chkp_cpuse_orch.credentials import MASTER_KEY_ENV
 from chkp_cpuse_orch.errors import AuthError, ConfigError
@@ -86,7 +87,10 @@ def test_html_navigation_redirects_to_login(tmp_path: Path) -> None:
         assert resp.headers["location"] == "/login.html"
         # The login page and its config endpoint are reachable without a session.
         assert c.get("/login.html", follow_redirects=False).status_code == 200
-        assert c.get("/api/auth/config").json() == {"auth_enabled": True, "idle_minutes": 30}
+        cfg = c.get("/api/auth/config").json()
+        assert cfg["auth_enabled"] is True
+        assert cfg["idle_minutes"] == 30
+        assert cfg["version"] == __version__
 
 
 def test_login_wrong_password_is_401(tmp_path: Path) -> None:

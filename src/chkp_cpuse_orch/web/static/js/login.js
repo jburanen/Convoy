@@ -22,6 +22,9 @@ function showError(message) {
     const resp = await fetch("/api/auth/config");
     if (resp.ok) {
       const cfg = await resp.json();
+      if (cfg.version) {
+        document.getElementById("login-version").textContent = "v" + cfg.version;
+      }
       if (!cfg.auth_enabled) window.location.replace("/");
     }
   } catch { /* offline — let the form attempt and surface the error */ }

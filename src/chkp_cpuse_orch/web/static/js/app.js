@@ -817,12 +817,14 @@ function addChip(box, text, cls) {
 const PROV_NOTE_EMPHASIS = "[!] ";
 
 // Render the explanatory notes as normal text (not comments in the code output),
-// grouped by which command block they describe. `credStatus` reports how saving
-// the bootstrap credential set went.
+// each group into the notes box that sits directly above the command block it
+// describes. `credStatus` reports how saving the bootstrap credential set went.
 function renderProvNotes(resp, credStatus) {
-  const box = document.getElementById("prov-notes");
-  box.replaceChildren();
-  const group = (title, notes) => {
+  const clishBox = document.getElementById("prov-clish-notes");
+  const expertBox = document.getElementById("prov-expert-notes");
+  clishBox.replaceChildren();
+  expertBox.replaceChildren();
+  const group = (box, title, notes) => {
     if (!notes || !notes.length) return;
     const h = document.createElement("p");
     h.className = "prov-note-title";
@@ -842,8 +844,10 @@ function renderProvNotes(resp, credStatus) {
     }
     box.appendChild(ul);
   };
-  group("SSH / Gaia access — run in clish on each management server", resp.notes);
-  group("Management API access — run in expert mode on the management server", resp.api_notes);
+  group(clishBox, "SSH / Gaia access — run in clish on each management server", resp.notes);
+  group(expertBox, "Management API access — run in expert mode on the management server", resp.api_notes);
+  // The saved-credential status describes the SSH/Gaia service account, so it
+  // belongs with the clish block.
   if (credStatus) {
     const hasApi = resp.api_commands && resp.api_commands.length;
     if (credStatus.ok) {
@@ -851,13 +855,14 @@ function renderProvNotes(resp, credStatus) {
         ? `Saved credential set “${credStatus.name}” to the Credentials table below — ` +
           "Edit it to paste the API key after you generate one."
         : `Saved credential set “${credStatus.name}” to the Credentials table below.`;
-      group("Credentials", [msg]);
+      group(clishBox, "Credentials", [msg]);
     } else {
-      group("Credentials", [PROV_NOTE_EMPHASIS +
+      group(clishBox, "Credentials", [PROV_NOTE_EMPHASIS +
         `Credentials not saved (${credStatus.reason}). Add them in the Credentials table.`]);
     }
   }
-  box.classList.remove("hidden");
+  clishBox.classList.toggle("hidden", !clishBox.childElementCount);
+  expertBox.classList.toggle("hidden", !expertBox.childElementCount);
 }
 
 async function copyText(text) {
@@ -909,6 +914,29 @@ async function saveBootstrapCredential(setName, username, password) {
   }
 }
 
+// Clear the bootstrap form and collapse the generated output, returning the
+// button to its "Generate commands" state.
+function resetProvForm() {
+  document.getElementById("provision-form").reset();
+  for (const id of ["prov-clish-notes", "prov-expert-notes",
+                    "prov-clish-wrap", "prov-expert-wrap"]) {
+    document.getElementById(id).classList.add("hidden");
+  }
+  const btn = document.getElementById("prov-generate");
+  btn.textContent = "Generate commands";
+  btn.classList.remove("danger");
+  delete btn.dataset.mode;
+}
+
+// Once commands are on screen, the button becomes a red Reset control (clears the
+// form + collapses the output) instead of re-generating.
+document.getElementById("prov-generate").addEventListener("click", (ev) => {
+  if (ev.currentTarget.dataset.mode === "reset") {
+    ev.preventDefault(); // a click in reset mode must not submit the form
+    resetProvForm();
+  }
+});
+
 document.getElementById("provision-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const passwordInput = document.getElementById("prov-password");
@@ -939,6 +967,10 @@ document.getElementById("provision-form").addEventListener("submit", async (ev) 
       document.getElementById("prov-expert-output").textContent = resp.api_commands.join("\n");
     }
     document.getElementById("prov-expert-wrap").classList.toggle("hidden", !hasApi);
+    const btn = document.getElementById("prov-generate");
+    btn.textContent = "Reset";
+    btn.classList.add("danger");
+    btn.dataset.mode = "reset";
   } catch (e) {
     toast("Generate failed: " + e.message);
   }

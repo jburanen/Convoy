@@ -378,7 +378,8 @@ button.secondary:hover { color: var(--text); filter: none; }
 }
 .prov-api-toggle input { margin: 0; }
 
-/* Provisioning explanatory notes as normal text, between inputs and output. */
+/* Provisioning explanatory notes as normal text, each block sitting directly
+   above the command output box it describes. */
 .prov-notes { margin: 0.75rem 0; font-size: 0.9rem; color: var(--muted); }
 .prov-note-title { margin: 0.6rem 0 0.2rem; font-weight: 600; color: var(--text); }
 .prov-note-title:first-child { margin-top: 0; }
@@ -406,7 +407,6 @@ button.secondary:hover { color: var(--text); filter: none; }
 /* Provisioning output boxes (one per console). Each grows to fit its commands so
    there's no scrollbar overlapping the copy icon. */
 .output-pane { margin: 0.75rem 0; }
-.output-caption { font-size: 0.8rem; font-weight: 600; color: var(--muted); margin-bottom: 0.25rem; }
 .output-body { position: relative; }
 .output-body .job-events {
   padding-right: 2.75rem; /* keep long lines clear of the copy icon */
@@ -526,6 +526,16 @@ button.secondary:hover { color: var(--text); filter: none; }
 .login-field input { width: 100%; }
 #login-submit { margin-top: 0.5rem; }
 .login-error { color: var(--danger); margin: 0.25rem 0 0; font-size: 0.9rem; }
+/* GitHub link + version, centered under the login card (mirrors the app footer,
+   but stacked and centered rather than left-aligned). */
+#login-footer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 1.5rem;
+  font-size: 0.85rem;
+}
 
 /* ---- header session controls (logout) ---- */
 #session-row {

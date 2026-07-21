@@ -508,8 +508,12 @@ def _register_routes(app: FastAPI) -> None:
         session exists, so it must stay reachable without one."""
         auth = _auth(request)
         if auth is None:
-            return {"auth_enabled": False, "idle_minutes": 0}
-        return {"auth_enabled": True, "idle_minutes": auth.settings.idle_minutes}
+            return {"auth_enabled": False, "idle_minutes": 0, "version": __version__}
+        return {
+            "auth_enabled": True,
+            "idle_minutes": auth.settings.idle_minutes,
+            "version": __version__,
+        }
 
     @app.get("/api/auth/me")
     def auth_me(request: Request) -> dict[str, Any]:

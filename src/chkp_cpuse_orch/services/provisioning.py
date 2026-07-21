@@ -66,9 +66,8 @@ def render_gaia_user_commands(
 
 
 PROVISIONING_NOTES = [
-    "Run these in clish on EACH management server (they are per-host).",
-    "The shell is /bin/bash so SCP/SFTP staging works; this tool wraps its "
-    "CPUSE commands in `clish -c` accordingly.",
+    "The user is created with a bash/expert shell to permit SCP transfers; the "
+    "`clish -c` is used for commands as needed.",
     "The password appears only as a salted SHA-512 hash, never in plaintext.",
 ]
 
@@ -119,12 +118,7 @@ def render_mgmt_api_commands(
 
 
 MGMT_API_NOTES = [
-    "Run these in EXPERT mode on the management server (a Security Management Server, "
-    "or on an MDS after `mdsenv` for the global context) — NOT on gateways.",
     NOTE_EMPHASIS + '`add administrator … authentication-method "api key"` prints the '
     "API key in its JSON output. Copy it ONCE (it cannot be retrieved later), then Edit "
     "the credential entry added below and paste it as the API key.",
-    "`mgmt_cli login -r true` authenticates as root on the box (no password). If root "
-    "login is disabled, replace it with `mgmt_cli login -u <admin> > …` and enter the "
-    "SmartConsole administrator password when prompted.",
 ]
