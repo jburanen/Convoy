@@ -12,14 +12,15 @@ Multi-Domain, never a mix.
 - **MDS side, Global domain** via the same API call, logged into the ``Global``
   domain instead of a specific Domain/CMA: SmartEvent servers shared across the
   Multi-Domain deployment live there rather than in any one Domain.
-- **MDS side, peer MDS/MLM boxes** via SSH on a Multi-Domain Server, run as
-  ``$MDSDIR/scripts/mdsquerydb MDSs`` — called by its ``$MDSDIR``-relative path,
-  not the bare command name: ``PATH`` isn't reliably populated over a plain SSH
-  exec (neither a bare exec nor a login shell (``bash -lc``) put ``mdsquerydb``
-  on ``PATH`` — both were tried and failed against a live MDS), but ``$MDSDIR``
-  itself is already set in that same session — confirmed 2026-07-22 by pulling
-  the operator's actual `env` output and `which mdsquerydb` path. The other
-  MDS/MLM peers come back by name + IP. The API does not expose these, and
+- **MDS side, peer MDS/MLM boxes** via SSH on a Multi-Domain Server. A plain SSH
+  exec on Gaia loads **none** of the Check Point environment — not ``PATH``,
+  not ``$MDSDIR``, not even base utilities like ``cpprod_util`` (confirmed
+  2026-07-22 from a live failure's stderr). So the command locates the MDS
+  install directory on disk via a glob (``/opt/CPmds-R*`` — versioned, hence
+  no hardcoded path) and exports ``$MDSDIR`` itself before invoking
+  ``scripts/mdsquerydb MDSs``, rather than depending on anything being
+  pre-set. The other MDS/MLM peers come back by name + IP. The API does not
+  expose these, and
   ``mdsquerydb`` itself doesn't report Primary/Secondary/MLM role — only the peer
   matching the address we connected to is inferred as primary; every other MDS peer
   is flagged ``needs_review`` for the operator to classify.
@@ -172,7 +173,17 @@ class DiscoveryService:
         except (CredentialError, TransportError) as exc:
             result.warnings.append(f"MDS SSH discovery skipped: {exc}")
             return
-        command = "$MDSDIR/scripts/mdsquerydb MDSs"
+        # Nothing Check Point-specific is loaded in this session at all — not
+        # PATH, not $MDSDIR, not even the base `cpprod_util` (confirmed 2026-07-22
+        # from a live failure's stderr: `$MDSDIR/scripts/mdsquerydb` resolved to
+        # bare `/scripts/mdsquerydb`, i.e. $MDSDIR was empty). So don't depend on
+        # any pre-set env var — locate the MDS install dir on disk (versioned,
+        # hence the glob) and export it ourselves for just this command, in case
+        # the script needs $MDSDIR internally once invoked.
+        command = (
+            "MDSDIR=$(ls -d /opt/CPmds-R* 2>/dev/null | head -1); "
+            'export MDSDIR; "$MDSDIR/scripts/mdsquerydb" MDSs'
+        )
         try:
             out = client.run(command)
         except TransportError as exc:

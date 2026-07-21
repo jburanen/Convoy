@@ -220,7 +220,7 @@ def test_discover_sms_omits_domain_for_api_call() -> None:
 
 def test_discover_mds_over_ssh() -> None:
     inv = _inventory(Host(name="mds-primary", address="10.0.0.1", role=Role.PRIMARY_MDS))
-    ssh = FakeTransport(responses={"mdsquerydb MDSs": ALL_MDSS_INFO})
+    ssh = FakeTransport(responses={"mdsquerydb": ALL_MDSS_INFO})
     connector = _FakeConnector(inv, _api_bundle(), ssh=ssh, is_mds=True)
     service = DiscoveryService(
         _FakeRegistry(connector),  # type: ignore[arg-type]
@@ -233,16 +233,18 @@ def test_discover_mds_over_ssh() -> None:
     assert by_name["mds-primary"].already_in_inventory is True
     assert by_name["mds-second"].detected_role is Role.SECONDARY_MDS
     assert by_name["mlm-01"].detected_role is Role.SECONDARY_MDS
-    # Called by its $MDSDIR-relative path, not the bare command name — PATH
-    # isn't reliably populated over a plain SSH exec, but $MDSDIR already is.
-    assert ssh.commands[-1] == "$MDSDIR/scripts/mdsquerydb MDSs"
+    # Locates MDSDIR on disk itself rather than depending on it being pre-set —
+    # a plain SSH exec loads none of the Check Point environment.
+    sent = ssh.commands[-1]
+    assert "ls -d /opt/CPmds-R*" in sent
+    assert '"$MDSDIR/scripts/mdsquerydb" MDSs' in sent
     assert ssh.closed is True  # transport is always closed
 
 
 def test_discover_mds_nonzero_exit_surfaces_command_and_status() -> None:
-    # This exact command has been wrong twice already — the warning must carry
-    # enough of the real failure (command, exit status, stderr) that the next
-    # miss is diagnosable from the UI alone, not another round of guessing.
+    # This exact command has been wrong multiple times already — the warning
+    # must carry enough of the real failure (command, exit status, stderr) that
+    # the next miss is diagnosable from the UI alone, not another guess.
     inv = _inventory(Host(name="mds-primary", address="10.0.0.1", role=Role.PRIMARY_MDS))
     ssh = FakeTransport(fail_rc=127)
     connector = _FakeConnector(inv, _api_bundle(), ssh=ssh, is_mds=True)
@@ -252,4 +254,4 @@ def test_discover_mds_nonzero_exit_surfaces_command_and_status() -> None:
     )
 
     result = service.discover("default", "mds-primary")
-    assert any("$MDSDIR/scripts/mdsquerydb MDSs" in w and "127" in w for w in result.warnings)
+    assert any("$MDSDIR/scripts/mdsquerydb" in w and "127" in w for w in result.warnings)
