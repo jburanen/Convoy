@@ -620,16 +620,16 @@ function closePrimaryModal() {
   document.getElementById("primary-modal").classList.add("hidden");
 }
 
-// Fill the primary-modal's credential-set picker from this environment's stored
-// sets; storage-disabled environments have none, so hide it instead.
+// Storage-enabled environments pick an SSH identity from a stored credential
+// set (no free-text username — the set's ssh_username drives it); storage-
+// disabled environments have no sets to pick from, so they type a username.
 async function populatePrimaryCredSelect() {
-  const label = document.getElementById("pm-cred-label");
+  const enabled = storageEnabled();
+  document.getElementById("pm-user-label").classList.toggle("hidden", enabled);
+  document.getElementById("pm-cred-label").classList.toggle("hidden", !enabled);
+  if (!enabled) return;
   const select = document.getElementById("pm-cred-select");
   select.querySelectorAll("option:not(:first-child)").forEach((o) => o.remove());
-  applyPrimaryCredUser(); // reset the SSH-user field/lock before repopulating
-  const enabled = storageEnabled();
-  label.classList.toggle("hidden", !enabled);
-  if (!enabled) return;
   const sets = await fetchCredentialSets();
   for (const set of sets) {
     const opt = document.createElement("option");
@@ -640,35 +640,21 @@ async function populatePrimaryCredSelect() {
   }
 }
 
-// A credential set already carries its own SSH username — re-typing it in the
-// primary modal is redundant. When a set with one is selected, derive the SSH
-// user field from it and lock it; otherwise leave it free-text.
-function applyPrimaryCredUser() {
-  const select = document.getElementById("pm-cred-select");
-  const userInput = document.getElementById("pm-user");
-  const sshUser = select.selectedOptions[0]?.dataset.sshUser;
-  if (sshUser) {
-    userInput.value = sshUser;
-    userInput.disabled = true;
-    userInput.title = "From the selected credential set";
-  } else {
-    userInput.disabled = false;
-    userInput.title = "";
-  }
-}
-document.getElementById("pm-cred-select").addEventListener("change", applyPrimaryCredUser);
-
 document.getElementById("primary-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   if (!currentEnv) return;
   const name = document.getElementById("pm-name").value.trim();
-  const credSet = document.getElementById("pm-cred-select").value;
+  const credSelect = document.getElementById("pm-cred-select");
+  const credSet = storageEnabled() ? credSelect.value : null;
+  const sshUser = storageEnabled()
+    ? credSelect.selectedOptions[0]?.dataset.sshUser || "admin"
+    : document.getElementById("pm-user").value.trim() || "admin";
   try {
     await addServer({
       name,
       address: document.getElementById("pm-address").value.trim(),
       role: document.getElementById("pm-role").value,
-      ssh_user: document.getElementById("pm-user").value.trim() || "admin",
+      ssh_user: sshUser,
       ssh_port: Number(document.getElementById("pm-port").value) || 22,
     });
     if (credSet) {
