@@ -657,7 +657,7 @@ def test_provision_renders_commands_without_plaintext(client: TestClient) -> Non
     resp = client.post("/api/provision", json={"username": "svc-patch", "password": "s3cret-pw!"})
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["commands"][1] == "set user svc-patch gid 100 shell /bin/bash"
+    assert body["commands"][3] == "set user svc-patch gid 100 shell /bin/bash"
     assert "s3cret-pw!" not in resp.text  # only the salted hash is echoed
     assert any("clish -c" in n for n in body["notes"])
     # Management API access is included by default (needed for auto-discovery).

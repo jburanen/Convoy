@@ -16,3 +16,4 @@ Load this at the start of each session; read a linked file when its hook looks r
 - [Credential sets](credential-sets.md) — credentials are named login sets assigned to servers (migration v8), not per-host secrets
 - [Web UI authentication](web-auth.md) — LDAP/AD login, sessions, idle logout; no-auth ⇒ no credential storage
 - [Git workflow](git-workflow.md) — work directly on main; no feature branches; bump `__version__` every batch, in the shipping commit
+- [Provisioning command order](provisioning-command-order.md) — RBA role assignment must precede the shell→bash switch

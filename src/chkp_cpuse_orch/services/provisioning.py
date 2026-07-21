@@ -58,9 +58,9 @@ def render_gaia_user_commands(
     password_hash = hasher.hash(password)
     return [
         f"add user {username} uid {uid} homedir /home/{username}",
-        f"set user {username} gid 100 shell /bin/bash",
         f"set user {username} password-hash {password_hash}",
         f"add rba user {username} roles {role}",
+        f"set user {username} gid 100 shell /bin/bash",
         "save config",
     ]
 
