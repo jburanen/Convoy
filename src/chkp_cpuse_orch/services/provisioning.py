@@ -73,3 +73,60 @@ PROVISIONING_NOTES = [
     "Afterwards, store the same username/password in the Credentials section "
     "below (kind: SSH password) so the tool can log in.",
 ]
+
+
+# The clish/RBA account above is a *Gaia OS* user (SSH/clish/WebUI). The Check Point
+# Management API authenticates *Security Management administrators* — a separate
+# account system in the management database — so it needs its own provisioning. The
+# tool's estate auto-discovery uses the Management API, so an API-enabled admin (with
+# an API key) is what makes discovery work.
+_API_SESSION_FILE = "/tmp/cpuse_orch_mgmt_api.sid"
+DEFAULT_API_PROFILE = "Super User"  # built-in profile; read access is enough for discovery
+
+
+def render_mgmt_api_commands(
+    username: str,
+    *,
+    permissions_profile: str = DEFAULT_API_PROFILE,
+) -> list[str]:
+    """Expert-mode commands that create a Management API administrator (API-key auth)
+    and open the API to remote callers, on ONE Security Management Server / MDS.
+
+    All mutations share a single ``mgmt_cli`` session so the ``add administrator``
+    is actually published; ``-r true`` logs in as root on the box (no password).
+    The generated API key is printed once in the ``add administrator`` JSON output —
+    the operator copies it into the Credentials section (kind: API key).
+    """
+    if not _USERNAME_RE.fullmatch(username):
+        raise ProvisioningError(
+            f"invalid username {username!r}: lowercase letters, digits, '_' and '-', "
+            "starting with a letter or '_', max 32 chars"
+        )
+    if not _ROLE_RE.fullmatch(permissions_profile.replace(" ", "")):
+        raise ProvisioningError(f"invalid permissions profile: {permissions_profile!r}")
+    sid = _API_SESSION_FILE
+    return [
+        f"mgmt_cli login -r true > {sid}",
+        f"mgmt_cli -s {sid} add administrator name {username} "
+        f'authentication-method "api key" permissions-profile "{permissions_profile}" '
+        "--format json",
+        f'mgmt_cli -s {sid} set api-settings accepted-api-calls-from "All IP addresses"',
+        f"mgmt_cli -s {sid} publish",
+        f"mgmt_cli -s {sid} logout",
+        f"rm -f {sid}",
+        "api restart",
+    ]
+
+
+MGMT_API_NOTES = [
+    "Run these in EXPERT mode on the management server (a Security Management Server, "
+    "or on an MDS after `mdsenv` for the global context) — NOT on gateways.",
+    '`add administrator … authentication-method "api key"` prints the API key in its '
+    "JSON output. Copy it ONCE (it cannot be retrieved later) and store it in the "
+    "Credentials section as the API key.",
+    '`accepted-api-calls-from "All IP addresses"` opens the Management API to remote '
+    "callers; narrow it to this tool's host/IP if your policy requires it.",
+    "`mgmt_cli login -r true` authenticates as root on the box (no password). If root "
+    "login is disabled, replace it with `mgmt_cli login -u <admin> > …` and enter the "
+    "SmartConsole administrator password when prompted.",
+]

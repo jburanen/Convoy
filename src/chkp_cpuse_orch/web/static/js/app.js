@@ -794,12 +794,21 @@ document.getElementById("provision-form").addEventListener("submit", async (ev) 
         username: document.getElementById("prov-username").value.trim(),
         password: passwordInput.value,
         uid: Number(document.getElementById("prov-uid").value) || 2600,
+        mgmt_api: document.getElementById("prov-api").checked,
       }),
     });
     passwordInput.value = ""; // plaintext leaves the page as soon as possible
-    output.textContent =
+    let text =
+      "# === SSH / Gaia access (run in clish on each management server) ===\n" +
       resp.commands.join("\n") +
       "\n\n# " + resp.notes.join("\n# ");
+    if (resp.api_commands && resp.api_commands.length) {
+      text +=
+        "\n\n# === Management API access (run in expert mode on the management server) ===\n" +
+        resp.api_commands.join("\n") +
+        "\n\n# " + resp.api_notes.join("\n# ");
+    }
+    output.textContent = text;
     output.classList.remove("hidden");
     copyBtn.classList.remove("hidden");
   } catch (e) {

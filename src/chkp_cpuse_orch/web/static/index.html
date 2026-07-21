@@ -95,6 +95,10 @@
         <input type="text" id="prov-username" placeholder="username (e.g. svc-patch)" required>
         <input type="password" id="prov-password" placeholder="password (8+ chars)" required>
         <input type="number" id="prov-uid" value="2600" min="1000" max="65000" title="uid">
+        <label class="prov-api-toggle" title="Emit the expert-mode commands that grant Management API access — required for estate auto-discovery">
+          <input type="checkbox" id="prov-api" checked>
+          Also provision Management API access
+        </label>
         <button type="submit">Generate commands</button>
         <button type="button" id="prov-copy" class="small hidden">Copy to clipboard</button>
       </form>

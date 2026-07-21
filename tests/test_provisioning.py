@@ -4,7 +4,10 @@ import pytest
 from passlib.hash import sha512_crypt
 
 from chkp_cpuse_orch.errors import ProvisioningError
-from chkp_cpuse_orch.services.provisioning import render_gaia_user_commands
+from chkp_cpuse_orch.services.provisioning import (
+    render_gaia_user_commands,
+    render_mgmt_api_commands,
+)
 
 
 def test_renders_full_command_set_in_order() -> None:
@@ -53,3 +56,24 @@ def test_uid_out_of_range_rejected() -> None:
 def test_bad_role_rejected() -> None:
     with pytest.raises(ProvisioningError, match="invalid role"):
         render_gaia_user_commands("svc", "longenough", role="bad role;x")
+
+
+def test_mgmt_api_commands_single_session_and_api_key() -> None:
+    cmds = render_mgmt_api_commands("svc-patch")
+    joined = "\n".join(cmds)
+    # One login → session file reused for every mutation → published in that session.
+    assert cmds[0].startswith("mgmt_cli login -r true > ")
+    assert 'authentication-method "api key"' in joined
+    assert 'permissions-profile "Super User"' in joined
+    assert any(c.endswith("publish") for c in cmds)
+    assert cmds[-1] == "api restart"
+    # Every mutating call reuses the one session file (so the add is published).
+    session_calls = [c for c in cmds if c.startswith("mgmt_cli -s ")]
+    assert len({c.split()[2] for c in session_calls}) == 1
+    # Opens the API for remote callers (discovery connects over the network).
+    assert any("accepted-api-calls-from" in c for c in cmds)
+
+
+def test_mgmt_api_rejects_bad_username() -> None:
+    with pytest.raises(ProvisioningError, match="invalid username"):
+        render_mgmt_api_commands("Bad Name")

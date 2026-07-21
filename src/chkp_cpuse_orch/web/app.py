@@ -60,8 +60,10 @@ from ..services.environments import EnvironmentManager
 from ..services.patching import PatchingService
 from ..services.provisioning import (
     DEFAULT_UID,
+    MGMT_API_NOTES,
     PROVISIONING_NOTES,
     render_gaia_user_commands,
+    render_mgmt_api_commands,
 )
 from ..store import JobEvent, JobRecord, PackageRecord, Store
 from .auth import (
@@ -218,6 +220,9 @@ class ProvisionRequest(BaseModel):
     username: str
     password: str = Field(min_length=1)  # only hashed, never stored or echoed
     uid: int = DEFAULT_UID
+    # Also emit the expert-mode commands that grant this account Management API
+    # access (an API-key admin) — needed for estate auto-discovery.
+    mgmt_api: bool = True
 
 
 class EnvironmentIn(BaseModel):
@@ -685,9 +690,15 @@ def _register_routes(app: FastAPI) -> None:
     def provision(body: ProvisionRequest) -> dict[str, list[str]]:
         try:
             commands = render_gaia_user_commands(body.username, body.password, uid=body.uid)
+            api_commands = render_mgmt_api_commands(body.username) if body.mgmt_api else []
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
-        return {"commands": commands, "notes": PROVISIONING_NOTES}
+        return {
+            "commands": commands,
+            "notes": PROVISIONING_NOTES,
+            "api_commands": api_commands,
+            "api_notes": MGMT_API_NOTES if body.mgmt_api else [],
+        }
 
     # -- servers (environment-scoped) ------------------------------------------
 

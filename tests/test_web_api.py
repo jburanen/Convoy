@@ -597,6 +597,19 @@ def test_provision_renders_commands_without_plaintext(client: TestClient) -> Non
     assert body["commands"][1] == "set user svc-patch gid 100 shell /bin/bash"
     assert "s3cret-pw!" not in resp.text  # only the salted hash is echoed
     assert any("clish -c" in n for n in body["notes"])
+    # Management API access is included by default (needed for auto-discovery).
+    assert any('authentication-method "api key"' in c for c in body["api_commands"])
+
+
+def test_provision_can_skip_mgmt_api(client: TestClient) -> None:
+    resp = client.post(
+        "/api/provision",
+        json={"username": "svc-patch", "password": "s3cret-pw!", "mgmt_api": False},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["api_commands"] == []
+    assert body["api_notes"] == []
 
 
 def test_provision_rejects_bad_input(client: TestClient) -> None:
