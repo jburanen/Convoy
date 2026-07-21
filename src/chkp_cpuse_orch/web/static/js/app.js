@@ -481,6 +481,7 @@ document.addEventListener("keydown", (ev) => {
   closeCredAddModal();
   closeDiscoverModal();
   closePrimaryModal();
+  closeServerModal();
   hideWelcome(); // soft close — the welcome dialog returns next load if still fresh
 });
 
@@ -507,7 +508,8 @@ document.getElementById("env-add-form").addEventListener("submit", async (ev) =>
 
 /* ---------- 1a-prov. environment management (Provisioning tab) ---------- */
 
-// Shared add/update path for both the inline form and the Connect-to-Primary modal.
+// Shared add/update path for the Connect-to-Primary modal and the Add/Edit
+// server modal below.
 async function addServer({ name, address, role, ssh_user, ssh_port }) {
   await api(`/api/environments/${encodeURIComponent(currentEnv)}/servers`, {
     method: "POST",
@@ -516,22 +518,57 @@ async function addServer({ name, address, role, ssh_user, ssh_port }) {
   });
 }
 
-// Inline form: shown once a primary exists, for expanding the table manually.
-document.getElementById("env-server-form").addEventListener("submit", async (ev) => {
-  ev.preventDefault();
+/* ---------- 1b. add/edit server (modal) ---------- */
+
+// One modal handles both: "Manually add a server" opens it empty with Name
+// editable; each row's Edit button opens it prefilled with Name locked (add/
+// update is upsert-by-name, so changing it would create a new server rather
+// than rename this one).
+function openAddServerModal() {
   if (!currentEnv) { toast("Create an environment first (picker → New Environment…)."); return; }
+  document.getElementById("server-form").reset();
+  document.getElementById("sm-name").disabled = false;
+  document.getElementById("server-modal-title").textContent = "Add server";
+  document.getElementById("server-modal-submit").textContent = "Add server";
+  document.getElementById("server-modal").classList.remove("hidden");
+  document.getElementById("sm-name").focus();
+}
+function openEditServerModal(srv) {
+  document.getElementById("sm-name").value = srv.name;
+  document.getElementById("sm-name").disabled = true;
+  document.getElementById("sm-address").value = srv.address;
+  document.getElementById("sm-role").value = srv.role;
+  document.getElementById("sm-user").value = srv.ssh_user;
+  document.getElementById("sm-port").value = srv.ssh_port;
+  document.getElementById("server-modal-title").textContent = `Edit ${srv.name}`;
+  document.getElementById("server-modal-submit").textContent = "Save changes";
+  document.getElementById("server-modal").classList.remove("hidden");
+  document.getElementById("sm-address").focus();
+}
+function closeServerModal() {
+  document.getElementById("server-modal").classList.add("hidden");
+}
+
+document.getElementById("add-server-btn").addEventListener("click", openAddServerModal);
+document.getElementById("server-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  if (!currentEnv) return;
   try {
     await addServer({
-      name: document.getElementById("es-name").value.trim(),
-      address: document.getElementById("es-address").value.trim(),
-      role: document.getElementById("es-role").value,
-      ssh_user: document.getElementById("es-user").value.trim() || "admin",
-      ssh_port: Number(document.getElementById("es-port").value) || 22,
+      name: document.getElementById("sm-name").value.trim(),
+      address: document.getElementById("sm-address").value.trim(),
+      role: document.getElementById("sm-role").value,
+      ssh_user: document.getElementById("sm-user").value.trim() || "admin",
+      ssh_port: Number(document.getElementById("sm-port").value) || 22,
     });
-    document.getElementById("es-name").value = "";
-    document.getElementById("es-address").value = "";
+    closeServerModal();
     await Promise.all([loadServers(), refreshStatus()]);
   } catch (e) { toast("Save failed: " + e.message); }
+});
+document.getElementById("server-modal-close").addEventListener("click", closeServerModal);
+document.getElementById("server-modal-cancel").addEventListener("click", closeServerModal);
+document.getElementById("server-modal").addEventListener("click", (ev) => {
+  if (ev.target.id === "server-modal") closeServerModal(); // backdrop closes
 });
 
 /* ---------- 1c-primary. connect to primary (empty-inventory modal) ---------- */
@@ -1081,16 +1118,16 @@ const roleLabel = (role) => ROLE_LABELS[role] ?? role;
 
 // Whether the current environment has at least one management server. Drives the
 // Provisioning panel's button (Connect-to-Primary vs Discover) and whether the
-// inline add form is shown.
+// "Manually add a server" button is shown.
 let inventoryHasServers = false;
 
 function updateServersInfoControls(hasServers) {
   inventoryHasServers = hasServers;
   document.getElementById("discover-btn").textContent =
     hasServers ? "Discover servers" : "Connect to Primary SMS/MDS";
-  // The inline add form (to expand the table) appears only once a primary exists;
-  // the first server is added via the Connect-to-Primary modal.
-  document.getElementById("env-server-form").classList.toggle("hidden", !hasServers);
+  // "Manually add a server" appears only once a primary exists; the first
+  // server is added via the Connect-to-Primary modal.
+  document.getElementById("add-server-btn").classList.toggle("hidden", !hasServers);
 }
 
 async function loadServers() {
@@ -1132,17 +1169,7 @@ async function loadServers() {
     info.querySelector(".srv-port").textContent = srv.ssh_port;
     info.querySelector(".srv-creds").textContent =
       assignedByName.get(srv.name) || "none — not assigned";
-    info.querySelector(".btn-edit").addEventListener("click", () => {
-      // Load this server into the inline add form — submitting it back updates
-      // the same row in place (add/update is keyed on name).
-      document.getElementById("es-name").value = srv.name;
-      document.getElementById("es-address").value = srv.address;
-      document.getElementById("es-role").value = srv.role;
-      document.getElementById("es-user").value = srv.ssh_user;
-      document.getElementById("es-port").value = srv.ssh_port;
-      document.getElementById("es-address").focus();
-      document.getElementById("env-server-form").scrollIntoView({ block: "nearest" });
-    });
+    info.querySelector(".btn-edit").addEventListener("click", () => openEditServerModal(srv));
     info.querySelector(".btn-remove").addEventListener("click", async () => {
       if (!confirm(`Remove server ${srv.name} from ${currentEnv}?`)) return;
       try {

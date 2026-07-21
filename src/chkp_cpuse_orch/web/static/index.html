@@ -90,7 +90,7 @@
         <button type="submit" form="provision-form" id="prov-generate" class="small">Generate commands</button>
       </div>
       <p class="hint">
-        Generates clish commands to provisionthis tool's service account on 
+        Generates clish commands to provision this tool's service account on 
         management servers. These credentials are saved to the <strong>Credentials</strong>
         table below automatically; edit that entry to add the API key once you generate one.
       </p>
@@ -173,6 +173,9 @@
         <!-- Scans the estate from a chosen primary via the Management API (+ SSH for
              MDS) and offers the discovered servers for review before import. -->
         <button type="button" id="discover-btn" class="small">Discover servers</button>
+        <!-- Shown once a primary exists (the first server is added via the
+             Connect-to-Primary modal); opens the same modal as Edit, in add mode. -->
+        <button type="button" id="add-server-btn" class="small hidden">Manually add a server</button>
       </div>
       <p class="hint">
         The inventory of the environment selected in the top-right picker. Add or
@@ -195,24 +198,6 @@
         </thead>
         <tbody><!-- tpl-server-info-row instances --></tbody>
       </table>
-      <!-- Manual add form to expand the table — shown once a primary exists (the
-           first server is added via the Connect-to-Primary modal). -->
-      <form id="env-server-form" class="hidden">
-        <input type="text" id="es-name" placeholder="name" required>
-        <input type="text" id="es-address" placeholder="address / IP" required>
-        <select id="es-role">
-          <option value="primary_sms">Primary SMS</option>
-          <option value="secondary_sms">Secondary SMS</option>
-          <option value="log_server">Log Server</option>
-          <option value="primary_mds">Primary MDS</option>
-          <option value="secondary_mds">Secondary MDS</option>
-          <option value="mlm">MLM</option>
-          <option value="smartevent">SmartEvent</option>
-        </select>
-        <input type="text" id="es-user" placeholder="ssh user" value="admin">
-        <input type="number" id="es-port" value="22" min="1" max="65535" title="ssh port">
-        <button type="submit" class="small">Add / update server</button>
-      </form>
     </section>
 
   </div>
@@ -506,6 +491,40 @@
       <div class="cred-modal-actions">
         <button type="submit">Add primary server</button>
         <button type="button" id="primary-cancel" class="secondary">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ============ Add/Edit server modal (Provisioning tab) ===================== -->
+<!-- Shared by "Manually add a server" and each row's Edit button. In edit mode
+     Name is locked (add/update is upsert-by-name, so changing it would create a
+     new server rather than rename this one); in add mode it's free-text. -->
+<div id="server-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="server-modal-title">
+  <div class="modal-card narrow">
+    <div class="modal-head">
+      <h2 id="server-modal-title">Add server</h2>
+      <button id="server-modal-close" class="small" title="Close">✕</button>
+    </div>
+    <form id="server-form" class="stacked">
+      <label>Name<input type="text" id="sm-name" required></label>
+      <label>Address / IP<input type="text" id="sm-address" required></label>
+      <label>Role
+        <select id="sm-role">
+          <option value="primary_sms">Primary SMS</option>
+          <option value="secondary_sms">Secondary SMS</option>
+          <option value="log_server">Log Server</option>
+          <option value="primary_mds">Primary MDS</option>
+          <option value="secondary_mds">Secondary MDS</option>
+          <option value="mlm">MLM</option>
+          <option value="smartevent">SmartEvent</option>
+        </select>
+      </label>
+      <label>SSH user<input type="text" id="sm-user" value="admin"></label>
+      <label>SSH port<input type="number" id="sm-port" value="22" min="1" max="65535"></label>
+      <div class="cred-modal-actions">
+        <button type="submit" id="server-modal-submit">Add server</button>
+        <button type="button" id="server-modal-cancel" class="secondary">Cancel</button>
       </div>
     </form>
   </div>
