@@ -822,8 +822,10 @@ const PROV_NOTE_EMPHASIS = "[!] ";
 function renderProvNotes(resp, credStatus) {
   const clishBox = document.getElementById("prov-clish-notes");
   const expertBox = document.getElementById("prov-expert-notes");
+  const credBox = document.getElementById("prov-cred-status");
   clishBox.replaceChildren();
   expertBox.replaceChildren();
+  credBox.replaceChildren();
   const group = (box, title, notes) => {
     if (!notes || !notes.length) return;
     const h = document.createElement("p");
@@ -846,8 +848,8 @@ function renderProvNotes(resp, credStatus) {
   };
   group(clishBox, "SSH / Gaia access — run in clish on each management server", resp.notes);
   group(expertBox, "Management API access — run in expert mode on the management server", resp.api_notes);
-  // The saved-credential status describes the SSH/Gaia service account, so it
-  // belongs with the clish block.
+  // The saved-credential status is a panel-wide outcome, so it goes at the very
+  // bottom, below both output boxes.
   if (credStatus) {
     const hasApi = resp.api_commands && resp.api_commands.length;
     if (credStatus.ok) {
@@ -855,14 +857,15 @@ function renderProvNotes(resp, credStatus) {
         ? `Saved credential set “${credStatus.name}” to the Credentials table below — ` +
           "Edit it to paste the API key after you generate one."
         : `Saved credential set “${credStatus.name}” to the Credentials table below.`;
-      group(clishBox, "Credentials", [msg]);
+      group(credBox, "Credentials", [msg]);
     } else {
-      group(clishBox, "Credentials", [PROV_NOTE_EMPHASIS +
+      group(credBox, "Credentials", [PROV_NOTE_EMPHASIS +
         `Credentials not saved (${credStatus.reason}). Add them in the Credentials table.`]);
     }
   }
   clishBox.classList.toggle("hidden", !clishBox.childElementCount);
   expertBox.classList.toggle("hidden", !expertBox.childElementCount);
+  credBox.classList.toggle("hidden", !credBox.childElementCount);
 }
 
 async function copyText(text) {
@@ -919,7 +922,7 @@ async function saveBootstrapCredential(setName, username, password) {
 function resetProvForm() {
   document.getElementById("provision-form").reset();
   for (const id of ["prov-clish-notes", "prov-expert-notes",
-                    "prov-clish-wrap", "prov-expert-wrap"]) {
+                    "prov-clish-wrap", "prov-expert-wrap", "prov-cred-status"]) {
     document.getElementById(id).classList.add("hidden");
   }
   const btn = document.getElementById("prov-generate");
