@@ -15,7 +15,13 @@ from chkp_cpuse_orch.credentials import (
     CredentialStore,
     JobCredentialVault,
 )
-from chkp_cpuse_orch.errors import CredentialError, InventoryError, JobError, PackageError
+from chkp_cpuse_orch.errors import (
+    CredentialError,
+    InventoryError,
+    JobError,
+    PackageError,
+    TransportError,
+)
 from chkp_cpuse_orch.inventory import Host, Inventory, Role, Site
 from chkp_cpuse_orch.jobs import JobRunner
 from chkp_cpuse_orch.packages import PackageStore
@@ -86,6 +92,7 @@ def transport() -> FakeTransport:
             # installer packages" below for _wait_until_imported's poll.
             "show installer packages imported": f"{PKG}      Imported",
             "show installer packages": SHOW_PACKAGES_ALL,
+            "show installer package ": "Status:           Installed",
             "show installer status build": DA_BUILD,
             "sha1sum": f"{PKG_SHA1}  /var/log/upload/{PKG}",
         }
@@ -486,6 +493,121 @@ def test_install_job_verifies_then_installs(
     installer_cmds = [c for c in transport.commands if "installer" in c]
     assert "verify" in installer_cmds[0]
     assert "install" in installer_cmds[1]
+    # Confirmed via `show installer package <id>`, not just installer's own exit code.
+    assert any("show installer package Check_Point_R81_20_T89" in c for c in transport.commands)
+    messages = " | ".join(e.message for e in store.events(job.id))
+    assert "confirmed: package is installed" in messages
+    assert "detected state refreshed" in messages
+    cached = store.get_server_state("default", "mgmt-01")
+    assert cached is not None and cached.agent_build == DA_BUILD
+
+
+def test_install_job_fails_if_status_never_shows_installed(
+    store: Store, creds: CredentialStore, packages: PackageStore, inventory: Inventory
+) -> None:
+    # Reproduces an observed false success (2026-07-22): `installer install`
+    # returned success, but `show installer package <id>` kept reporting
+    # "Imported" — the install never actually completed.
+    transport = FakeTransport(responses={"show installer package ": "Status:           Imported"})
+    _assign(store, inventory, "mgmt-01")
+    registry = EnvironmentRegistry()
+    registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
+    service = PatchingService(
+        registry=registry,
+        packages=packages,
+        runner=JobRunner(store),
+        vault=JobCredentialVault(),
+        store=store,
+        install_verify_attempts=2,
+        install_verify_delay=0,  # keep the test fast — real delay is only for production
+    )
+
+    job = service.submit_install("default", "mgmt-01", "Check_Point_R81_20_T89", confirmed=True)
+    _run(service)
+
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.FAILED
+    assert finished.error is not None
+    assert "does not show as Installed" in finished.error
+    assert "'Imported'" in finished.error
+
+
+def test_install_job_fails_fast_when_status_stalls_on_imported(
+    store: Store, creds: CredentialStore, packages: PackageStore, inventory: Inventory
+) -> None:
+    # Status never leaves "Imported" — the install doesn't appear to have
+    # started at all — so this should give up well before the full attempts
+    # budget instead of polling all the way out. install_stall_seconds=0
+    # makes the very first check already count as stalled, without needing
+    # to fake the passage of real time.
+    transport = FakeTransport(responses={"show installer package ": "Status:           Imported"})
+    _assign(store, inventory, "mgmt-01")
+    registry = EnvironmentRegistry()
+    registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
+    service = PatchingService(
+        registry=registry,
+        packages=packages,
+        runner=JobRunner(store),
+        vault=JobCredentialVault(),
+        store=store,
+        install_verify_attempts=10,  # plenty of budget left...
+        install_verify_delay=0,
+        install_stall_seconds=0,  # ...but this makes the first check count as stalled
+    )
+
+    job = service.submit_install("default", "mgmt-01", "Check_Point_R81_20_T89", confirmed=True)
+    _run(service)
+
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.FAILED
+    detail_checks = [c for c in transport.commands if "show installer package " in c]
+    assert len(detail_checks) == 1  # gave up after the first check, not all 10
+    messages = [(e.level, e.message) for e in store.events(job.id)]
+    assert any(
+        level == "warning" and "giving up rather than waiting out the full timeout" in msg
+        for level, msg in messages
+    )
+
+
+def test_install_job_reconnects_after_a_dropped_connection_mid_reboot(
+    store: Store, creds: CredentialStore, packages: PackageStore, inventory: Inventory
+) -> None:
+    # Reboot-required installs drop the SSH session partway through polling —
+    # expected, not a failure. The first status check simulates that; the
+    # reconnect that follows should succeed and see the completed install.
+    class FlakyTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__(responses={"show installer package ": "Status:           Installed"})
+            self._drop_next = True
+
+        def run(self, command: str, *, timeout: float | None = None):  # type: ignore[no-untyped-def]
+            if "show installer package " in command and self._drop_next:
+                self._drop_next = False
+                self.commands.append(command)
+                raise TransportError("connection reset (simulated reboot)")
+            return super().run(command, timeout=timeout)
+
+    transport = FlakyTransport()
+    _assign(store, inventory, "mgmt-01")
+    registry = EnvironmentRegistry()
+    registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
+    service = PatchingService(
+        registry=registry,
+        packages=packages,
+        runner=JobRunner(store),
+        vault=JobCredentialVault(),
+        store=store,
+        install_verify_attempts=3,
+        install_verify_delay=0,
+    )
+
+    job = service.submit_install("default", "mgmt-01", "Check_Point_R81_20_T89", confirmed=True)
+    _run(service)
+
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.SUCCEEDED, finished.error
+    messages = [(e.level, e.message) for e in store.events(job.id)]
+    assert any(level == "warning" and "expected mid-reboot" in msg for level, msg in messages)
 
 
 def test_install_job_can_skip_verify(

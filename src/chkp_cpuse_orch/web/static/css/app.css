@@ -13,7 +13,7 @@
   --border: #d9dee5;
   --accent: #0a6cbd;        /* buttons, links */
   --accent-text: #ffffff;
-  --danger: #b3382c;        /* destructive actions (install, delete) */
+  --danger: #b3382c;        /* destructive actions (delete) */
   --ok: #2e7d32;
   --warn: #b26a00;
   --badge-bg: #eef1f5;
@@ -299,6 +299,7 @@ button:hover { filter: brightness(1.1); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 button.small { padding: 0.2rem 0.55rem; font-size: 0.85rem; }
 button.danger { background: var(--danger); color: #fff; }
+button.success { background: var(--ok); color: #fff; }
 /* de-emphasized action next to a primary one (e.g. Keep "default" vs Rename) */
 button.secondary {
   background: var(--badge-bg);

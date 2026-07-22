@@ -77,6 +77,7 @@ def transport() -> FakeTransport:
             # installer packages" below for PatchingService._wait_until_imported.
             "show installer packages imported": "jhf.tgz      Imported",
             "show installer packages": SHOW_PACKAGES_ALL,
+            "show installer package ": "Status:           Installed",
             "show installer status build": DA_BUILD,
             "sha1sum": f"{uploaded_sha1}  /var/log/upload/jhf.tgz",
             "cat /opt/CPcdt/orch_candidates.csv": CANDIDATES_CSV,

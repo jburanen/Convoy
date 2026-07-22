@@ -152,6 +152,22 @@ class CPUSE:
             raise CPUSEError(f"failed to list packages: {_failure_detail(result)}")
         return parse_packages(result.stdout, scope)
 
+    def package_detail(self, package_id: str) -> PackageState:
+        """`show installer package <id>` — single-package detail view. Unlike
+        the list commands, its Status line reflects live install progress
+        (e.g. a percentage) while installing, so this is what
+        ``PatchingService._wait_until_installed`` polls to confirm an install
+        actually completed instead of trusting ``installer install``'s
+        immediate return (observed 2026-07-22: it can report success while
+        the install is still running or has actually failed)."""
+        self._override_lock()
+        result = self._clish(f"show installer package {_check_id(package_id)}")
+        if not result.ok:
+            raise CPUSEError(
+                f"failed to read package detail for {package_id}: {_failure_detail(result)}"
+            )
+        return parse_package_detail(result.stdout, package_id)
+
     def agent_build(self) -> str:
         """`show installer status build` → Deployment Agent build string."""
         self._override_lock()
@@ -198,6 +214,9 @@ class CPUSE:
         self._run_installer(f"uninstall {_check_id(package_id)}", "uninstall")
 
     def _run_installer(self, verb: str, action: str) -> None:
+        # Same config-database lock that can block the read commands
+        # (see _override_lock) can hold up these mutating ones too.
+        self._override_lock()
         # not-interactive suppresses prompts — required for automation.
         result = self._clish(f"installer {verb} not-interactive")
         if not result.ok:
@@ -316,6 +335,38 @@ def parse_packages(stdout: str, scope: PackageScope = PackageScope.ALL) -> list[
 
     flush("")
     return packages
+
+
+_DETAIL_LINE_RE = re.compile(r"^([A-Za-z][A-Za-z0-9 _-]*?):\s*(.*)$")
+
+
+def parse_package_detail(stdout: str, identifier: str) -> PackageState:
+    """Parse `show installer package <id>` — a "Key:    Value" block, one
+    package. Continuation lines (e.g. a multi-line "Contains:") are indented
+    and get appended to the previous key. Non-matching lines (banners, the
+    "CLINFR0771 Config lock..." notice when something else holds the config
+    lock) are ignored, same tolerant approach as parse_packages."""
+    fields: dict[str, str] = {}
+    last_key: str | None = None
+    for raw in stdout.splitlines():
+        line = raw.rstrip()
+        if not line.strip():
+            continue
+        if line[0].isspace() and last_key is not None:
+            fields[last_key] = f"{fields[last_key]} {line.strip()}".strip()
+            continue
+        m = _DETAIL_LINE_RE.match(line)
+        if m:
+            key, value = m.group(1).strip(), m.group(2).strip()
+            fields[key] = value
+            last_key = key
+        else:
+            last_key = None  # unrecognized line breaks any continuation run
+    return PackageState(
+        identifier=identifier,
+        status=fields.get("Status", ""),
+        description=fields.get("Description", ""),
+    )
 
 
 def _looks_like_package_name(line: str) -> bool:

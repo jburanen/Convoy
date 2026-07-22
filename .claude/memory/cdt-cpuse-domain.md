@@ -24,12 +24,14 @@ CLI syntax — Check Point changes these across releases.)
   - `show installer packages all|imported|installed`; `show installer status build`
   - `not-interactive` suppresses prompts — essential for automation.
   - On MDPS-enabled boxes, `set mdps environment mplane` first.
-  - **`lock database override` before the two read/refresh commands above**
-    (operator-confirmed, 2026-07-22) — Gaia's config-database lock (e.g. held by
-    another admin session) can otherwise block them from running correctly.
-    `CPUSE._override_lock()` sends it before every `list_packages()`/
-    `agent_build()` call; best-effort (a failure here doesn't abort the refresh —
-    the read command itself surfaces a clear error if genuinely still blocked).
+  - **`lock database override` before every clish command this tool sends —
+    reads and mutations alike** (operator-confirmed, 2026-07-22). Gaia's
+    config-database lock (e.g. held by another admin session) can block any
+    of them. `CPUSE._override_lock()` runs it first inside `list_packages()`,
+    `agent_build()`, `package_detail()`, *and* `_run_installer()` (so
+    `import_local`/`import_cloud`/`verify`/`install`/`uninstall` all get it
+    too). Best-effort — a failure here doesn't abort the real command; that
+    command surfaces its own clear error if genuinely still blocked.
   - **A package's identifier in `show installer packages imported` is NOT
     reliably its uploaded filename** (operator-confirmed, 2026-07-22). Some
     package types (JHFs) are rendered as a human-readable string instead, e.g.
@@ -62,6 +64,26 @@ CLI syntax — Check Point changes these across releases.)
     this shape is left alone rather than guessed at (unconfirmed whether this
     device's `all`-scoped output has the same issue — if it turns out to,
     `detect()`'s single combined query would need revisiting too).
+  - **`installer install` can report success while the install genuinely
+    failed or is still running** (operator-confirmed, 2026-07-22) — same
+    asynchronous pattern as import. The list commands (`show installer
+    packages ...`) don't reflect live install progress; `show installer
+    package <id>` (singular — a different command, one-package detail view)
+    does: its `Status:` line shows a percentage while installing and
+    "Installed" only once genuinely done. `cpuse.parse_package_detail` parses
+    this "Key:    Value" block (tolerates the "CLINFR0771 Config lock is
+    owned by..." notice and multi-line fields like `Contains:`).
+    `PatchingService._wait_until_installed` polls it after `installer
+    install` returns — every 30s, up to 15 minutes by default (installs
+    commonly take several minutes, operator-directed) — and fails the job
+    (showing the last-seen Status) if it never reaches Installed, closing the
+    same trust-the-exit-code gap already fixed for import. But it also gives
+    up early, before the full 15 minutes, if Status is still "Imported" (never
+    even started) after `install_stall_seconds` (default 90s) — a genuinely
+    running install moves off "Imported" well before then. Reboot-required
+    packages drop the SSH session partway through polling (expected, not a
+    failure); a dropped connection there triggers a reconnect rather than
+    failing the job.
 - **Management servers are patched with CPUSE locally**, not via CDT.
 
 **CDT — Central Deployment Tool** (reference: sk111158; confirmed via docs MCP)

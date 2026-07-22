@@ -1474,11 +1474,12 @@ document.getElementById("bulk-import-btn").addEventListener("click", () => {
   bulkImport(btn, async (name) => {
     const extra = await operationCredentials(name, "import a package");
     if (extra === null) return; // credential prompt cancelled for this host
-    await api(envUrl(`/servers/${encodeURIComponent(name)}/import`), {
+    const job = await api(envUrl(`/servers/${encodeURIComponent(name)}/import`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ package: pkg, ...extra }),
     });
+    lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if it finishes fast
   });
 });
 
@@ -1489,11 +1490,12 @@ document.getElementById("bulk-import-cloud-btn").addEventListener("click", () =>
   bulkImport(btn, async (name) => {
     const extra = await operationCredentials(name, "import a package from Check Point's cloud");
     if (extra === null) return;
-    await api(envUrl(`/servers/${encodeURIComponent(name)}/import-cloud`), {
+    const job = await api(envUrl(`/servers/${encodeURIComponent(name)}/import-cloud`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ package_id: packageId, ...extra }),
     });
+    lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if it finishes fast
   });
 });
 
@@ -1915,6 +1917,15 @@ document.getElementById("cred-add-modal").addEventListener("click", (ev) => {
 
 const openJobLogs = new Set(); // job ids whose progress log is expanded
 
+// Last-seen status per job id, so pollJobs() can notice an import job
+// finishing and reload the Management tab (see pollJobs()) — otherwise the
+// server's newly-cached "refreshed …" timestamp and install picker only
+// show up after a manual reload/tab switch, since nothing else re-fetches
+// #servers-table on a timer.
+const IMPORT_JOB_KINDS = ["mgmt.import", "mgmt.import_cloud"];
+const lastJobStatus = new Map();
+const TERMINAL_JOB_STATUSES = ["succeeded", "failed", "cancelled", "interrupted"];
+
 // Live count of not-yet-finished jobs, shown as a pill on the Jobs tab button.
 function updateJobsBadge(jobs) {
   const pill = document.getElementById("jobs-badge");
@@ -2039,8 +2050,28 @@ async function pollJobs() {
   try {
     const jobs = await api("/api/jobs?limit=25");
     updateJobsBadge(jobs); // keep the tab pill live even when we don't re-render
+
+    // An import job's last step (services/patching.py) refreshes and caches
+    // that server's detected state — reload the Management tab the moment
+    // one finishes so the operator sees it without a manual reload.
+    let reloadServers = false;
+    for (const job of jobs) {
+      const prev = lastJobStatus.get(job.id);
+      if (
+        IMPORT_JOB_KINDS.includes(job.kind) &&
+        (prev === "pending" || prev === "running") &&
+        TERMINAL_JOB_STATUSES.includes(job.status)
+      ) {
+        reloadServers = true;
+      }
+      lastJobStatus.set(job.id, job.status);
+    }
+    const currentIds = new Set(jobs.map((j) => j.id));
+    for (const id of lastJobStatus.keys()) if (!currentIds.has(id)) lastJobStatus.delete(id);
+
     const active = jobs.some((j) => j.status === "pending" || j.status === "running");
     if (active || openJobLogs.size) await loadJobs();
+    if (reloadServers) await loadServers();
   } catch { /* transient — next tick will retry */ }
   setTimeout(pollJobs, 2500);
 }

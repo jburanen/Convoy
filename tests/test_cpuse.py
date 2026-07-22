@@ -7,6 +7,7 @@ from chkp_cpuse_orch.cpuse import (
     GaiaShell,
     PackageScope,
     PackageState,
+    parse_package_detail,
     parse_packages,
     summarize_jumbo,
 )
@@ -40,14 +41,18 @@ def test_expert_shell_wraps_with_clish() -> None:
     runner = FakeRunner()
     CPUSE(runner, shell=GaiaShell.EXPERT).import_local("/var/log/upload/jhf.tgz")
     assert runner.commands == [
-        "clish -c 'installer import local /var/log/upload/jhf.tgz not-interactive'"
+        "clish -c 'lock database override'",
+        "clish -c 'installer import local /var/log/upload/jhf.tgz not-interactive'",
     ]
 
 
 def test_clish_shell_sends_bare_command() -> None:
     runner = FakeRunner()
     CPUSE(runner, shell=GaiaShell.CLISH).verify("Check_Point_R81.20_JHF_T99")
-    assert runner.commands == ["installer verify Check_Point_R81.20_JHF_T99 not-interactive"]
+    assert runner.commands == [
+        "lock database override",
+        "installer verify Check_Point_R81.20_JHF_T99 not-interactive",
+    ]
 
 
 def test_install_and_uninstall_are_not_interactive() -> None:
@@ -56,7 +61,9 @@ def test_install_and_uninstall_are_not_interactive() -> None:
     cpuse.install("Pkg-1.0")
     cpuse.uninstall("Pkg-1.0")
     assert runner.commands == [
+        "lock database override",
         "installer install Pkg-1.0 not-interactive",
+        "lock database override",
         "installer uninstall Pkg-1.0 not-interactive",
     ]
 
@@ -64,7 +71,10 @@ def test_install_and_uninstall_are_not_interactive() -> None:
 def test_import_cloud_uses_bare_id_not_local() -> None:
     runner = FakeRunner()
     CPUSE(runner, shell=GaiaShell.CLISH).import_cloud("Check_Point_R81.20_JHF_T99")
-    assert runner.commands == ["installer import Check_Point_R81.20_JHF_T99 not-interactive"]
+    assert runner.commands == [
+        "lock database override",
+        "installer import Check_Point_R81.20_JHF_T99 not-interactive",
+    ]
 
 
 def test_import_cloud_rejects_suspicious_id() -> None:
@@ -191,6 +201,50 @@ def test_package_state_status_helpers() -> None:
     assert PackageState("x", "installed (reboot pending)").is_installed
     assert PackageState("x", "Available for Install").is_imported
     assert not PackageState("x", "Available for Download").is_imported
+
+
+# `show installer package <id>` — operator-confirmed real device output,
+# 2026-07-22, from a case where `installer install` reported success but the
+# package never actually left "Imported".
+PACKAGE_DETAIL = """\
+CLINFR0771  Config lock is owned by admin. Use 'lock database override' to acquire the lock.
+Display name:     Check_Point_R82_10_jumbo_hf_main_Bundle_T36_FULL.tgz
+File name:        Check_Point_R82_10_jumbo_hf_main_Bundle_T36_FULL.tgz
+Description:      No Description
+Size:             2.169 GB
+Type:             Hotfix
+Status:           Imported
+Requires reboot:  true
+Recommended:      false
+Contains:         Check_Point_R82_10_jumbo_hf_main_Bundle_T19_FULL.tgz
+                  Check_Point_R82_10_jumbo_hf_main_Bundle_T24_FULL.tgz
+Contained-in:     None
+Downloaded on:    N/A
+Imported on:      Wed Jul 22 15:11:09 2026
+Installed on:     N/A
+Installation log: N/A
+"""
+
+
+def test_parse_package_detail_reads_status_ignoring_the_lock_banner() -> None:
+    name = "Check_Point_R82_10_jumbo_hf_main_Bundle_T36_FULL.tgz"
+    detail = parse_package_detail(PACKAGE_DETAIL, name)
+    assert detail.status == "Imported"
+    assert detail.description == "No Description"
+    assert detail.is_imported and not detail.is_installed
+
+
+def test_parse_package_detail_recognizes_installed() -> None:
+    detail = parse_package_detail("Status:           Installed\n", "x")
+    assert detail.is_installed
+
+
+def test_parse_package_detail_in_progress_percentage_is_not_installed() -> None:
+    # Exact in-progress wording isn't confirmed, but whatever it is, it must
+    # not be mistaken for "Installed" while a percentage is still climbing.
+    detail = parse_package_detail("Status:           Installing 45%\n", "x")
+    assert not detail.is_installed
+    assert detail.status == "Installing 45%"
 
 
 def test_summarize_jumbo_picks_highest_installed_take() -> None:

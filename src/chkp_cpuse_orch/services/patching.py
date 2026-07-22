@@ -20,13 +20,20 @@ into the operations the web UI exposes per management server:
   uploaded filename (e.g. "R82.10 Jumbo Hotfix Accumulator Take 24").
 - **import_cloud**  — direct the host to fetch + import a package from Check
   Point's cloud repository by identifier; no local file involved
-- **install**        — optional `installer verify`, then `installer install`
+- **install**        — optional `installer verify`, then `installer install`, then
+  poll `show installer package <id>` until its Status line shows Installed —
+  `installer install` returns before the install actually finishes (same
+  asynchronous pattern as import), and can report success while the install
+  is still running or has genuinely failed and never left "Imported"
+  (observed 2026-07-22). Reboot-required packages drop the SSH session
+  partway through polling — expected, not a failure — so a dropped
+  connection there reconnects and keeps waiting instead of failing closed.
 
-Both import paths refresh and cache detected state (version/JHF/agent build/
-packages ready to install) right after a successful import, reusing the same
-already-open connection — so the UI reflects the newly-imported package
-without a separate manual Refresh. Best-effort: a refresh hiccup here is a
-warning, not a job failure, since the import itself already succeeded.
+Both import paths, and install, refresh and cache detected state (version/JHF/
+agent build/packages ready to install) right after succeeding — so the UI
+reflects the change without a separate manual Refresh. Best-effort: a refresh
+hiccup here is a warning, not a job failure, since the underlying operation
+already succeeded.
 
 Each mutating operation runs as a background job (a web click enqueues and
 returns). Blocking SSH work runs in a worker thread via ``asyncio.to_thread``.
@@ -53,7 +60,7 @@ from ..cpuse import (
 from ..cpuse import extract_take as cpuse_extract_take
 from ..cpuse import extract_version as cpuse_extract_version
 from ..credentials import CredentialBundle, JobCredentialVault
-from ..errors import CPUSEError, JobError, TransportError
+from ..errors import CPUSEError, JobError, OrchestratorError, TransportError
 from ..hfconfig import HfConfig, extract_hf_config
 from ..inventory import Host
 from ..jobs import JobContext, JobRunner
@@ -108,6 +115,9 @@ class PatchingService:
         shell: GaiaShell = GaiaShell.EXPERT,
         import_verify_attempts: int = 60,
         import_verify_delay: float = 5.0,
+        install_verify_attempts: int = 30,
+        install_verify_delay: float = 30.0,
+        install_stall_seconds: float = 90.0,
     ) -> None:
         self.runner = runner
         self.registry = registry
@@ -121,6 +131,14 @@ class PatchingService:
         # (60 * 5s = 5 minutes) — see the module docstring for why this exists.
         self._import_verify_attempts = import_verify_attempts
         self._import_verify_delay = import_verify_delay
+        # Installs commonly take several minutes, so poll less often but for
+        # much longer (30 * 30s = 15 minutes) than import verification. But if
+        # Status hasn't moved off "Imported" — i.e. the install never even
+        # appears to have started — within install_stall_seconds, give up
+        # early instead of waiting out the full 15 minutes.
+        self._install_verify_attempts = install_verify_attempts
+        self._install_verify_delay = install_verify_delay
+        self._install_stall_seconds = install_stall_seconds
         runner.register(JOB_IMPORT, self._import_job)
         runner.register(JOB_IMPORT_CLOUD, self._import_cloud_job)
         runner.register(JOB_INSTALL, self._install_job)
@@ -323,11 +341,11 @@ class PatchingService:
                 detail = cleanup.stderr.strip() or cleanup.stdout.strip()
                 ctx.log(f"could not remove temp copy {remote_path}: {detail}", level="warning")
 
-            self._refresh_state_after_import(cpuse, ctx, host.name)
+            self._refresh_state(cpuse, ctx, host.name)
         finally:
             client.close()
 
-    def _refresh_state_after_import(self, cpuse: CPUSE, ctx: JobContext, host_name: str) -> None:
+    def _refresh_state(self, cpuse: CPUSE, ctx: JobContext, host_name: str) -> None:
         """Re-query and cache detected state right after a successful import,
         reusing the still-open connection, so the servers list shows the
         newly-imported package as ready to install without a separate manual
@@ -403,7 +421,7 @@ class PatchingService:
             cpuse = CPUSE(client, shell=self._shell)
             cpuse.import_cloud(package_id)
             ctx.log("import finished")
-            self._refresh_state_after_import(cpuse, ctx, host.name)
+            self._refresh_state(cpuse, ctx, host.name)
         finally:
             client.close()
 
@@ -424,9 +442,100 @@ class PatchingService:
             ctx.raise_if_cancelled()  # last safe stop; install may reboot the host
             ctx.log(f"installing {package_id} — host may reboot when this completes")
             cpuse.install(package_id)
-            ctx.log("install command finished — re-detect state to confirm")
+            ctx.log(
+                "install command returned — CPUSE installs asynchronously, confirming "
+                "via `show installer package` before declaring success"
+            )
         finally:
             client.close()
+
+        installed, last_status = self._wait_until_installed(connector, host, creds, package_id, ctx)
+        if not installed:
+            raise CPUSEError(
+                f"{package_id} does not show as Installed via `show installer package "
+                f"{package_id}` after waiting (last status: {last_status!r}) — check CPUSE "
+                "state on the host; the install may have failed, still be in progress, "
+                "or be waiting on a reboot"
+            )
+        ctx.log(f"confirmed: package is installed (status: {last_status!r})")
+
+        ctx.log("refreshing detected state (version/JHF/packages ready to install)")
+        try:
+            self.detect(ctx.job.environment, host.name, credentials=creds)
+            ctx.log("detected state refreshed")
+        except OrchestratorError as exc:
+            ctx.log(f"could not refresh detected state: {exc}", level="warning")
+
+    def _wait_until_installed(
+        self,
+        connector: HostConnector,
+        host: Host,
+        creds: CredentialBundle | None,
+        package_id: str,
+        ctx: JobContext,
+    ) -> tuple[bool, str]:
+        """Poll `show installer package <id>` until Status shows Installed.
+        Manages its own connection independently of the caller's, since a
+        reboot-required install drops the SSH session partway through —
+        expected, not a failure, so a dropped connection reconnects and keeps
+        waiting rather than failing closed. A CPUSE-level read failure (the
+        connection is fine, the command just didn't succeed) retries without
+        reconnecting.
+
+        Gives up early — before the full attempts budget — if Status is still
+        "Imported" (i.e. the install doesn't appear to have started at all)
+        after ``install_stall_seconds``; a genuinely running install moves off
+        "Imported" well before then, so there's no reason to wait out the
+        full 15 minutes for one that never started."""
+        client: Transport | None = None
+        last_status = ""
+        started = time.monotonic()
+        try:
+            for attempt in range(1, self._install_verify_attempts + 1):
+                try:
+                    if client is None:
+                        client = connector.connect(host, creds)
+                    detail = CPUSE(client, shell=self._shell).package_detail(package_id)
+                except TransportError as exc:
+                    ctx.log(
+                        f"lost contact checking install status (expected mid-reboot): {exc}",
+                        level="warning",
+                    )
+                    client = None
+                    if attempt < self._install_verify_attempts:
+                        time.sleep(self._install_verify_delay)
+                    continue
+                except CPUSEError as exc:
+                    ctx.log(f"could not read install status yet: {exc}", level="warning")
+                    if attempt < self._install_verify_attempts:
+                        time.sleep(self._install_verify_delay)
+                    continue
+
+                last_status = detail.status
+                if detail.is_installed:
+                    return True, last_status
+
+                elapsed = time.monotonic() - started
+                stalled = last_status.strip().lower().startswith("imported")
+                if stalled and elapsed >= self._install_stall_seconds:
+                    ctx.log(
+                        f"status is still {last_status!r} after {elapsed:.0f}s — the install "
+                        "doesn't appear to have started; giving up rather than waiting out "
+                        "the full timeout",
+                        level="warning",
+                    )
+                    return False, last_status
+
+                if attempt < self._install_verify_attempts:
+                    ctx.log(
+                        f"not yet installed — status: {last_status!r} "
+                        f"(check {attempt}/{self._install_verify_attempts}, {elapsed:.0f}s elapsed)"
+                    )
+                    time.sleep(self._install_verify_delay)
+            return False, last_status
+        finally:
+            if client is not None:
+                client.close()
 
 
 class ProgressReporter:
