@@ -1395,9 +1395,11 @@ async function installPackage(name, row) {
   const select = row.querySelector(".install-select");
   if (!select.value) { toast("Choose a package first."); return; }
   const packageId = select.value;
+  const verifyFirst = !row.querySelector(".skip-verify").checked;
   // Installs can REBOOT the management server — always confirm explicitly.
   const sure = confirm(
     `Install ${packageId} on ${name}?\n\n` +
+    (verifyFirst ? "" : "Skipping `installer verify` — installing directly.\n\n") +
     "This may reboot the management server when it completes. " +
     "Make sure this is inside a maintenance window and any HA peer is healthy."
   );
@@ -1408,7 +1410,12 @@ async function installPackage(name, row) {
     await api(envUrl(`/servers/${encodeURIComponent(name)}/install`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ package_id: packageId, confirmed: true, ...extra }),
+      body: JSON.stringify({
+        package_id: packageId,
+        confirmed: true,
+        verify_first: verifyFirst,
+        ...extra,
+      }),
     });
     await loadJobs();
   } catch (e) {

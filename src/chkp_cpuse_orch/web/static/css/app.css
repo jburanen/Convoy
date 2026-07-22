@@ -391,6 +391,15 @@ tr.srv-state-row td { padding-top: 0; }
    when needed instead of overflowing the row — flex: 1 does the requested
    "expand to fill the remaining space" against the Install button. */
 .srv-actions-inner .install-select { flex: 1; min-width: 0; }
+.skip-verify-label {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  white-space: nowrap;
+  cursor: pointer;
+}
 
 /* ---- bulk import (above the servers table) ---- */
 .bulk-import-row {

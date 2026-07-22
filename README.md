@@ -159,6 +159,9 @@ CLAUDE.md         project instructions
 - Jobs: Collapse output, collapse all rows
 - Jobs: clear job history
 - Provisioning: discover other management servers after connecting to primary
+- CPUSE: Add deployment agent upgrade option
+- CPUSE: check available disk space before copying file
+- CPUSE: indicate on each server if a job is currently running, block new jobs until complete
 - CPUSE: display deployment agent version, major version, and JHF and time of data refresh. maybe make each entry two lines?
 - CPUSE: add muted explanatory text above first panel to talk about how direct patching is mostly for management servers and small numbers of gateways. gateways can also be patched from SmartConsole and Web SmartConsole (generate a link). Large numbers of gateways can be patched with the CDT tab (future).
 - Packages: can I extract and display meta data like compatible major version from the package file?
