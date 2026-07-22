@@ -249,6 +249,55 @@ def test_import_job_matches_by_hf_config_when_cpuse_uses_a_human_readable_identi
     assert "confirmed: package is listed as imported" in messages
 
 
+def test_import_job_matches_the_real_device_display_name_type_output(
+    store: Store, creds: CredentialStore, inventory: Inventory, tmp_path: Path
+) -> None:
+    # Reproduces an observed false failure (2026-07-22): this Gaia version's
+    # `show installer packages imported` has no per-row status text (a
+    # "Display name / Type" table instead — see test_cpuse.py) plus banner
+    # noise. The old parser silently returned zero packages for this shape,
+    # so the job failed even though the package genuinely was imported.
+    real_output = (
+        "**  *** **\n"
+        "**              Connection error. Packages list might be incomplete **\n"
+        "**  *** **\n"
+        "Display name                                                    Type\n"
+        "Check_Point_R82_10_ga_time_fix_main_Bundle_T9_FULL.tgz          Hotfix\n"
+        "R82.10 Jumbo Hotfix Accumulator Take 19                         Hotfix\n"
+        "R82.10 Jumbo Hotfix Accumulator Recommended Jumbo Take 24       Hotfix\n"
+        "Check_Point_R82_10_jumbo_hf_main_Bundle_T36_FULL.tgz            Hotfix\n"
+    )
+    # Uploaded as ".tar" — CPUSE lists it as ".tgz". The stem-substring match
+    # (unrelated to this bug) already tolerates that; see .claude/memory.
+    package_name = "Check_Point_R82_10_jumbo_hf_main_Bundle_T36_FULL.tar"
+    package_content = b"not a real archive, hf.config isn't needed for this test"
+    package_sha1 = hashlib.sha1(package_content).hexdigest()
+
+    ps = PackageStore(store, tmp_path / "packages-real-output")
+    ps.add_stream(package_name, io.BytesIO(package_content))
+
+    _assign(store, inventory, "mgmt-01")
+    transport = FakeTransport(
+        responses={
+            "show installer packages imported": real_output,
+            "show installer packages": SHOW_PACKAGES_ALL,
+            "show installer status build": DA_BUILD,
+            "sha1sum": f"{package_sha1}  /var/log/upload/{package_name}",
+        }
+    )
+    registry = EnvironmentRegistry()
+    registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
+    service = PatchingService(
+        registry=registry, packages=ps, runner=JobRunner(store), vault=JobCredentialVault()
+    )
+
+    job = service.submit_import("default", "mgmt-01", package_name)
+    _run(service)
+
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.SUCCEEDED, finished.error
+
+
 def test_import_job_fails_closed_on_size_mismatch(
     service: PatchingService, store: Store, transport: FakeTransport
 ) -> None:

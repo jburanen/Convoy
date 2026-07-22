@@ -44,6 +44,24 @@ CLI syntax — Check Point changes these across releases.)
     `DIRECT_BASE_VERSION`/`TAKE_NUMBER` — either is sufficient, since which
     naming convention CPUSE picks isn't reliably predictable from hf.config
     alone.
+  - **A third `show installer packages` output shape** (operator-confirmed real
+    device output, 2026-07-22): scope-filtered queries (`imported`, `installed`)
+    on some Gaia versions render a "Display name / Type" table — no per-row
+    status text at all (the "Type" column is a generic category like
+    "Hotfix", not a state; the query's `scope` itself IS the implied status)
+    — plus banner noise ("\*\* Connection error... \*\*" boxes) unrelated to the
+    actual list. The original parser silently dropped every row in this shape
+    (required a known status word in column 2, e.g. "Imported"/"Installed"),
+    so `list_packages(PackageScope.IMPORTED)` returned an **empty list** and
+    `_wait_until_imported` failed a genuinely-successful import. Fixed in
+    `cpuse.parse_packages(stdout, scope)`: recognizes `<name>  <single-token>`
+    lines when `scope` is `imported`/`installed` (status implied by scope) and
+    explicitly skips banner lines (anything starting with `**`). Deliberately
+    NOT applied to `scope=all` — there's no way to tell installed from
+    merely-imported from "Type" alone, so an unrecognized `all`-scoped line in
+    this shape is left alone rather than guessed at (unconfirmed whether this
+    device's `all`-scoped output has the same issue — if it turns out to,
+    `detect()`'s single combined query would need revisiting too).
 - **Management servers are patched with CPUSE locally**, not via CDT.
 
 **CDT — Central Deployment Tool** (reference: sk111158; confirmed via docs MCP)

@@ -141,6 +141,43 @@ def test_parse_block_output_with_descriptions() -> None:
     assert pkgs[1].is_installed
 
 
+# "Display name / Type" shape (operator-confirmed, 2026-07-22): real
+# `show installer packages imported` output on some Gaia versions has no
+# per-row status at all, plus a noisy banner unrelated to the actual list.
+NAME_TYPE_IMPORTED = """\
+**  ************************************************************************* **
+**              Connection error. Packages list might be incomplete           **
+**  ************************************************************************* **
+**  ************************************************************************* **
+**                                 Hotfixes                                   **
+**  ************************************************************************* **
+Display name                                                                     Type
+Check_Point_R82_10_ga_time_fix_main_Bundle_T9_FULL.tgz                           Hotfix
+R82.10 Jumbo Hotfix Accumulator Take 19                                          Hotfix
+R82.10 Jumbo Hotfix Accumulator Recommended Jumbo Take 24                        Hotfix
+Check_Point_R82_10_jumbo_hf_main_Bundle_T36_FULL.tgz                             Hotfix
+"""
+
+
+def test_parse_name_type_shape_for_imported_scope() -> None:
+    pkgs = parse_packages(NAME_TYPE_IMPORTED, PackageScope.IMPORTED)
+    assert [p.identifier for p in pkgs] == [
+        "Check_Point_R82_10_ga_time_fix_main_Bundle_T9_FULL.tgz",
+        "R82.10 Jumbo Hotfix Accumulator Take 19",
+        "R82.10 Jumbo Hotfix Accumulator Recommended Jumbo Take 24",
+        "Check_Point_R82_10_jumbo_hf_main_Bundle_T36_FULL.tgz",
+    ]
+    # The scope itself implies the status — there's no per-row status text.
+    assert all(p.status == "Imported" and p.is_imported for p in pkgs)
+
+
+def test_parse_name_type_shape_ignored_without_a_scope() -> None:
+    # Without a scope that implies a status (the default, PackageScope.ALL),
+    # this shape can't be told apart from "installed" vs "imported" — left
+    # alone rather than guessed at.
+    assert parse_packages(NAME_TYPE_IMPORTED) == []
+
+
 def test_parse_no_packages_message() -> None:
     assert parse_packages("There are no imported packages\n") == []
 

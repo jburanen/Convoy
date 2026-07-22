@@ -150,7 +150,7 @@ class CPUSE:
         result = self._clish(f"show installer packages {scope.value}")
         if not result.ok:
             raise CPUSEError(f"failed to list packages: {_failure_detail(result)}")
-        return parse_packages(result.stdout)
+        return parse_packages(result.stdout, scope)
 
     def agent_build(self) -> str:
         """`show installer status build` → Deployment Agent build string."""
@@ -230,19 +230,38 @@ _STATUS_LINE_RE = re.compile(
 )
 _NO_PACKAGES_RE = re.compile(r"there are no .* packages", re.IGNORECASE)
 
+# Third shape (operator-confirmed, 2026-07-22): scope-filtered queries
+# (`imported`, `installed`) on some Gaia versions render a "Display name /
+# Type" table instead — no per-row status text at all (the query's scope IS
+# the status; "Type" is a generic category like "Hotfix", not a state).
+_NAME_TYPE_HEADER_RE = re.compile(r"^display\s+name\s+type$", re.IGNORECASE)
+_NAME_TYPE_LINE_RE = re.compile(r"^(?P<name>\S.*?)\s{2,}(?P<type>\S+)$")
+_SCOPE_IMPLIED_STATUS = {
+    "imported": "Imported",
+    "installed": "Installed",
+}
 
-def parse_packages(stdout: str) -> list[PackageState]:
+
+def parse_packages(stdout: str, scope: PackageScope = PackageScope.ALL) -> list[PackageState]:
     """Parse `show installer packages` output.
 
     Output formats drift across Gaia versions, so this is deliberately tolerant
-    and handles the two shapes seen in the field (fixtures in tests/):
+    and handles the three shapes seen in the field (fixtures in tests/):
 
     1. Tabular: ``<package-name>   <status text>`` (two+ spaces as separator)
     2. Block:   package-name line followed by indented ``Info:``/``Status:`` lines
+    3. "Display name / Type" tabular form for scope-filtered queries — see
+       ``_NAME_TYPE_LINE_RE`` above. Only recognized when ``scope`` is
+       ``imported`` or ``installed``, since that's the only case we can infer
+       a status from the query itself; an ``all``-scoped query in this shape
+       has no way to tell installed from merely-imported and is left alone
+       rather than guessed at.
 
-    Unrecognized lines are skipped, never fatal — the UI shows raw statuses and
-    the orchestrator matches them case-insensitively.
+    Unrecognized lines (banners, headers, "Connection error" notices, etc.)
+    are skipped, never fatal — the UI shows raw statuses and the orchestrator
+    matches them case-insensitively.
     """
+    implied_status = _SCOPE_IMPLIED_STATUS.get(scope.value)
     packages: list[PackageState] = []
     current_name: str | None = None
     current_info = ""
@@ -258,6 +277,10 @@ def parse_packages(stdout: str) -> list[PackageState]:
     for raw in stdout.splitlines():
         line = raw.rstrip()
         if not line.strip() or _NO_PACKAGES_RE.search(line):
+            continue
+        if _NAME_TYPE_HEADER_RE.match(line.strip()):
+            continue
+        if line.lstrip().startswith("**"):  # banner/box-drawing decoration, never a package name
             continue
 
         if line[0].isspace():  # indented → block-form detail line
@@ -275,6 +298,17 @@ def parse_packages(stdout: str) -> list[PackageState]:
             flush("")  # a dangling block name without Status: is dropped
             packages.append(
                 PackageState(identifier=m.group("name").strip(), status=m.group("status").strip())
+            )
+            continue
+        m2 = _NAME_TYPE_LINE_RE.match(line) if implied_status is not None else None
+        if m2 and implied_status is not None:
+            flush("")
+            packages.append(
+                PackageState(
+                    identifier=m2.group("name").strip(),
+                    status=implied_status,
+                    description=f"type: {m2.group('type')}",
+                )
             )
         elif _looks_like_package_name(line):
             flush("")
