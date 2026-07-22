@@ -1278,9 +1278,11 @@ async function loadServers() {
       select.appendChild(opt);
     }
 
-    row.querySelector(".btn-refresh").addEventListener("click", () => refreshState(srv.name, row));
+    const stateRow = el("tpl-server-state-row");
+    row.querySelector(".btn-refresh").addEventListener("click", () => refreshState(srv.name, row, stateRow));
     row.querySelector(".btn-import").addEventListener("click", () => importPackage(srv.name, row));
     tbody.appendChild(row);
+    tbody.appendChild(stateRow);
   }
 
   if (!editable.length) {
@@ -1317,10 +1319,57 @@ function emptyRow(target, colSpan, text) {
   target.appendChild(tr);
 }
 
-async function refreshState(name, row) {
+// Identifiers/descriptions come in at least two conventions (see cpuse.py /
+// tests/test_cpuse.py fixtures): human-readable ("Jumbo Hotfix Accumulator
+// for R81.20 (Take 89)") and tarball-filename ("Check_Point_R81_20_JHF_T99" /
+// "..._JUMBO_HF_MAIN_Bundle_T89_FULL"). Both are handled here.
+function pkgText(pkg) {
+  return `${pkg.identifier} ${pkg.description ?? ""}`;
+}
+function extractVersion(text) {
+  const m = text.match(/R(\d{2})[._](\d{2})/i);
+  return m ? `R${m[1]}.${m[2]}` : null;
+}
+function extractTake(text) {
+  const m = text.match(/take\s*(\d+)/i) ?? text.match(/_t(\d+)\b/i);
+  return m ? Number(m[1]) : null;
+}
+
+// Best-effort summary of detected CPUSE state: the major Gaia version and
+// currently-installed Jumbo Hotfix Accumulator, read out of whichever
+// installed package's identifier/description mentions a JHF and carries the
+// highest Take number (a JHF often lists earlier Takes it superseded as
+// "installed as part of" — the highest Take is the one actually running).
+function deriveCpuseSummary(state) {
+  let bestTake = -1;
+  let version = null;
+  for (const pkg of state.packages ?? []) {
+    if (!pkg.is_installed) continue;
+    const text = pkgText(pkg);
+    if (!/jumbo|jhf/i.test(text)) continue;
+    const take = extractTake(text);
+    if (take != null && take > bestTake) {
+      bestTake = take;
+      version = extractVersion(text) ?? version;
+    }
+  }
+  if (version == null) {
+    // No installed JHF found — fall back to any installed package's version token.
+    for (const pkg of state.packages ?? []) {
+      if (!pkg.is_installed) continue;
+      const ver = extractVersion(pkgText(pkg));
+      if (ver) { version = ver; break; }
+    }
+  }
+  return {
+    version: version ?? "—",
+    jhf: bestTake >= 0 ? `Take ${bestTake}` : "—",
+  };
+}
+
+async function refreshState(name, row, stateRow) {
   const btn = row.querySelector(".btn-refresh");
-  const agentDiv = row.querySelector(".srv-agent");
-  const pkgsDiv = row.querySelector(".srv-packages");
+  const agentDiv = stateRow.querySelector(".srv-agent");
   const extra = await operationCredentials(name, "query live state");
   if (extra === null) return; // credential prompt cancelled
   btn.disabled = true;
@@ -1331,25 +1380,8 @@ async function refreshState(name, row) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(extra),
     });
-    agentDiv.textContent = state.agent_build ? `DA build ${state.agent_build}` : "";
-    pkgsDiv.replaceChildren();
-    for (const pkg of state.packages) {
-      const card = el("tpl-detected-package");
-      card.querySelector(".pkg-id").textContent = pkg.identifier;
-      const badge = card.querySelector(".pkg-status");
-      badge.textContent = pkg.status;
-      badge.classList.add(pkg.is_installed ? "ok" : pkg.is_imported ? "warn" : "");
-      // Install only makes sense for imported-but-not-installed packages.
-      if (pkg.is_imported && !pkg.is_installed) {
-        const ibtn = card.querySelector(".btn-install");
-        ibtn.classList.remove("hidden");
-        ibtn.addEventListener("click", () => installPackage(name, pkg.identifier));
-      }
-      pkgsDiv.appendChild(card);
-    }
-    if (!state.packages.length) {
-      agentDiv.textContent += " — no packages reported";
-    }
+    const { version, jhf } = deriveCpuseSummary(state);
+    agentDiv.textContent = `Ver: ${version}  JHF: ${jhf}  CPUSE: ${state.agent_build || "—"}`;
   } catch (e) {
     cacheEvictCreds(name); // a cached wrong/stale password re-prompts next time
     agentDiv.textContent = "detect failed: " + e.message;
@@ -1373,29 +1405,6 @@ async function importPackage(name, row) {
   } catch (e) {
     cacheEvictCreds(name);
     toast("Import failed to start: " + e.message);
-  }
-}
-
-async function installPackage(name, packageId) {
-  // Installs can REBOOT the management server — always confirm explicitly.
-  const sure = confirm(
-    `Install ${packageId} on ${name}?\n\n` +
-    "This may reboot the management server when it completes. " +
-    "Make sure this is inside a maintenance window and any HA peer is healthy."
-  );
-  if (!sure) return;
-  const extra = await operationCredentials(name, "install a package");
-  if (extra === null) return;
-  try {
-    await api(envUrl(`/servers/${encodeURIComponent(name)}/install`), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ package_id: packageId, confirmed: true, ...extra }),
-    });
-    await loadJobs();
-  } catch (e) {
-    cacheEvictCreds(name);
-    toast("Install failed to start: " + e.message);
   }
 }
 

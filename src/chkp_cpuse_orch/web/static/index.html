@@ -257,7 +257,7 @@
             <th>Actions</th>
           </tr>
         </thead>
-        <tbody><!-- tpl-server-row instances --></tbody>
+        <tbody><!-- tpl-server-row / tpl-server-state-row instances --></tbody>
       </table>
     </section>
 
@@ -632,7 +632,7 @@
 </template>
 
 <template id="tpl-server-row">
-  <tr>
+  <tr class="srv-row">
     <td class="srv-name"></td>
     <td class="srv-address mono"></td>
     <td class="srv-creds">
@@ -642,8 +642,6 @@
     </td>
     <td class="srv-state">
       <button class="btn-refresh small">Refresh</button>
-      <div class="srv-agent muted"></div>
-      <div class="srv-packages"><!-- tpl-detected-package instances --></div>
     </td>
     <td class="srv-actions">
       <select class="pkg-select"><option value="">— package —</option></select>
@@ -652,12 +650,13 @@
   </tr>
 </template>
 
-<template id="tpl-detected-package">
-  <div class="detected-pkg">
-    <span class="pkg-id mono"></span>
-    <span class="pkg-status badge"></span>
-    <button class="btn-install small danger hidden">Install</button>
-  </div>
+<!-- Detected-state summary: a second row under the server, one line
+     ("Ver: … JHF: … CPUSE: …") derived from `show installer packages`
+     instead of dumping the raw per-package list. -->
+<template id="tpl-server-state-row">
+  <tr class="srv-state-row">
+    <td colspan="5" class="srv-agent muted"></td>
+  </tr>
 </template>
 
 <!-- CDT candidate row: the action buttons live here; the data <td>s are created

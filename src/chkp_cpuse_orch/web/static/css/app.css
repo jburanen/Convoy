@@ -258,7 +258,7 @@ tr.job-row:hover td { background: var(--badge-bg); }
 /* Packages table: filename/size, sha1(+retention hint), sha256 form one
    grouped three-line entry, so only the last (sha256) row carries the
    separator below it. */
-tr.pkg-row td, tr.pkg-sha1-row td { border-bottom: none; }
+tr.pkg-row td, tr.pkg-sha1-row td { border-bottom: none; padding-bottom: 0; }
 tr.pkg-sha1-row td, tr.pkg-sha256-row td { padding-top: 0; }
 .pkg-expiry.warn { color: var(--warn); font-weight: 600; }
 /* Nowrap so the column auto-sizes to fit "expires M/D/YYYY" on one line
@@ -326,9 +326,9 @@ button.secondary:hover { color: var(--text); filter: none; }
   background: var(--badge-bg);
 }
 
-/* ---- detected CPUSE packages inside the server table ---- */
-.srv-packages { margin-top: 0.35rem; display: flex; flex-direction: column; gap: 0.25rem; }
-.detected-pkg { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+/* Server row + its detected-state summary row read as one grouped entry. */
+tr.srv-row td { border-bottom: none; }
+tr.srv-state-row td { padding-top: 0; }
 
 /* ---- CDT (gateway deployment) controls ---- */
 .cdt-controls {
@@ -420,6 +420,9 @@ button.secondary:hover { color: var(--text); filter: none; }
   font-weight: 700;
   vertical-align: middle;
 }
+/* Out-rank the generic .hidden — same-specificity tie, .pill declared later
+   would otherwise always win and the pill never actually hides. */
+.pill.hidden { display: none; }
 
 /* Provisioning output boxes (one per console). Each grows to fit its commands so
    there's no scrollbar overlapping the copy icon. */
