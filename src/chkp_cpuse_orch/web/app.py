@@ -176,6 +176,10 @@ class ImportRequest(OperationCredentials):
     package: str  # filename in the package store
 
 
+class ImportCloudRequest(OperationCredentials):
+    package_id: str  # CPUSE identifier as published in Check Point's cloud repo
+
+
 class InstallRequest(OperationCredentials):
     package_id: str  # CPUSE identifier as shown by detect
     confirmed: bool = False  # UI must send True after an explicit operator confirm
@@ -747,6 +751,7 @@ def _register_routes(app: FastAPI) -> None:
                         "jhf": cached.jhf if cached else None,
                         "agent_build": cached.agent_build if cached else None,
                         "checked_at": cached.checked_at.isoformat() if cached else None,
+                        "installable": cached.installable if cached else [],
                     }
                 )
             return result
@@ -767,6 +772,9 @@ def _register_routes(app: FastAPI) -> None:
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
         summary = summarize_jumbo(detected.packages)
+        installable = [
+            p.identifier for p in detected.packages if p.is_imported and not p.is_installed
+        ]
         checked_at = utcnow()
         store: Store = request.app.state.store
         store.upsert_server_state(
@@ -777,6 +785,7 @@ def _register_routes(app: FastAPI) -> None:
                 jhf=summary.jhf,
                 agent_build=detected.agent_build,
                 checked_at=checked_at,
+                installable=installable,
             )
         )
         return {
@@ -785,6 +794,7 @@ def _register_routes(app: FastAPI) -> None:
             "version": summary.version,
             "jhf": summary.jhf,
             "checked_at": checked_at.isoformat(),
+            "installable": installable,
             "packages": [
                 {
                     "identifier": p.identifier,
@@ -802,6 +812,20 @@ def _register_routes(app: FastAPI) -> None:
         try:
             return _service(request).submit_import(
                 env, name, body.package, credentials=_build_credentials(body.credentials, name, env)
+            )
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+
+    @app.post("/api/env/{env}/servers/{name}/import-cloud", status_code=202)
+    def server_import_cloud(
+        env: str, name: str, body: ImportCloudRequest, request: Request
+    ) -> JobRecord:
+        try:
+            return _service(request).submit_import_cloud(
+                env,
+                name,
+                body.package_id,
+                credentials=_build_credentials(body.credentials, name, env),
             )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc

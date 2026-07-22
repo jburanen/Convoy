@@ -136,6 +136,9 @@ class ServerStateRow(BaseModel):
     jhf: str | None = None
     agent_build: str | None = None
     checked_at: datetime
+    # Identifiers of packages that are imported but not yet installed — the
+    # Management tab's Install picker options.
+    installable: list[str] = Field(default_factory=list)
 
 
 class CredentialSetRow(BaseModel):
@@ -347,6 +350,14 @@ _MIGRATIONS: tuple[str, ...] = (
         checked_at  TEXT NOT NULL,
         PRIMARY KEY (environment, host)
     );
+    """,
+    # v12: cache which imported-but-not-installed packages a server has ready
+    # to install, alongside its other detected state — so the Management tab's
+    # Install picker can be populated without a live SSH query on every load.
+    # JSON list of package identifiers; '[]' for existing rows (unknown until
+    # next refresh).
+    """
+    ALTER TABLE server_state ADD COLUMN installable TEXT NOT NULL DEFAULT '[]';
     """,
 )
 
@@ -672,10 +683,11 @@ class Store:
         with self._connect() as conn:
             conn.execute(
                 "INSERT INTO server_state (environment, host, version, jhf, agent_build,"
-                " checked_at) VALUES (?, ?, ?, ?, ?, ?) "
+                " checked_at, installable) VALUES (?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (environment, host) DO UPDATE SET"
                 " version = excluded.version, jhf = excluded.jhf,"
-                " agent_build = excluded.agent_build, checked_at = excluded.checked_at",
+                " agent_build = excluded.agent_build, checked_at = excluded.checked_at,"
+                " installable = excluded.installable",
                 (
                     rec.environment,
                     rec.host,
@@ -683,6 +695,7 @@ class Store:
                     rec.jhf,
                     rec.agent_build,
                     rec.checked_at.isoformat(),
+                    json.dumps(rec.installable),
                 ),
             )
 
@@ -970,6 +983,7 @@ def _server_state_from_row(row: sqlite3.Row) -> ServerStateRow:
         jhf=row["jhf"],
         agent_build=row["agent_build"],
         checked_at=datetime.fromisoformat(row["checked_at"]),
+        installable=json.loads(row["installable"]),
     )
 
 

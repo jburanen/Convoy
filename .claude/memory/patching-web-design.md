@@ -13,11 +13,24 @@ UI is the primary interface (see [[architecture]]); the CLI is secondary.
   server: build XML plan + candidates CSV, invoke CDT, tail status. See
   [[cdt-cpuse-domain]]. Code: `cdt.py`.
 - **CPUSE-local subsystem** — the **management servers themselves**, which CDT does
-  NOT patch. Operator-driven, one host at a time, via the web UI. Per-host flow:
+  NOT patch. Operator-driven, via the web UI. Per-host flow:
   **transfer package → `installer import` → `installer install`** (→ optional reboot
   → verify). Code: `cpuse.py`. This is the manual flow the web UI exposes as
   per-server buttons that reflect *detected* state (`show installer packages` is the
   source of truth), each button idempotent.
+  - **Two import paths** (2026-07-22): bulk-import controls above the servers table,
+    targeting one or more checkbox-selected servers, sequentially (not parallel —
+    same pattern as "Refresh all"): (1) upload a package from the local store, SFTP
+    it to a staging path, `installer import local`, then **remove the temp copy**
+    (best-effort — a cleanup failure logs a `warning` job event, doesn't fail the
+    job, since the import already succeeded by that point); (2) `import_cloud()` —
+    give CPUSE a package identifier and it fetches + imports directly from Check
+    Point's cloud repo (`installer import <ID>`, no "local", no upload at all —
+    confirmed via docs MCP against sk92449's `show installer packages available` /
+    `installer import <name>` workflow). Install itself stays per-server (its own
+    dropdown of that server's cached "imported but not installed" packages,
+    `server_state.installable` — see below), not part of the bulk controls, since a
+    reboot-worthy action needs one target at a time with its own confirmation.
 
 ## Decisions locked (2026-07-17)
 - **Gaia auth = both/mixed.** SSH key for the transport; admin **password** for

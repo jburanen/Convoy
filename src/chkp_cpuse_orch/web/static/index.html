@@ -240,7 +240,7 @@
 
     <section id="servers">
       <div class="section-head">
-        <h2>Patch management servers</h2>
+        <h2>Management Servers</h2>
         <div class="section-head-actions">
           <!-- Queries live show installer packages state for every server in
                this environment, one after another. -->
@@ -251,16 +251,35 @@
         Patched locally via CPUSE (CDT does not patch management servers). The
         detected state shown below (last row per server) is cached — click
         <strong>Refresh</strong> on a server, or <strong>Refresh all</strong> above, to
-        query it live over SSH. <strong>Import</strong> uploads the selected package
-        and imports it into the local CPUSE repository.
+        query it live over SSH. Assign or change a server's credential set from
+        the <strong>Edit</strong> button on the Provisioning tab.
       </p>
+
+      <div id="bulk-import">
+        <div class="bulk-import-row">
+          <label class="muted" for="bulk-import-package">Import an uploaded package:</label>
+          <select id="bulk-import-package"><option value="">— package —</option></select>
+          <button type="button" id="bulk-import-btn" class="small">Import to selected</button>
+        </div>
+        <div class="bulk-import-row">
+          <label class="muted" for="bulk-import-cloud-id">Or import directly from Check Point's cloud:</label>
+          <input type="text" id="bulk-import-cloud-id" placeholder="CPUSE package identifier">
+          <button type="button" id="bulk-import-cloud-btn" class="small">Import from cloud to selected</button>
+        </div>
+        <p class="hint">
+          Either way, first <strong>select the target server(s) below</strong> — tick the
+          checkbox next to each server's name.
+        </p>
+      </div>
+
       <table id="servers-table">
         <thead>
           <tr>
+            <th></th>
             <th>Server</th>
             <th>Address</th>
             <th>Credential set</th>
-            <th>Actions</th>
+            <th>Packages imported and ready to install</th>
           </tr>
         </thead>
         <tbody><!-- tpl-server-row / tpl-server-state-row instances --></tbody>
@@ -639,16 +658,13 @@
 
 <template id="tpl-server-row">
   <tr class="srv-row">
+    <td><input type="checkbox" class="srv-select" title="select as an import target"></td>
     <td class="srv-name"></td>
     <td class="srv-address mono"></td>
-    <td class="srv-creds">
-      <select class="srv-cred-select" title="assign a credential set to this server">
-        <option value="">— none —</option>
-      </select>
-    </td>
+    <td class="srv-creds"></td>
     <td class="srv-actions">
-      <select class="pkg-select"><option value="">— package —</option></select>
-      <button class="btn-import small">Import</button>
+      <select class="install-select"><option value="">— package —</option></select>
+      <button class="btn-install small danger">Install</button>
     </td>
   </tr>
 </template>
@@ -659,7 +675,7 @@
      was last checked and a text link to refresh it live over SSH. -->
 <template id="tpl-server-state-row">
   <tr class="srv-state-row">
-    <td colspan="4" class="srv-agent muted">
+    <td colspan="5" class="srv-agent muted">
       <span class="srv-summary"></span>
       <span class="srv-checked"></span>
       <button type="button" class="link-btn srv-refresh-link">Refresh</button>

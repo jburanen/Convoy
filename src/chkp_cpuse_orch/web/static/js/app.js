@@ -1204,21 +1204,23 @@ async function loadServers() {
     // No environments defined yet — prompt the operator toward the create dialog.
     const msg = "No environments. Use the Environment picker → New Environment…";
     emptyRow(infoTbody, 7, msg);
-    emptyRow(tbody, 4, msg);
+    emptyRow(tbody, 5, msg);
     updateServersInfoControls(false);
     return;
   }
 
-  // Patching view (assigned set per server) + editable inventory + packages +
-  // the environment's credential sets (to populate the assignment dropdowns).
-  const [servers, editable, packages, sets] = await Promise.all([
+  // Patching view (assigned set per server) + editable inventory + the
+  // package catalog (for the bulk-import picker above the table).
+  const [servers, editable, packages] = await Promise.all([
     api(envUrl("/servers")),
     api(`/api/environments/${encodeURIComponent(currentEnv)}/servers`),
     api("/api/packages"),
-    fetchCredentialSets(),
   ]);
   const assignedByName = new Map(servers.map((s) => [s.name, s.credential_set]));
-  const storageOn = storageEnabled();
+
+  const bulkPackageSelect = document.getElementById("bulk-import-package");
+  bulkPackageSelect.replaceChildren(new Option("— package —", ""));
+  for (const pkg of packages) bulkPackageSelect.appendChild(new Option(pkg.filename, pkg.filename));
 
   for (const srv of editable) {
     // Provisioning tab: inventory row with a Remove action (env management —
@@ -1248,67 +1250,33 @@ async function loadServers() {
   }
 
   for (const srv of servers) {
-    // Management tab: the action row, with the credential-set assignment picker.
+    // Management tab: the action row. Credential assignment is display-only
+    // here — change it via Edit on the Provisioning tab.
     const row = el("tpl-server-row");
+    row.querySelector(".srv-select").dataset.server = srv.name; // read by the bulk-import buttons
     row.querySelector(".srv-name").textContent = srv.name;
     row.querySelector(".srv-address").textContent = srv.address;
-
-    const credSelect = row.querySelector(".srv-cred-select");
-    for (const set of sets) {
-      const opt = document.createElement("option");
-      opt.value = set.name;
-      opt.textContent = set.name;
-      credSelect.appendChild(opt);
-    }
-    credSelect.value = srv.credential_set ?? "";
-    if (storageOn) {
-      credSelect.addEventListener("change", () => assignCredential(srv.name, credSelect));
-    } else {
-      // Storage-disabled: assignment is N/A; actions prompt for credentials.
-      credSelect.disabled = true;
-      credSelect.title = "This environment doesn't store credentials — actions prompt for them.";
-    }
-
-    // package dropdown for the Import action
-    const select = row.querySelector(".pkg-select");
-    for (const pkg of packages) {
-      const opt = document.createElement("option");
-      opt.value = pkg.filename;
-      opt.textContent = pkg.filename;
-      select.appendChild(opt);
-    }
+    row.querySelector(".srv-creds").textContent = srv.credential_set || "none — not assigned";
+    renderInstallSelect(row, srv.installable ?? []);
 
     const stateRow = el("tpl-server-state-row");
     stateRow.dataset.server = srv.name; // looked up by the "Refresh all" button
     renderStateRow(stateRow, srv.checked_at ? srv : null);
-    stateRow.querySelector(".srv-refresh-link").addEventListener("click", () => refreshState(srv.name, stateRow));
-    row.querySelector(".btn-import").addEventListener("click", () => importPackage(srv.name, row));
+    stateRow
+      .querySelector(".srv-refresh-link")
+      .addEventListener("click", () => refreshState(srv.name, row, stateRow));
+    row.querySelector(".btn-install").addEventListener("click", () => installPackage(srv.name, row));
     tbody.appendChild(row);
     tbody.appendChild(stateRow);
   }
 
   if (!editable.length) {
     emptyRow(infoTbody, 7, "No management servers yet — click Connect to Primary SMS/MDS above.");
-    emptyRow(tbody, 4, "No management servers yet — add them on the Provisioning tab.");
+    emptyRow(tbody, 5, "No management servers yet — add them on the Provisioning tab.");
   }
   updateServersInfoControls(editable.length > 0);
 
   chooseDefaultTab(servers.length);
-}
-
-async function assignCredential(name, select) {
-  const value = select.value || null;
-  try {
-    await api(envUrl(`/servers/${encodeURIComponent(name)}/credential`), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ set: value }),
-    });
-    await Promise.all([loadServers(), refreshStatus()]);
-  } catch (e) {
-    toast("Assign failed: " + e.message);
-    await loadServers(); // revert the dropdown to the stored assignment
-  }
 }
 
 function emptyRow(target, colSpan, text) {
@@ -1343,10 +1311,26 @@ function renderStateRow(stateRow, data) {
   }
   summary.textContent =
     `Running ${data.version ?? "—"} w/JHF ${data.jhf ?? "—"} | CPUSE Agent ${formatAgentBuild(data.agent_build)}`;
-  checked.textContent = data.checked_at ? `  (refreshed ${fmtTime(data.checked_at)})` : "";
+  checked.textContent = data.checked_at ? ` | Refreshed ${fmtTime(data.checked_at)}` : "";
 }
 
-async function refreshState(name, stateRow) {
+// Options are the server's cached `installable` list (imported but not yet
+// installed) — refreshed alongside the summary row, never the full package
+// catalog, since installing something not yet on the host is Import's job
+// (not exposed on this page; see the Provisioning tab's Edit modal for
+// credential assignment and .claude/memory/patching-web-design.md for why
+// Import isn't here).
+function renderInstallSelect(row, installable) {
+  const select = row.querySelector(".install-select");
+  const btn = row.querySelector(".btn-install");
+  const ready = installable.length > 0;
+  select.replaceChildren(new Option(ready ? "— package —" : "— none ready —", ""));
+  for (const id of installable) select.appendChild(new Option(id, id));
+  select.disabled = !ready;
+  btn.disabled = !ready;
+}
+
+async function refreshState(name, row, stateRow) {
   const link = stateRow.querySelector(".srv-refresh-link");
   const summary = stateRow.querySelector(".srv-summary");
   const extra = await operationCredentials(name, "query live state");
@@ -1361,6 +1345,7 @@ async function refreshState(name, stateRow) {
       body: JSON.stringify(extra),
     });
     renderStateRow(stateRow, state);
+    renderInstallSelect(row, state.installable ?? []);
   } catch (e) {
     cacheEvictCreds(name); // a cached wrong/stale password re-prompts next time
     summary.textContent = "detect failed: " + e.message;
@@ -1375,30 +1360,101 @@ document.getElementById("refresh-all-btn").addEventListener("click", async () =>
   try {
     const stateRows = [...document.querySelectorAll("#servers-table tr.srv-state-row")];
     for (const stateRow of stateRows) {
-      await refreshState(stateRow.dataset.server, stateRow);
+      await refreshState(stateRow.dataset.server, stateRow.previousElementSibling, stateRow);
     }
   } finally {
     btn.disabled = false;
   }
 });
 
-async function importPackage(name, row) {
-  const select = row.querySelector(".pkg-select");
-  if (!select.value) { toast("Choose an uploaded package first."); return; }
-  const extra = await operationCredentials(name, "import a package");
+async function installPackage(name, row) {
+  const select = row.querySelector(".install-select");
+  if (!select.value) { toast("Choose a package first."); return; }
+  const packageId = select.value;
+  // Installs can REBOOT the management server — always confirm explicitly.
+  const sure = confirm(
+    `Install ${packageId} on ${name}?\n\n` +
+    "This may reboot the management server when it completes. " +
+    "Make sure this is inside a maintenance window and any HA peer is healthy."
+  );
+  if (!sure) return;
+  const extra = await operationCredentials(name, "install a package");
   if (extra === null) return;
   try {
-    await api(envUrl(`/servers/${encodeURIComponent(name)}/import`), {
+    await api(envUrl(`/servers/${encodeURIComponent(name)}/install`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ package: select.value, ...extra }),
+      body: JSON.stringify({ package_id: packageId, confirmed: true, ...extra }),
     });
     await loadJobs();
   } catch (e) {
     cacheEvictCreds(name);
-    toast("Import failed to start: " + e.message);
+    toast("Install failed to start: " + e.message);
   }
 }
+
+/* ---------- 3a. bulk import (above the servers table) ---------- */
+
+function selectedServerNames() {
+  return [...document.querySelectorAll("#servers-table .srv-select:checked")]
+    .map((cb) => cb.dataset.server);
+}
+
+// Shared by both bulk-import buttons: runs `perServer(name)` for each checked
+// server in turn (not in parallel — mirrors "Refresh all"), refreshes the
+// Jobs tab once done, and re-enables `btn` even if a server's import failed
+// to start (so one bad target doesn't stop the rest).
+async function bulkImport(btn, perServer) {
+  const targets = selectedServerNames();
+  if (!targets.length) {
+    toast("Select at least one server below (checkbox next to the server name) first.");
+    return;
+  }
+  btn.disabled = true;
+  try {
+    for (const name of targets) {
+      try {
+        await perServer(name);
+      } catch (e) {
+        cacheEvictCreds(name);
+        toast(`Import to ${name} failed to start: ${e.message}`);
+      }
+    }
+    await loadJobs();
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+document.getElementById("bulk-import-btn").addEventListener("click", () => {
+  const btn = document.getElementById("bulk-import-btn");
+  const pkg = document.getElementById("bulk-import-package").value;
+  if (!pkg) { toast("Choose a package first."); return; }
+  bulkImport(btn, async (name) => {
+    const extra = await operationCredentials(name, "import a package");
+    if (extra === null) return; // credential prompt cancelled for this host
+    await api(envUrl(`/servers/${encodeURIComponent(name)}/import`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ package: pkg, ...extra }),
+    });
+  });
+});
+
+document.getElementById("bulk-import-cloud-btn").addEventListener("click", () => {
+  const btn = document.getElementById("bulk-import-cloud-btn");
+  const packageId = document.getElementById("bulk-import-cloud-id").value.trim();
+  if (!packageId) { toast("Enter a CPUSE package identifier first."); return; }
+  bulkImport(btn, async (name) => {
+    const extra = await operationCredentials(name, "import a package from Check Point's cloud");
+    if (extra === null) return;
+    await api(envUrl(`/servers/${encodeURIComponent(name)}/import-cloud`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ package_id: packageId, ...extra }),
+    });
+  });
+});
 
 /* ---------- 3b. gateway deployment (CDT) ---------- */
 

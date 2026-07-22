@@ -426,6 +426,8 @@ def test_server_state_detects_live_packages(client: TestClient) -> None:
     assert body["version"] == "R81.10"
     assert body["jhf"] == "Take 45"
     assert body["checked_at"]
+    # The other package (imported, not installed) is the Install picker's option.
+    assert body["installable"] == ["Check_Point_R81_20_JUMBO_HF_MAIN_Bundle_T89_FULL.tgz"]
 
 
 def test_server_state_without_credentials_is_409(client: TestClient) -> None:
@@ -441,6 +443,7 @@ def test_servers_list_exposes_cached_state_after_a_refresh(client: TestClient) -
     assert before["version"] is None
     assert before["jhf"] is None
     assert before["checked_at"] is None
+    assert before["installable"] == []
 
     client.post("/api/env/default/servers/mgmt-01/state")
 
@@ -448,6 +451,7 @@ def test_servers_list_exposes_cached_state_after_a_refresh(client: TestClient) -
     assert after["version"] == "R81.10"
     assert after["jhf"] == "Take 45"
     assert after["checked_at"]
+    assert after["installable"] == ["Check_Point_R81_20_JUMBO_HF_MAIN_Bundle_T89_FULL.tgz"]
 
 
 # -- credentials ------------------------------------------------------------------
@@ -544,6 +548,22 @@ def test_import_flow_end_to_end(client: TestClient, transport: FakeTransport) ->
     events = client.get(f"/api/jobs/{job['id']}/events").json()
     assert any("import finished" in e["message"] for e in events)
     assert transport.puts[0][1] == "/var/log/upload/jhf.tgz"
+
+
+def test_import_cloud_flow_end_to_end(client: TestClient, transport: FakeTransport) -> None:
+    _add_ssh_credential(client)
+
+    resp = client.post(
+        "/api/env/default/servers/mgmt-01/import-cloud",
+        json={"package_id": "Check_Point_R81.20_JHF_T99"},
+    )
+    assert resp.status_code == 202, resp.text
+    job = _wait_for_job(client, resp.json()["id"])
+    assert job["status"] == "succeeded", job["error"]
+
+    events = client.get(f"/api/jobs/{job['id']}/events").json()
+    assert any("import finished" in e["message"] for e in events)
+    assert transport.puts == []  # no upload — nothing was staged locally
 
 
 def test_install_requires_confirmation_flag(client: TestClient) -> None:

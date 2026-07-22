@@ -162,6 +162,13 @@ class CPUSE:
             raise CPUSEError(f"suspicious remote path: {remote_path!r}")
         self._run_installer(f"import local {remote_path}", "import")
 
+    def import_cloud(self, package_id: str) -> None:
+        """Import a package directly from Check Point's cloud repository by its
+        published identifier — no local file involved. ``show installer
+        packages available`` lists what's importable this way; the target
+        host fetches it itself (needs outbound internet access)."""
+        self._run_installer(f"import {_check_id(package_id)}", "cloud import")
+
     def verify(self, package_id: str) -> None:
         self._run_installer(f"verify {_check_id(package_id)}", "verify")
 

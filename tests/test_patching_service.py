@@ -190,6 +190,59 @@ def test_import_job_fails_closed_on_size_mismatch(
     assert not any("installer import" in c for c in transport.commands)
 
 
+def test_import_job_removes_temp_copy_after_import(
+    service: PatchingService, store: Store, transport: FakeTransport
+) -> None:
+    job = service.submit_import("default", "mgmt-01", PKG)
+    _run(service)
+
+    assert store.get_job(job.id).status is JobStatus.SUCCEEDED
+    import_idx = next(i for i, c in enumerate(transport.commands) if "installer import local" in c)
+    cleanup_idx = next(
+        i for i, c in enumerate(transport.commands) if f"rm -f /var/log/upload/{PKG}" in c
+    )
+    assert cleanup_idx > import_idx  # cleanup happens after, not before, the import
+    messages = " | ".join(e.message for e in store.events(job.id))
+    assert "removed temp copy" in messages
+
+
+def test_import_job_cleanup_failure_is_a_warning_not_a_job_failure(
+    service: PatchingService, store: Store, transport: FakeTransport
+) -> None:
+    transport.responses["rm -f"] = (1, "permission denied")
+    job = service.submit_import("default", "mgmt-01", PKG)
+    _run(service)
+
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.SUCCEEDED, finished.error
+    messages = [(e.level, e.message) for e in store.events(job.id)]
+    assert any(
+        level == "warning" and "could not remove temp copy" in msg for level, msg in messages
+    )
+
+
+# -- import-from-cloud job ---------------------------------------------------------
+
+
+def test_import_cloud_job_imports_by_id_with_no_upload(
+    service: PatchingService, store: Store, transport: FakeTransport
+) -> None:
+    job = service.submit_import_cloud("default", "mgmt-01", "Check_Point_R81.20_JHF_T99")
+    _run(service)
+
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.SUCCEEDED, finished.error
+    assert transport.puts == []  # nothing uploaded — the host fetches it itself
+    assert any(
+        "installer import Check_Point_R81.20_JHF_T99" in c and "not-interactive" in c
+        for c in transport.commands
+    )
+    # Bare "import <id>", never "import local" (that's the upload-based flow).
+    assert not any("import local" in c for c in transport.commands)
+    messages = " | ".join(e.message for e in store.events(job.id))
+    assert "import finished" in messages
+
+
 # -- install job ------------------------------------------------------------------
 
 

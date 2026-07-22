@@ -340,9 +340,28 @@ button.link-btn:disabled { opacity: 0.5; text-decoration: none; }
   background: var(--badge-bg);
 }
 
-/* Server row + its detected-state summary row read as one grouped entry. */
-tr.srv-row td { border-bottom: none; }
+/* Server row + its detected-state summary row read as one grouped entry.
+   vertical-align: middle (overriding the table default of top) so the plain
+   text cells (name/address/creds) line up with the select+button in the
+   Actions cell instead of sitting above them. */
+tr.srv-row td { border-bottom: none; vertical-align: middle; }
 tr.srv-state-row td { padding-top: 0; }
+/* The select and button default to inline vertical-align: baseline, which
+   doesn't match each other (different control heights) let alone the plain
+   text cells — align both to the cell's vertical center instead. */
+.srv-row .srv-select,
+.srv-actions select,
+.srv-actions button { vertical-align: middle; }
+
+/* ---- bulk import (above the servers table) ---- */
+.bulk-import-row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 0.5rem 0;
+}
+#bulk-import-cloud-id { min-width: 22rem; }
 
 /* ---- CDT (gateway deployment) controls ---- */
 .cdt-controls {
@@ -550,7 +569,6 @@ tr.srv-state-row td { padding-top: 0; }
 #credential-form.stacked input,
 #credential-form.stacked textarea { width: 100%; }
 #credential-form.stacked textarea { font-family: var(--mono); resize: vertical; }
-.srv-cred-select { max-width: 14rem; }
 
 /* ---- login page (login.html) ---- */
 /* Equal whitespace above the card (page top → card) and below it (card → footer):

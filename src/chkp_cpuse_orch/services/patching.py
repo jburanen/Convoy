@@ -3,9 +3,13 @@
 Glues inventory + credential store + package store + CPUSE wrapper + job runner
 into the operations the web UI exposes per management server:
 
-- **detect**  — live `show installer packages` (source of truth for the UI)
-- **import**  — SFTP the package to the host, then `installer import local`
-- **install** — optional `installer verify`, then `installer install`
+- **detect**        — live `show installer packages` (source of truth for the UI)
+- **import**        — SFTP the package to a temp path on the host, `installer
+  import local`, then remove the temp copy (best-effort — the import already
+  succeeded by that point)
+- **import_cloud**  — direct the host to fetch + import a package from Check
+  Point's cloud repository by identifier; no local file involved
+- **install**        — optional `installer verify`, then `installer install`
 
 Each mutating operation runs as a background job (a web click enqueues and
 returns). Blocking SSH work runs in a worker thread via ``asyncio.to_thread``.
@@ -38,6 +42,7 @@ from .common import (
 
 __all__ = [
     "JOB_IMPORT",
+    "JOB_IMPORT_CLOUD",
     "JOB_INSTALL",
     "ClientFactory",
     "EnvironmentRegistry",
@@ -47,6 +52,7 @@ __all__ = [
 ]
 
 JOB_IMPORT = "mgmt.import"
+JOB_IMPORT_CLOUD = "mgmt.import_cloud"
 JOB_INSTALL = "mgmt.install"
 
 
@@ -79,6 +85,7 @@ class PatchingService:
         self._staging_dir = staging_dir
         self._shell = shell
         runner.register(JOB_IMPORT, self._import_job)
+        runner.register(JOB_IMPORT_CLOUD, self._import_cloud_job)
         runner.register(JOB_INSTALL, self._install_job)
 
     # -- queries -----------------------------------------------------------------
@@ -140,6 +147,29 @@ class PatchingService:
             credentials=credentials,
         )
 
+    def submit_import_cloud(
+        self,
+        environment: str,
+        host_name: str,
+        package_id: str,
+        *,
+        credentials: CredentialBundle | None = None,
+    ) -> JobRecord:
+        """Enqueue: direct the host to fetch + `installer import` a package from
+        Check Point's cloud repository by identifier. No local file or upload —
+        the host needs outbound internet access."""
+        connector = self.registry.get(environment)
+        host = connector.mgmt_host(host_name)
+        return submit_host_job(
+            self.runner,
+            self._vault,
+            connector,
+            host,
+            JOB_IMPORT_CLOUD,
+            params={"package_id": package_id},
+            credentials=credentials,
+        )
+
     def submit_install(
         self,
         environment: str,
@@ -174,6 +204,9 @@ class PatchingService:
     async def _import_job(self, ctx: JobContext) -> None:
         await asyncio.to_thread(self._do_import, ctx)
 
+    async def _import_cloud_job(self, ctx: JobContext) -> None:
+        await asyncio.to_thread(self._do_import_cloud, ctx)
+
     async def _install_job(self, ctx: JobContext) -> None:
         await asyncio.to_thread(self._do_install, ctx)
 
@@ -200,6 +233,29 @@ class PatchingService:
             ctx.raise_if_cancelled()  # last safe stop before mutating CPUSE state
             ctx.log("importing into CPUSE repository (installer import local)")
             CPUSE(client, shell=self._shell).import_local(remote_path)
+            ctx.log("import finished")
+
+            # Best-effort: the import already succeeded, so a cleanup failure
+            # here is a warning, not a job failure.
+            cleanup = client.run(f"rm -f {remote_path}")
+            if cleanup.ok:
+                ctx.log(f"removed temp copy {remote_path}")
+            else:
+                detail = cleanup.stderr.strip() or cleanup.stdout.strip()
+                ctx.log(f"could not remove temp copy {remote_path}: {detail}", level="warning")
+        finally:
+            client.close()
+
+    def _do_import_cloud(self, ctx: JobContext) -> None:
+        connector = self.registry.get(ctx.job.environment)
+        host = connector.mgmt_host(ctx.job.target or "")
+        package_id = str(ctx.job.params["package_id"])
+
+        creds = job_run_credentials(connector, self._vault, ctx.job)
+        client = connector.connect(host, creds)
+        try:
+            ctx.log(f"importing {package_id} from Check Point's cloud (installer import)")
+            CPUSE(client, shell=self._shell).import_cloud(package_id)
             ctx.log("import finished")
         finally:
             client.close()

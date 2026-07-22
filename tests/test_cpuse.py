@@ -61,6 +61,17 @@ def test_install_and_uninstall_are_not_interactive() -> None:
     ]
 
 
+def test_import_cloud_uses_bare_id_not_local() -> None:
+    runner = FakeRunner()
+    CPUSE(runner, shell=GaiaShell.CLISH).import_cloud("Check_Point_R81.20_JHF_T99")
+    assert runner.commands == ["installer import Check_Point_R81.20_JHF_T99 not-interactive"]
+
+
+def test_import_cloud_rejects_suspicious_id() -> None:
+    with pytest.raises(CPUSEError, match="suspicious package identifier"):
+        CPUSE(FakeRunner(), shell=GaiaShell.CLISH).import_cloud("id; rm -rf /")
+
+
 def test_list_packages_uses_scope() -> None:
     runner = FakeRunner(stdout="There are no imported packages")
     CPUSE(runner, shell=GaiaShell.CLISH).list_packages(PackageScope.IMPORTED)
