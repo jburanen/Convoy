@@ -1321,6 +1321,14 @@ function emptyRow(target, colSpan, text) {
   target.appendChild(tr);
 }
 
+// `show installer status build` returns something like "Build number: 994000123
+// (Agent build is up to date)" — drop the "Build number:" label, keep the
+// numeric build and the trailing status string.
+function formatAgentBuild(raw) {
+  if (!raw) return "—";
+  return raw.replace(/^\s*build\s*number\s*:\s*/i, "").replace(/\s+/g, " ").trim();
+}
+
 // Detected-state summary row: version/JHF/agent build are derived server-side
 // (cpuse.summarize_jumbo) and cached in the DB, so `data` here is either a
 // server record carrying those fields (from GET /servers, or a fresh /state
@@ -1334,7 +1342,7 @@ function renderStateRow(stateRow, data) {
     return;
   }
   summary.textContent =
-    `Ver: ${data.version ?? "—"}  JHF: ${data.jhf ?? "—"}  CPUSE: ${data.agent_build || "—"}`;
+    `Running ${data.version ?? "—"} w/JHF ${data.jhf ?? "—"} | CPUSE Agent ${formatAgentBuild(data.agent_build)}`;
   checked.textContent = data.checked_at ? `  (refreshed ${fmtTime(data.checked_at)})` : "";
 }
 
