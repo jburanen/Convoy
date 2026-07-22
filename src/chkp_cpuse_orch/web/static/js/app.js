@@ -1195,7 +1195,6 @@ async function loadServers() {
 
   tbody.replaceChildren();
   infoTbody.replaceChildren();
-  document.getElementById("prov-env-name").textContent = currentEnv ?? "—";
 
   if (!currentEnv) {
     // No environments defined yet — prompt the operator toward the create dialog.
