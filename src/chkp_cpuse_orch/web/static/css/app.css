@@ -362,6 +362,9 @@ tr.srv-state-row td { padding-top: 0; }
    install picker's longest option text. */
 .col-select { width: 2rem; text-align: center; }
 .col-fill { width: 100%; }
+/* Never shrink narrower than their content — the fill column (below) is what
+   absorbs/gives up space, not these. */
+.srv-name, .srv-address, .srv-creds { white-space: nowrap; }
 /* A flex wrapper *inside* the cell, not the <td> itself — display: flex
    directly on a table-cell risks it dropping out of column-width
    calculations in some browsers. */
@@ -371,7 +374,10 @@ tr.srv-state-row td { padding-top: 0; }
   justify-content: space-between;
   gap: 0.5rem;
 }
-.srv-actions-inner .install-select { max-width: 28rem; }
+/* min-width: 0 lets a flex item shrink below its content's intrinsic width
+   when needed instead of overflowing the row — flex: 1 does the requested
+   "expand to fill the remaining space" against the Install button. */
+.srv-actions-inner .install-select { flex: 1; min-width: 0; }
 
 /* ---- bulk import (above the servers table) ---- */
 .bulk-import-row {
