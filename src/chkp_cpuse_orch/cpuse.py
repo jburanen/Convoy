@@ -53,6 +53,10 @@ class PackageState:
     # verbatim so an operator can read CPUSE's own fields (Installation log,
     # Requires reboot, etc.) instead of just our derived Status/description.
     raw: str = ""
+    # CPUSE's own "Installation log:" field (e.g. a path on the host), also
+    # from `show installer package <id>` only — surfaced on the job record so
+    # the Jobs tab can show it without an operator re-running the command.
+    installation_log: str = ""
 
     @property
     def is_installed(self) -> bool:
@@ -373,6 +377,7 @@ def parse_package_detail(stdout: str, identifier: str) -> PackageState:
         status=fields.get("Status", ""),
         description=fields.get("Description", ""),
         raw=stdout.strip(),
+        installation_log=fields.get("Installation log", ""),
     )
 
 

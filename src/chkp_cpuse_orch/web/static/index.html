@@ -758,6 +758,16 @@
   </tr>
 </template>
 
+<!-- CPUSE's own "Installation log:" field (install jobs only, once CPUSE
+     reports one) — a permanent line under the job row, same idea as the
+     package hash lines on the Packages tab. Hidden (not inserted) when a job
+     has none. -->
+<template id="tpl-job-install-log-row">
+  <tr class="job-install-log-row">
+    <td colspan="7" class="job-install-log mono muted"></td>
+  </tr>
+</template>
+
 <!-- one row in the Manage Environments modal: editable name + Rename, plus
      per-environment credential-storage and MDS-kind toggles -->
 <template id="tpl-env-manage-row">

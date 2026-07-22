@@ -535,6 +535,62 @@ def test_install_job_logs_raw_command_output_and_poll_detail(
     messages = " | ".join(e.message for e in store.events(job.id))
     assert "Install started; this may take a while." in messages
     assert "Installation log: /var/log/x" in messages
+    # CPUSE's own Installation log field is captured on the job record too,
+    # for the Jobs tab to display as its own line (like the packages tab's
+    # hash lines).
+    assert store.get_job(job.id).install_log == "/var/log/x"
+
+
+def test_install_job_ignores_attempts_budget_once_percentage_progress_seen(
+    store: Store, creds: CredentialStore, packages: PackageStore, inventory: Inventory
+) -> None:
+    # Once Status shows a real percentage, a real install is underway — the
+    # attempts budget (meant to catch installs that never actually started)
+    # is dropped entirely, operator-directed. install_verify_attempts=1 would
+    # fail this immediately if the cap still applied once progress is seen.
+    transport = FakeTransport(
+        responses={
+            "show installer package ": [
+                "Status:           Installing 10%",
+                "Status:           Installing 55%",
+                "Status:           Installing 90%",
+                "Status:           Installed",
+            ]
+        }
+    )
+    _assign(store, inventory, "mgmt-01")
+    registry = EnvironmentRegistry()
+    registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
+    service = PatchingService(
+        registry=registry,
+        packages=packages,
+        runner=JobRunner(store),
+        vault=JobCredentialVault(),
+        store=store,
+        install_verify_attempts=1,
+        install_verify_delay=0,
+        install_stall_seconds=0,
+    )
+
+    job = service.submit_install(
+        "default", "mgmt-01", "Check_Point_R81_20_T89", confirmed=True, verify_first=False
+    )
+    _run(service)
+
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.SUCCEEDED
+    detail_checks = [c for c in transport.commands if "show installer package " in c]
+    assert len(detail_checks) == 4  # all four checks ran, well past the attempts=1 budget
+
+    # Each poll logs just the status line (with its own timestamp, like any
+    # job log line) — not the full detail block on every check.
+    messages = [e.message for e in store.events(job.id)]
+    assert "status: Installing 10%" in messages
+    assert "status: Installing 55%" in messages
+    assert "status: Installing 90%" in messages
+    assert not any(m.startswith("install status check") for m in messages)
+    # The full block is only logged once, at the end.
+    assert any(m.startswith("install complete:") and "Installed" in m for m in messages)
 
 
 def test_install_job_fails_if_status_never_shows_installed(

@@ -28,6 +28,10 @@ into the operations the web UI exposes per management server:
   (observed 2026-07-22). Reboot-required packages drop the SSH session
   partway through polling — expected, not a failure — so a dropped
   connection there reconnects and keeps waiting instead of failing closed.
+  Once Status shows real progress (a percentage), the attempts budget is
+  dropped and polling continues unbounded until it completes. CPUSE's
+  "Installation log" field, once available, is saved on the job record
+  (`JobRecord.install_log`) for the Jobs tab to display.
 
 Both import paths, and install, refresh and cache detected state (version/JHF/
 agent build/packages ready to install) right after succeeding — so the UI
@@ -86,9 +90,9 @@ __all__ = [
     "Transport",
 ]
 
-JOB_IMPORT = "mgmt.import"
-JOB_IMPORT_CLOUD = "mgmt.import_cloud"
-JOB_INSTALL = "mgmt.install"
+JOB_IMPORT = "cpuse.import"
+JOB_IMPORT_CLOUD = "cpuse.import_cloud"
+JOB_INSTALL = "cpuse.install"
 
 
 @dataclass
@@ -456,6 +460,8 @@ class PatchingService:
             client.close()
 
         installed, last_detail = self._wait_until_installed(connector, host, creds, package_id, ctx)
+        if last_detail.installation_log:
+            self._store.set_install_log(ctx.job.id, last_detail.installation_log)
         if not installed:
             raise CPUSEError(
                 f"{package_id} does not show as Installed via `show installer package "
@@ -492,18 +498,28 @@ class PatchingService:
         "Imported" (i.e. the install doesn't appear to have started at all)
         after ``install_stall_seconds``; a genuinely running install moves off
         "Imported" well before then, so there's no reason to wait out the
-        full 15 minutes for one that never started.
+        full 15 minutes for one that never started. But once Status carries a
+        percentage (real install progress, e.g. "Installing 45%"), the
+        attempts budget is dropped entirely — operator-directed: a real
+        install can legitimately run well past 15 minutes, so from that point
+        on this polls every ``install_verify_delay`` seconds indefinitely,
+        until it completes (or the connection drops for a reboot and
+        reconnects, above).
 
-        Logs the full `show installer package <id>` block on every check
-        (not just the Status line) — CPUSE's own fields (Installation log,
-        Requires reboot, etc.) are the most direct way to troubleshoot an
-        install that reports failure or hangs, and reading them shouldn't
-        require re-running the command by hand on the box."""
+        Logs just the Status line — with its own timestamp, like every job
+        log line — on each check; the full `show installer package <id>`
+        block is only logged once, at the end, when Status finally shows
+        Installed (or in the raised error if it never does), rather than
+        repeating it on every poll."""
         client: Transport | None = None
         last_detail = PackageState(package_id, "")
         started = time.monotonic()
+        uncapped = False
+        attempt = 0
         try:
-            for attempt in range(1, self._install_verify_attempts + 1):
+            while uncapped or attempt < self._install_verify_attempts:
+                attempt += 1
+                will_continue = uncapped or attempt < self._install_verify_attempts
                 try:
                     if client is None:
                         client = connector.connect(host, creds)
@@ -514,35 +530,37 @@ class PatchingService:
                         level="warning",
                     )
                     client = None
-                    if attempt < self._install_verify_attempts:
+                    if will_continue:
                         time.sleep(self._install_verify_delay)
                     continue
                 except CPUSEError as exc:
                     ctx.log(f"could not read install status yet: {exc}", level="warning")
-                    if attempt < self._install_verify_attempts:
+                    if will_continue:
                         time.sleep(self._install_verify_delay)
                     continue
 
                 last_detail = detail
-                elapsed = time.monotonic() - started
-                ctx.log(
-                    f"install status check {attempt}/{self._install_verify_attempts} "
-                    f"({elapsed:.0f}s elapsed):\n{detail.raw}"
-                )
                 if detail.is_installed:
+                    ctx.log(f"install complete:\n{detail.raw}")
                     return True, last_detail
 
-                stalled = detail.status.strip().lower().startswith("imported")
-                if stalled and elapsed >= self._install_stall_seconds:
-                    ctx.log(
-                        f"status is still {detail.status!r} after {elapsed:.0f}s — the "
-                        "install doesn't appear to have started; giving up rather than "
-                        "waiting out the full timeout",
-                        level="warning",
-                    )
-                    return False, last_detail
+                ctx.log(f"status: {detail.status}")
+                if "%" in detail.status:
+                    uncapped = True
 
-                if attempt < self._install_verify_attempts:
+                if not uncapped:
+                    elapsed = time.monotonic() - started
+                    stalled = detail.status.strip().lower().startswith("imported")
+                    if stalled and elapsed >= self._install_stall_seconds:
+                        ctx.log(
+                            f"status is still {detail.status!r} after {elapsed:.0f}s — the "
+                            "install doesn't appear to have started; giving up rather than "
+                            "waiting out the full timeout",
+                            level="warning",
+                        )
+                        return False, last_detail
+
+                if uncapped or attempt < self._install_verify_attempts:
                     time.sleep(self._install_verify_delay)
             return False, last_detail
         finally:

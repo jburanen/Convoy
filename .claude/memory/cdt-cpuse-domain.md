@@ -80,22 +80,30 @@ CLI syntax — Check Point changes these across releases.)
     same trust-the-exit-code gap already fixed for import. But it also gives
     up early, before the full 15 minutes, if Status is still "Imported" (never
     even started) after `install_stall_seconds` (default 90s) — a genuinely
-    running install moves off "Imported" well before then. Reboot-required
-    packages drop the SSH session partway through polling (expected, not a
-    failure); a dropped connection there triggers a reconnect rather than
-    failing the job.
+    running install moves off "Imported" well before then. Once Status shows
+    a real percentage (e.g. "Installing 45%"), the attempts budget is dropped
+    entirely (operator-directed, 2026-07-22) — a real install can legitimately
+    run well past 15 minutes, so from that point on it polls every 30s
+    indefinitely until Installed. Reboot-required packages drop the SSH
+    session partway through polling (expected, not a failure); a dropped
+    connection there triggers a reconnect rather than failing the job.
   - **Job log verbosity for troubleshooting** (operator-requested, 2026-07-22,
     after an install failed a second time): the Jobs tab log is the primary
-    troubleshooting surface, so it now carries CPUSE's own raw text rather
-    than just our derived summary. `PackageState.raw` holds the full
-    `show installer package <id>` block (set by `parse_package_detail`);
-    `_wait_until_installed` logs that whole block on *every* poll, not just
-    the Status line, and includes the last one verbatim in the final
-    `CPUSEError` if the install never confirms. `CPUSE.verify`/`install`/
+    troubleshooting surface, so CPUSE's own raw text shows up there instead of
+    just our derived summary — but concisely: each poll logs just the Status
+    line (`PackageState.status`), with its own timestamp like any job log
+    line, and the full `show installer package <id>` block
+    (`PackageState.raw`, set by `parse_package_detail`) is only logged once,
+    at the end — when Status finally shows Installed, or verbatim inside the
+    raised `CPUSEError` if it never does. `CPUSE.verify`/`install`/
     `uninstall`/`import_local`/`import_cloud` now return the command's raw
     stdout (previously discarded on success) and `PatchingService` logs it
     right after the command returns — CPUSE can print something useful to
-    stdout even when the exit code is 0.
+    stdout even when the exit code is 0. CPUSE's own "Installation log:"
+    field (`PackageState.installation_log`) is saved on the job record
+    (`JobRecord.install_log`, store schema v13) once available, and the Jobs
+    tab renders it as a permanent line under the job row — the same pattern
+    as the package hash lines on the Packages tab.
 - **Management servers are patched with CPUSE locally**, not via CDT.
 
 **CDT — Central Deployment Tool** (reference: sk111158; confirmed via docs MCP)

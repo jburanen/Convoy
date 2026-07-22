@@ -264,6 +264,12 @@ tr.job-row:hover td { background: var(--badge-bg); }
   white-space: nowrap;
 }
 
+/* Installation log line (install jobs only, once CPUSE reports one) — grouped
+   under its job row the same way a package's hash lines are grouped under the
+   filename row: the job row's border moves down to this line instead. */
+tr.job-row:has(+ tr.job-install-log-row) td { border-bottom: none; }
+tr.job-install-log-row td { padding-top: 0; }
+
 /* Packages table: filename/size, sha1(+retention hint), sha256 form one
    grouped three-line entry, so only the last (sha256) row carries the
    separator below it. .pkg-actions is excluded — it's a rowspan="3" cell

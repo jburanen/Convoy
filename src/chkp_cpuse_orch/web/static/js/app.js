@@ -1929,7 +1929,7 @@ const openJobLogs = new Set(); // job ids whose progress log is expanded
 // server's newly-cached "refreshed …" timestamp and install picker only
 // show up after a manual reload/tab switch, since nothing else re-fetches
 // #servers-table on a timer.
-const IMPORT_JOB_KINDS = ["mgmt.import", "mgmt.import_cloud"];
+const IMPORT_JOB_KINDS = ["cpuse.import", "cpuse.import_cloud"];
 const lastJobStatus = new Map();
 const TERMINAL_JOB_STATUSES = ["succeeded", "failed", "cancelled", "interrupted"];
 
@@ -1965,6 +1965,25 @@ function renderJobRow(row, job) {
   );
 }
 
+// CPUSE's own "Installation log:" field, once an install job has one —
+// a permanent line right under the job row (like the package hash lines
+// on the Packages tab), inserted/updated/removed as it appears/changes.
+// Must run after `row` is attached to the table (`.after()` is a no-op on
+// a detached node).
+function syncInstallLogRow(row, job) {
+  let logRow = row.nextElementSibling;
+  if (!logRow || !logRow.classList.contains("job-install-log-row")) logRow = null;
+  if (job.install_log) {
+    if (!logRow) {
+      logRow = el("tpl-job-install-log-row");
+      row.after(logRow);
+    }
+    logRow.querySelector(".job-install-log").textContent = `Installation log: ${job.install_log}`;
+  } else if (logRow) {
+    logRow.remove();
+  }
+}
+
 function wireJobRow(row, jobId) {
   row.dataset.jobId = jobId;
   row.addEventListener("click", () => toggleJobLog(jobId, row));
@@ -1997,7 +2016,10 @@ async function loadJobs() {
     existingRows.every((row, i) => row.dataset.jobId === jobs[i].id);
 
   if (sameShape) {
-    jobs.forEach((job, i) => renderJobRow(existingRows[i], job));
+    jobs.forEach((job, i) => {
+      renderJobRow(existingRows[i], job);
+      syncInstallLogRow(existingRows[i], job);
+    });
   } else {
     tbody.replaceChildren();
     for (const job of jobs) {
@@ -2005,6 +2027,7 @@ async function loadJobs() {
       wireJobRow(row, job.id);
       renderJobRow(row, job);
       tbody.appendChild(row);
+      syncInstallLogRow(row, job);
       if (openJobLogs.has(job.id)) tbody.appendChild(buildJobLogRow(job.id));
     }
   }

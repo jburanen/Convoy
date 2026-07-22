@@ -62,6 +62,10 @@ class JobRecord(BaseModel):
     finished_at: datetime | None = None
     error: str | None = None
     cancel_requested: bool = False
+    # CPUSE's own "Installation log:" field from `show installer package <id>`,
+    # captured once available (install jobs only) — shown on the Jobs tab as
+    # its own line, like the package hash lines on the Packages tab.
+    install_log: str | None = None
 
 
 class JobEvent(BaseModel):
@@ -358,6 +362,11 @@ _MIGRATIONS: tuple[str, ...] = (
     # next refresh).
     """
     ALTER TABLE server_state ADD COLUMN installable TEXT NOT NULL DEFAULT '[]';
+    """,
+    # v13: capture CPUSE's own "Installation log:" field (from
+    # `show installer package <id>`) on the job record, for the Jobs tab.
+    """
+    ALTER TABLE jobs ADD COLUMN install_log TEXT;
     """,
 )
 
@@ -759,8 +768,8 @@ class Store:
         with self._connect() as conn:
             conn.execute(
                 "INSERT INTO jobs (id, kind, target, environment, params, status, created_at,"
-                " started_at, finished_at, error, cancel_requested)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " started_at, finished_at, error, cancel_requested, install_log)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     job.id,
                     job.kind,
@@ -773,6 +782,7 @@ class Store:
                     _iso(job.finished_at),
                     job.error,
                     int(job.cancel_requested),
+                    job.install_log,
                 ),
             )
 
@@ -814,6 +824,13 @@ class Store:
                 "UPDATE jobs SET status = ?, finished_at = ?, error = ? WHERE id = ?",
                 (status.value, utcnow().isoformat(), error, job_id),
             )
+
+    def set_install_log(self, job_id: str, text: str) -> None:
+        """Save CPUSE's own "Installation log:" field on the job record, once
+        `show installer package <id>` reports one — best-effort UI detail,
+        not tied to the job's terminal state."""
+        with self._connect() as conn:
+            conn.execute("UPDATE jobs SET install_log = ? WHERE id = ?", (text, job_id))
 
     def request_cancel(self, job_id: str) -> None:
         with self._connect() as conn:
@@ -939,6 +956,7 @@ def _job_from_row(row: sqlite3.Row) -> JobRecord:
         finished_at=_dt(row["finished_at"]),
         error=row["error"],
         cancel_requested=bool(row["cancel_requested"]),
+        install_log=row["install_log"],
     )
 
 
