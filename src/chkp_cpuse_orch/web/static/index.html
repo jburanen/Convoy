@@ -229,7 +229,7 @@
             <th></th>
           </tr>
         </thead>
-        <tbody><!-- tpl-package-row / tpl-package-detail instances --></tbody>
+        <tbody><!-- tpl-package-row / tpl-package-sha1-row / tpl-package-sha256-row instances --></tbody>
       </table>
     </section>
 
@@ -672,6 +672,9 @@
   </tr>
 </template>
 
+<!-- A package is three rows: filename/size/Keep, sha1 (+ retention hint), and
+     sha256. The action cell spans all three so there's no empty cell (and its
+     padding) under the hashes to push them away from the filename row. -->
 <template id="tpl-package-row">
   <tr class="pkg-row">
     <td class="pkg-filename mono"></td>
@@ -681,17 +684,20 @@
         <input type="checkbox" class="pkg-pin"> Keep
       </label>
     </td>
-    <td><button class="btn-delete small danger">Delete</button></td>
+    <td class="pkg-actions" rowspan="3"><button class="btn-delete small danger">Delete</button></td>
   </tr>
 </template>
 
-<!-- Second, detail line for a package: hashes under filename/size, the
-     retention hint under the Retention column so it lines up with the
-     checkbox directly above it. -->
-<template id="tpl-package-detail">
-  <tr class="pkg-detail-row">
-    <td colspan="2" class="pkg-hashes mono muted"></td>
+<template id="tpl-package-sha1-row">
+  <tr class="pkg-sha1-row">
+    <td colspan="2" class="pkg-sha1 mono muted"></td>
     <td class="pkg-expiry muted"></td>
+  </tr>
+</template>
+
+<template id="tpl-package-sha256-row">
+  <tr class="pkg-sha256-row">
+    <td colspan="2" class="pkg-sha256 mono muted"></td>
     <td></td>
   </tr>
 </template>

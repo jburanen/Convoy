@@ -1574,12 +1574,14 @@ async function loadPackages() {
     row.querySelector(".pkg-filename").textContent = pkg.filename;
     row.querySelector(".pkg-size").textContent = fmtBytes(pkg.size);
 
-    const detail = el("tpl-package-detail");
-    detail.querySelector(".pkg-hashes").textContent = `sha1: ${pkg.sha1}  sha256: ${pkg.sha256}`;
+    const sha1Row = el("tpl-package-sha1-row");
+    sha1Row.querySelector(".pkg-sha1").textContent = `sha1: ${pkg.sha1}`;
+    const sha256Row = el("tpl-package-sha256-row");
+    sha256Row.querySelector(".pkg-sha256").textContent = `sha256: ${pkg.sha256}`;
 
     // Retention: ticked "Keep" == pinned (no expiry). Otherwise show the deadline.
     const pin = row.querySelector(".pkg-pin");
-    const expiry = detail.querySelector(".pkg-expiry");
+    const expiry = sha1Row.querySelector(".pkg-expiry");
     const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
     const renderRetention = (rec) => {
       pin.checked = rec.expires_at == null;
@@ -1613,7 +1615,8 @@ async function loadPackages() {
       } catch (e) { toast("Delete failed: " + e.message); }
     });
     tbody.appendChild(row);
-    tbody.appendChild(detail);
+    tbody.appendChild(sha1Row);
+    tbody.appendChild(sha256Row);
   }
   await populateCdtSelectors(); // keep the CDT dropdowns in sync with packages/servers
 }

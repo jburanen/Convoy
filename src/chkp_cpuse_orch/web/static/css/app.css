@@ -255,11 +255,15 @@ th { color: var(--muted); font-weight: 600; font-size: 0.85rem; }
 tr.job-row { cursor: pointer; }
 tr.job-row:hover td { background: var(--badge-bg); }
 
-/* Packages table: filename/size + hashes/retention-hint form one grouped
-   two-line entry, so only the detail row carries the separator below it. */
-tr.pkg-row td { border-bottom: none; }
-tr.pkg-detail-row td { padding-top: 0; }
+/* Packages table: filename/size, sha1(+retention hint), sha256 form one
+   grouped three-line entry, so only the last (sha256) row carries the
+   separator below it. */
+tr.pkg-row td, tr.pkg-sha1-row td { border-bottom: none; }
+tr.pkg-sha1-row td, tr.pkg-sha256-row td { padding-top: 0; }
 .pkg-expiry.warn { color: var(--warn); font-weight: 600; }
+/* Nowrap so the column auto-sizes to fit "expires M/D/YYYY" on one line
+   instead of shrinking to the Keep checkbox's width and wrapping the hint. */
+.pkg-retention, .pkg-expiry { white-space: nowrap; }
 
 /* ---- forms & buttons ---- */
 form { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin: 0.5rem 0; }
