@@ -266,8 +266,11 @@ tr.job-row:hover td { background: var(--badge-bg); }
 
 /* Packages table: filename/size, sha1(+retention hint), sha256 form one
    grouped three-line entry, so only the last (sha256) row carries the
-   separator below it. */
-tr.pkg-row td, tr.pkg-sha1-row td { border-bottom: none; padding-bottom: 0; }
+   separator below it. .pkg-actions is excluded — it's a rowspan="3" cell
+   that structurally belongs to tr.pkg-row, so this rule was also wiping its
+   border-bottom, leaving the divider line short of the right edge under
+   the Delete button for the whole three-row span. */
+tr.pkg-row td:not(.pkg-actions), tr.pkg-sha1-row td { border-bottom: none; padding-bottom: 0; }
 tr.pkg-sha1-row td, tr.pkg-sha256-row td { padding-top: 0; }
 .pkg-expiry.warn { color: var(--warn); font-weight: 600; }
 /* Nowrap so the column auto-sizes to fit "expires M/D/YYYY" on one line

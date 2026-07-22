@@ -4,15 +4,20 @@ Glues inventory + credential store + package store + CPUSE wrapper + job runner
 into the operations the web UI exposes per management server:
 
 - **detect**        — live `show installer packages` (source of truth for the UI)
-- **import**        — SFTP the package to a temp path on the host, `installer
-  import local`, then remove the temp copy. `installer import local` returns
-  before CPUSE has actually finished importing (it processes the file
-  asynchronously — "determining package type" → "examining the file" → ...) —
-  removing the temp file right after the command returns raced that and
-  produced a job that reported success while CPUSE itself then failed with
-  "package file is missing" (observed 2026-07-22). So: poll `show installer
-  packages imported` until the package actually appears before cleaning up
-  and declaring the job successful.
+- **import**        — SFTP the package to a temp path on the host, verify its
+  sha1 on the host itself (catches a corrupted/truncated transfer before
+  `installer import` ever touches it), `installer import local`, then remove
+  the temp copy. `installer import local` returns before CPUSE has actually
+  finished importing (it processes the file asynchronously — "determining
+  package type" → "examining the file" → ...) — removing the temp file right
+  after the command returns raced that and produced a job that reported
+  success while CPUSE itself then failed with "package file is missing"
+  (observed 2026-07-22). So: poll `show installer packages imported` until
+  the package actually appears before cleaning up and declaring the job
+  successful — matching by filename *or* by the version+Take pair read out
+  of the package's own hf.config (see hfconfig.py), since CPUSE renders some
+  package types (JHFs) as a human-readable string with no relation to the
+  uploaded filename (e.g. "R82.10 Jumbo Hotfix Accumulator Take 24").
 - **import_cloud**  — direct the host to fetch + import a package from Check
   Point's cloud repository by identifier; no local file involved
 - **install**        — optional `installer verify`, then `installer install`
@@ -32,8 +37,11 @@ import time
 from dataclasses import dataclass, field
 
 from ..cpuse import CPUSE, DEFAULT_STAGING_DIR, GaiaShell, PackageScope, PackageState
+from ..cpuse import extract_take as cpuse_extract_take
+from ..cpuse import extract_version as cpuse_extract_version
 from ..credentials import CredentialBundle, JobCredentialVault
 from ..errors import CPUSEError, JobError, TransportError
+from ..hfconfig import HfConfig, extract_hf_config
 from ..inventory import Host
 from ..jobs import JobContext, JobRunner
 from ..packages import PackageStore
@@ -230,6 +238,8 @@ class PatchingService:
         package = str(ctx.job.params["package"])
         local_path = self._packages.path_for(package)
         local_size = local_path.stat().st_size
+        expected_sha1 = self._packages.get(package).sha1
+        hf_config = extract_hf_config(local_path)
         remote_path = posixpath.join(self._staging_dir, package)
 
         creds = job_run_credentials(connector, self._vault, ctx.job)
@@ -244,6 +254,15 @@ class PatchingService:
                 )
             ctx.log("upload complete and size-verified")
 
+            ctx.log("verifying sha1 of the uploaded copy before import")
+            remote_sha1 = self._remote_sha1(client, remote_path)
+            if remote_sha1 != expected_sha1.lower():
+                raise TransportError(
+                    f"sha1 mismatch after upload: expected {expected_sha1}, "
+                    f"remote copy at {remote_path} hashes to {remote_sha1}"
+                )
+            ctx.log("sha1 verified — remote copy matches the stored package")
+
             ctx.raise_if_cancelled()  # last safe stop before mutating CPUSE state
             ctx.log("importing into CPUSE repository (installer import local)")
             cpuse = CPUSE(client, shell=self._shell)
@@ -253,7 +272,7 @@ class PatchingService:
                 "confirming via `show installer packages imported` before cleanup"
             )
 
-            if not self._wait_until_imported(cpuse, package, ctx):
+            if not self._wait_until_imported(cpuse, package, hf_config, ctx):
                 raise CPUSEError(
                     f"{package} still isn't listed by `show installer packages imported` "
                     f"after waiting — NOT removing the temp copy at {remote_path}; check "
@@ -272,16 +291,47 @@ class PatchingService:
         finally:
             client.close()
 
-    def _wait_until_imported(self, cpuse: CPUSE, package_filename: str, ctx: JobContext) -> bool:
+    def _remote_sha1(self, client: Transport, remote_path: str) -> str:
+        """sha1 of the just-uploaded file, computed on the host itself — catches
+        a corrupted/truncated transfer before `installer import` ever runs
+        (the size check alone wouldn't notice bit-level corruption)."""
+        result = client.run(f"sha1sum {remote_path}")
+        if not result.ok:
+            detail = result.stderr.strip() or result.stdout.strip()
+            raise TransportError(f"could not compute remote sha1 for {remote_path}: {detail}")
+        digest = result.stdout.split()[0] if result.stdout.split() else ""
+        if not digest:
+            raise TransportError(
+                f"unexpected `sha1sum` output for {remote_path}: {result.stdout!r}"
+            )
+        return digest.lower()
+
+    def _wait_until_imported(
+        self, cpuse: CPUSE, package_filename: str, hf_config: HfConfig | None, ctx: JobContext
+    ) -> bool:
         """Poll `show installer packages imported` for the just-uploaded file.
-        Matches by exact identifier or by its filename stem, since CPUSE's
-        parsed identifier is usually the filename itself but formatting has
-        drifted across Gaia versions (see cpuse.parse_packages)."""
+        A candidate matches if *either* its identifier is (or contains the
+        stem of) the uploaded filename, *or* — since CPUSE renders some
+        package types (JHFs) as a human-readable string unrelated to the
+        filename, e.g. "R82.10 Jumbo Hotfix Accumulator Take 24" — its
+        identifier's own version+Take equal the ones recorded in the
+        package's hf.config. Either check alone can mismatch depending on
+        the package type, so both run and either is sufficient."""
         stem = package_filename.rsplit(".", 1)[0]
+        expect_version = hf_config.direct_base_version if hf_config else None
+        expect_take = hf_config.take_number if hf_config else None
         for attempt in range(1, self._import_verify_attempts + 1):
             imported = cpuse.list_packages(PackageScope.IMPORTED)
-            if any(p.identifier == package_filename or stem in p.identifier for p in imported):
-                return True
+            for pkg in imported:
+                if pkg.identifier == package_filename or stem in pkg.identifier:
+                    return True
+                if (
+                    expect_version is not None
+                    and expect_take is not None
+                    and cpuse_extract_version(pkg.identifier) == expect_version
+                    and cpuse_extract_take(pkg.identifier) == expect_take
+                ):
+                    return True
             if attempt < self._import_verify_attempts:
                 ctx.log(
                     f"not yet listed as imported (check {attempt}/{self._import_verify_attempts}) "

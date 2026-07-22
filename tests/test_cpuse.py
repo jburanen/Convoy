@@ -75,7 +75,9 @@ def test_import_cloud_rejects_suspicious_id() -> None:
 def test_list_packages_uses_scope() -> None:
     runner = FakeRunner(stdout="There are no imported packages")
     CPUSE(runner, shell=GaiaShell.CLISH).list_packages(PackageScope.IMPORTED)
-    assert runner.commands == ["show installer packages imported"]
+    # A read-only query first overrides Gaia's config-database lock (in case
+    # another admin session is holding it) so it isn't blocked behind it.
+    assert runner.commands == ["lock database override", "show installer packages imported"]
 
 
 def test_failure_raises_cpuse_error_with_detail() -> None:

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -25,6 +27,7 @@ from .fakes import DA_BUILD, SHOW_PACKAGES_ALL, FakeTransport, make_factory
 
 PKG = "jhf_t89.tgz"
 PKG_CONTENT = b"fake jumbo hotfix bytes"
+PKG_SHA1 = hashlib.sha1(PKG_CONTENT).hexdigest()
 
 
 @pytest.fixture
@@ -78,12 +81,13 @@ def inventory() -> Inventory:
 def transport() -> FakeTransport:
     return FakeTransport(
         responses={
-            # More specific key first — FakeTransport._lookup matches in
-            # insertion order, and this must win over the generic "show
+            # More specific keys first — FakeTransport._lookup matches in
+            # insertion order, and these must win over the generic "show
             # installer packages" below for _wait_until_imported's poll.
             "show installer packages imported": f"{PKG}      Imported",
             "show installer packages": SHOW_PACKAGES_ALL,
             "show installer status build": DA_BUILD,
+            "sha1sum": f"{PKG_SHA1}  /var/log/upload/{PKG}",
         }
     )
 
@@ -176,8 +180,73 @@ def test_import_job_uploads_then_imports(
     )
     messages = " | ".join(e.message for e in store.events(job.id))
     assert "upload complete" in messages
+    assert "sha1 verified" in messages
     assert "confirmed: package is listed as imported" in messages
     assert transport.closed is True
+    # sha1 is checked before the import command ever runs.
+    sha1_idx = next(i for i, c in enumerate(transport.commands) if "sha1sum" in c)
+    import_idx = next(i for i, c in enumerate(transport.commands) if "installer import" in c)
+    assert sha1_idx < import_idx
+
+
+def test_import_job_matches_by_hf_config_when_cpuse_uses_a_human_readable_identifier(
+    store: Store, creds: CredentialStore, inventory: Inventory, tmp_path: Path
+) -> None:
+    # CPUSE renders some package types (JHFs) in `show installer packages
+    # imported` as a human-readable string with no relation to the uploaded
+    # filename — filename/stem matching alone would never find this one.
+    hf_config_text = (
+        b"2474\n"
+        b"PATCH_NAME=BUNDLE_R82_10_JUMBO_HF_MAIN\n"
+        b"TAKE_NUMBER=24\n"
+        b"BRANCH_NAME=R82_10_jumbo_hf_main\n"
+        b"PACKAGE_TYPE=BUNDLE\n"
+        b"CATEGORY=JUMBO\n"
+        b"DIRECT_BASE_VERSION=R82.10\n"
+    )
+    inner = io.BytesIO()
+    with tarfile.open(fileobj=inner, mode="w") as tar:
+        info = tarfile.TarInfo("hf.config")
+        info.size = len(hf_config_text)
+        tar.addfile(info, io.BytesIO(hf_config_text))
+    inner_bytes = inner.getvalue()
+
+    package_name = "Check_Point_R82_10_JUMBO_HF_MAIN_Bundle_T24_FULL.tgz"
+    outer = io.BytesIO()
+    with tarfile.open(fileobj=outer, mode="w:gz") as tar:
+        info = tarfile.TarInfo("metadata.tar")
+        info.size = len(inner_bytes)
+        tar.addfile(info, io.BytesIO(inner_bytes))
+    package_content = outer.getvalue()
+    package_sha1 = hashlib.sha1(package_content).hexdigest()
+
+    ps = PackageStore(store, tmp_path / "packages-hfconfig")
+    ps.add_stream(package_name, io.BytesIO(package_content))
+
+    _assign(store, inventory, "mgmt-01")
+    transport = FakeTransport(
+        responses={
+            "show installer packages imported": (
+                "R82.10 Jumbo Hotfix Accumulator Take 24      Imported"
+            ),
+            "show installer packages": SHOW_PACKAGES_ALL,
+            "show installer status build": DA_BUILD,
+            "sha1sum": f"{package_sha1}  /var/log/upload/{package_name}",
+        }
+    )
+    registry = EnvironmentRegistry()
+    registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
+    service = PatchingService(
+        registry=registry, packages=ps, runner=JobRunner(store), vault=JobCredentialVault()
+    )
+
+    job = service.submit_import("default", "mgmt-01", package_name)
+    _run(service)
+
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.SUCCEEDED, finished.error
+    messages = " | ".join(e.message for e in store.events(job.id))
+    assert "confirmed: package is listed as imported" in messages
 
 
 def test_import_job_fails_closed_on_size_mismatch(
@@ -192,6 +261,23 @@ def test_import_job_fails_closed_on_size_mismatch(
     assert finished.error is not None and "size mismatch" in finished.error
     # And we never went on to import a corrupt upload.
     assert not any("installer import" in c for c in transport.commands)
+
+
+def test_import_job_fails_closed_on_sha1_mismatch(
+    service: PatchingService, store: Store, transport: FakeTransport
+) -> None:
+    # Right size, wrong content — e.g. bit-level corruption in transit, which
+    # the size check alone wouldn't catch.
+    transport.responses["sha1sum"] = "0" * 40 + "  /var/log/upload/" + PKG
+    job = service.submit_import("default", "mgmt-01", PKG)
+    _run(service)
+
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.FAILED
+    assert finished.error is not None and "sha1 mismatch" in finished.error
+    # Never imported (or cleaned up) a copy that failed verification.
+    assert not any("installer import" in c for c in transport.commands)
+    assert not any("rm -f" in c for c in transport.commands)
 
 
 def test_import_job_removes_temp_copy_after_import(
@@ -238,6 +324,7 @@ def test_import_job_fails_and_keeps_temp_copy_if_never_listed_as_imported(
             "show installer packages imported": "",
             "show installer packages": SHOW_PACKAGES_ALL,
             "show installer status build": DA_BUILD,
+            "sha1sum": f"{PKG_SHA1}  /var/log/upload/{PKG}",
         }
     )
     _assign(store, inventory, "mgmt-01")

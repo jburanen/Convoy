@@ -82,12 +82,18 @@ def _pkg_text(pkg: PackageState) -> str:
     return f"{pkg.identifier} {pkg.description}"
 
 
-def _extract_version(text: str) -> str | None:
+def extract_version(text: str) -> str | None:
+    """Major version token (e.g. "R82.10") out of a package identifier or
+    description, in whichever of the two dot/underscore conventions it uses.
+    Public — also used by services/patching.py to match an imported package
+    against the version recorded in its hf.config (see hfconfig.py)."""
     m = _VERSION_RE.search(text)
     return f"R{m.group(1)}.{m.group(2)}" if m else None
 
 
-def _extract_take(text: str) -> int | None:
+def extract_take(text: str) -> int | None:
+    """Take number out of a package identifier/description ("Take 24" or
+    "..._T24..."). Public for the same reason as extract_version."""
     m = _TAKE_RE.search(text) or _TAKE_FILENAME_RE.search(text)
     return int(m.group(1)) if m else None
 
@@ -104,15 +110,15 @@ def summarize_jumbo(packages: list[PackageState]) -> JumboSummary:
         text = _pkg_text(pkg)
         if not _JUMBO_RE.search(text):
             continue
-        take = _extract_take(text)
+        take = extract_take(text)
         if take is not None and take > best_take:
             best_take = take
-            version = _extract_version(text) or version
+            version = extract_version(text) or version
     if version is None:
         # No installed JHF found — fall back to any installed package's version token.
         for pkg in packages:
             if pkg.is_installed:
-                version = _extract_version(_pkg_text(pkg))
+                version = extract_version(_pkg_text(pkg))
                 if version:
                     break
     return JumboSummary(version=version, jhf=f"Take {best_take}" if best_take >= 0 else None)
@@ -140,6 +146,7 @@ class CPUSE:
         This is the source of truth the UI reflects — always *detected* state,
         never our last action's assumed outcome.
         """
+        self._override_lock()
         result = self._clish(f"show installer packages {scope.value}")
         if not result.ok:
             raise CPUSEError(f"failed to list packages: {_failure_detail(result)}")
@@ -147,10 +154,20 @@ class CPUSE:
 
     def agent_build(self) -> str:
         """`show installer status build` → Deployment Agent build string."""
+        self._override_lock()
         result = self._clish("show installer status build")
         if not result.ok:
             raise CPUSEError(f"failed to read DA build: {_failure_detail(result)}")
         return result.stdout.strip()
+
+    def _override_lock(self) -> None:
+        """`lock database override` — force-release Gaia's config-database
+        lock (e.g. held by another admin session) so the read query that
+        follows isn't blocked behind it. Best-effort: if nothing is locked
+        this is a harmless no-op, and a failure here shouldn't abort the
+        refresh — the read command itself will surface a clear error if it's
+        genuinely still blocked."""
+        self._clish("lock database override")
 
     # -- lifecycle (mutating; caller must gate on safety checks) ---------------
 

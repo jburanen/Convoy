@@ -21,8 +21,12 @@ UI is the primary interface (see [[architecture]]); the CLI is secondary.
   - **Two import paths** (2026-07-22): bulk-import controls above the servers table,
     targeting one or more checkbox-selected servers, sequentially (not parallel —
     same pattern as "Refresh all"): (1) upload a package from the local store, SFTP
-    it to a staging path, `installer import local`, **confirm via `show installer
-    packages imported`**, then remove the temp copy; (2) `import_cloud()` — give
+    it to a staging path, **verify its sha1 on the host itself** (`sha1sum`, raw
+    shell command — catches transit corruption the size check alone would miss),
+    `installer import local`, **confirm via `show installer packages imported`**
+    (matching by filename *or* by hf.config's version+Take — see
+    [[cdt-cpuse-domain]] for why filename alone isn't reliable), then remove the
+    temp copy; (2) `import_cloud()` — give
     CPUSE a package identifier and it fetches + imports directly from Check Point's
     cloud repo (`installer import <ID>`, no "local", no upload at all — confirmed
     via docs MCP against sk92449's `show installer packages available` / `installer

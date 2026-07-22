@@ -24,6 +24,26 @@ CLI syntax — Check Point changes these across releases.)
   - `show installer packages all|imported|installed`; `show installer status build`
   - `not-interactive` suppresses prompts — essential for automation.
   - On MDPS-enabled boxes, `set mdps environment mplane` first.
+  - **`lock database override` before the two read/refresh commands above**
+    (operator-confirmed, 2026-07-22) — Gaia's config-database lock (e.g. held by
+    another admin session) can otherwise block them from running correctly.
+    `CPUSE._override_lock()` sends it before every `list_packages()`/
+    `agent_build()` call; best-effort (a failure here doesn't abort the refresh —
+    the read command itself surfaces a clear error if genuinely still blocked).
+  - **A package's identifier in `show installer packages imported` is NOT
+    reliably its uploaded filename** (operator-confirmed, 2026-07-22). Some
+    package types (JHFs) are rendered as a human-readable string instead, e.g.
+    "R82.10 Jumbo Hotfix Accumulator Take 24" or "...Take 19" — no relation to
+    the uploaded "Check_Point_R82_10_..._Bundle_T24_FULL.tgz". The reliable
+    cross-reference is `hf.config`, a small file buried a few tar/tgz layers
+    inside the package archive (`PATCH_NAME`, `TAKE_NUMBER`, `BRANCH_NAME`,
+    `PACKAGE_TYPE`, `CATEGORY`, `DIRECT_BASE_VERSION` — see `hfconfig.py`).
+    `PatchingService._wait_until_imported` matches a candidate by *either* its
+    filename/stem *or* its own version+Take (via `cpuse.extract_version`/
+    `extract_take`, same regexes the UI summary line uses) equaling hf.config's
+    `DIRECT_BASE_VERSION`/`TAKE_NUMBER` — either is sufficient, since which
+    naming convention CPUSE picks isn't reliably predictable from hf.config
+    alone.
 - **Management servers are patched with CPUSE locally**, not via CDT.
 
 **CDT — Central Deployment Tool** (reference: sk111158; confirmed via docs MCP)

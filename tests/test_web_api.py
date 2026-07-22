@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -68,14 +69,16 @@ CANDIDATES_CSV = "Object Name,IP,Upgrade Order\nfw-a1,192.0.2.31,1\nfw-a2,192.0.
 
 @pytest.fixture
 def transport() -> FakeTransport:
+    uploaded_sha1 = hashlib.sha1(b"x" * 64).hexdigest()  # matches _upload_package's default content
     return FakeTransport(
         responses={
-            # More specific key first — FakeTransport._lookup matches in
-            # insertion order, and this must win over the generic "show
+            # More specific keys first — FakeTransport._lookup matches in
+            # insertion order, and these must win over the generic "show
             # installer packages" below for PatchingService._wait_until_imported.
             "show installer packages imported": "jhf.tgz      Imported",
             "show installer packages": SHOW_PACKAGES_ALL,
             "show installer status build": DA_BUILD,
+            "sha1sum": f"{uploaded_sha1}  /var/log/upload/jhf.tgz",
             "cat /opt/CPcdt/orch_candidates.csv": CANDIDATES_CSV,
             "pgrep": (1, ""),  # no CDT process running by default
             "test -x": (0, ""),  # CDT binary present
