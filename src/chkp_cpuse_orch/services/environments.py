@@ -132,6 +132,12 @@ class EnvironmentManager:
             raise InventoryError(f"unknown environment: {name!r}")
         self.rebuild()
 
+    def set_skip_verify_default(self, name: str, skip: bool) -> None:
+        """Set the Management tab's default for the per-install "skip verify"
+        checkbox — purely a UI default, doesn't change what any command does."""
+        if not self._store.set_environment_skip_verify_default(name, skip):
+            raise InventoryError(f"unknown environment: {name!r}")
+
     def set_credential_storage(self, name: str, enabled: bool) -> int:
         """Enable or disable credential storage for an environment.
 

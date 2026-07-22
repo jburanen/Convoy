@@ -243,6 +243,10 @@ class EnvironmentKindIn(BaseModel):
     is_mds: bool
 
 
+class SkipVerifyDefaultIn(BaseModel):
+    skip_verify_by_default: bool
+
+
 class EnvServerIn(BaseModel):
     name: str
     address: str
@@ -581,6 +585,10 @@ def _register_routes(app: FastAPI) -> None:
     @app.get("/api/environments")
     def environments(request: Request) -> list[dict[str, Any]]:
         service = _service(request)
+        store: Store = request.app.state.store
+        skip_verify_by_default = {
+            row.name: row.skip_verify_by_default for row in store.list_environments()
+        }
         return [
             {
                 "name": env,
@@ -589,6 +597,7 @@ def _register_routes(app: FastAPI) -> None:
                 .get(env)
                 .credential_storage_enabled,
                 "is_mds": _registry(request).get(env).is_mds,
+                "skip_verify_by_default": skip_verify_by_default.get(env, False),
             }
             for env in _registry(request).names()
         ]
@@ -646,6 +655,20 @@ def _register_routes(app: FastAPI) -> None:
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
         return {"is_mds": body.is_mds}
+
+    @app.post("/api/environments/{env}/skip-verify-default")
+    def set_skip_verify_default(
+        env: str, body: SkipVerifyDefaultIn, request: Request
+    ) -> dict[str, Any]:
+        """Set whether the Management tab's "skip verify" install checkbox is
+        pre-checked by default in this environment — some environments
+        chronically fail `installer verify` for reasons unrelated to the
+        install itself. Purely a UI default; never skips verify on its own."""
+        try:
+            _envmgr(request).set_skip_verify_default(env, body.skip_verify_by_default)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        return {"skip_verify_by_default": body.skip_verify_by_default}
 
     @app.get("/api/environments/{env}/servers")
     def env_servers(env: str, request: Request) -> list[dict[str, Any]]:

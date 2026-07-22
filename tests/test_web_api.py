@@ -180,6 +180,7 @@ def test_environments_endpoint(client: TestClient) -> None:
             "management_servers": 1,
             "credential_storage_enabled": True,
             "is_mds": False,
+            "skip_verify_by_default": False,
         }
     ]
 
@@ -211,6 +212,28 @@ def test_set_environment_kind_toggles_is_mds(client: TestClient) -> None:
 
 def test_set_environment_kind_unknown_environment_404s(client: TestClient) -> None:
     resp = client.post("/api/environments/nope/kind", json={"is_mds": True})
+    assert resp.status_code == 404
+
+
+def test_set_skip_verify_default(client: TestClient) -> None:
+    client.post("/api/environments", json={"name": "dmz"})
+    envs = {e["name"]: e["skip_verify_by_default"] for e in client.get("/api/environments").json()}
+    assert envs["dmz"] is False  # new environments default to unchecked
+
+    resp = client.post(
+        "/api/environments/dmz/skip-verify-default", json={"skip_verify_by_default": True}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"skip_verify_by_default": True}
+    envs = {e["name"]: e["skip_verify_by_default"] for e in client.get("/api/environments").json()}
+    assert envs["dmz"] is True
+    assert envs["default"] is False  # unaffected
+
+
+def test_set_skip_verify_default_unknown_environment_404s(client: TestClient) -> None:
+    resp = client.post(
+        "/api/environments/nope/skip-verify-default", json={"skip_verify_by_default": True}
+    )
     assert resp.status_code == 404
 
 

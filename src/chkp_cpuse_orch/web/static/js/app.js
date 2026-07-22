@@ -127,6 +127,10 @@ function storageEnabled(name = currentEnv) {
   return envStorage[name] !== false; // unknown → assume enabled (safe default)
 }
 
+// Per-environment default for the Management tab's "skip verify" install
+// checkbox, refreshed by loadEnvironments — see loadServers().
+let envSkipVerifyDefault = {}; // name -> boolean
+
 // Sentinel picker value that opens the new-environment modal instead of
 // selecting an environment.
 const ENV_MANAGE = "__manage__";
@@ -245,6 +249,7 @@ async function loadEnvironments() {
   const picker = document.getElementById("env-picker");
   const envs = await api("/api/environments");
   envStorage = Object.fromEntries(envs.map((e) => [e.name, e.credential_storage_enabled]));
+  envSkipVerifyDefault = Object.fromEntries(envs.map((e) => [e.name, e.skip_verify_by_default]));
   picker.replaceChildren();
   if (!envs.length) {
     // Placeholder so the manage entry is never the pre-selected option — a
@@ -465,6 +470,28 @@ async function renderEnvManageList() {
       } catch (e) {
         toggle.checked = !enable; // revert on failure
         toast("Could not change credential storage: " + e.message);
+      }
+    });
+
+    // "Skip verify" default. Purely a UI convenience for environments where
+    // `installer verify` chronically fails for reasons unrelated to whether
+    // the install itself would succeed — no confirm needed, it never skips
+    // verify on its own.
+    const skipVerifyToggle = row.querySelector(".env-skip-verify-input");
+    skipVerifyToggle.checked = env.skip_verify_by_default;
+    skipVerifyToggle.addEventListener("change", async () => {
+      const skip = skipVerifyToggle.checked;
+      try {
+        await api(`/api/environments/${encodeURIComponent(env.name)}/skip-verify-default`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ skip_verify_by_default: skip }),
+        });
+        await loadEnvironments();
+        if (env.name === currentEnv) await loadServers(); // re-check existing rows' boxes
+      } catch (e) {
+        skipVerifyToggle.checked = !skip; // revert on failure
+        toast("Could not change skip-verify default: " + e.message);
       }
     });
     list.appendChild(row);
@@ -1281,6 +1308,7 @@ async function loadServers() {
     row.querySelector(".srv-address").textContent = srv.address;
     row.querySelector(".srv-role").textContent = roleLabel(srv.role);
     renderInstallSelect(row, srv.installable ?? []);
+    row.querySelector(".skip-verify").checked = !!envSkipVerifyDefault[currentEnv];
 
     const stateRow = el("tpl-server-state-row");
     stateRow.dataset.server = srv.name; // looked up by the "Refresh all" button

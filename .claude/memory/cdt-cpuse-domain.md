@@ -46,6 +46,19 @@ CLI syntax — Check Point changes these across releases.)
     `DIRECT_BASE_VERSION`/`TAKE_NUMBER` — either is sufficient, since which
     naming convention CPUSE picks isn't reliably predictable from hf.config
     alone.
+  - **`extract_take`'s filename regex silently failed on the common
+    `..._Bundle_T<N>_FULL.tgz` convention** (operator-confirmed, 2026-07-22):
+    it required a regex `\b` word boundary right after the Take digits, but
+    '_' (the separator before "FULL") is itself a word character, so
+    digit→'_' is never a boundary. Symptom: after installing a new JHF over
+    an older one, clicking Refresh kept showing the *old* Take — `extract_take`
+    couldn't read a Take number out of the newly-installed package's own
+    filename at all, so `summarize_jumbo` silently fell back to whichever
+    *other* installed JHF entry it could parse a Take out of (the stale,
+    superseded one, e.g. an "Installed as part of" entry using the
+    human-readable "Take N" convention instead). Fixed by anchoring on what
+    actually follows a Take number ('_', '.', or end of string) instead of
+    `\b`.
   - **A third `show installer packages` output shape** (operator-confirmed real
     device output, 2026-07-22): scope-filtered queries (`imported`, `installed`)
     on some Gaia versions render a "Display name / Type" table — no per-row

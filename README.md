@@ -155,9 +155,8 @@ CLAUDE.md         project instructions
 - Provisioning: Conceptually adopt the terminology of patching targets for CPUSE patching screens
 - Environments: Stack enable credential and hint text on manage environments modal
 - Environments: Add enable credential storage option and hint to new deployment rename prompt modal
-- Jobs: tab "flickers" when a job is selected (because of the live view?)
-- Jobs: Collapse output, collapse all rows
-- Jobs: clear job history
+- Jobs: clear job history / retention time
+- Jobs: filters/search
 - Provisioning: discover other management servers after connecting to primary
 - CPUSE: Add deployment agent upgrade option
 - CPUSE: check available disk space before copying file

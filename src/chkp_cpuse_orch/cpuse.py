@@ -83,7 +83,15 @@ class JumboSummary:
 # "..._JUMBO_HF_MAIN_Bundle_T89_FULL"). Both are handled here.
 _JUMBO_RE = re.compile(r"jumbo|jhf", re.IGNORECASE)
 _TAKE_RE = re.compile(r"take\s*(\d+)", re.IGNORECASE)
-_TAKE_FILENAME_RE = re.compile(r"_t(\d+)\b", re.IGNORECASE)
+# `\b` doesn't work as the terminator here: '_' (the separator before "FULL" in
+# the very common "..._Bundle_T36_FULL.tgz" convention) is itself a word
+# character, so digit->'_' is NOT a word boundary and `\b` silently failed to
+# match this real, common filename shape (operator-confirmed, 2026-07-22 —
+# a refresh kept showing the previously-installed Take because this regex
+# couldn't read the new one's Take number out of its filename at all).
+# Anchor on what actually follows a Take number instead: '_', '.', or end of
+# string.
+_TAKE_FILENAME_RE = re.compile(r"_t(\d+)(?=[_.]|$)", re.IGNORECASE)
 _VERSION_RE = re.compile(r"R(\d{2})[._](\d{2})", re.IGNORECASE)
 
 

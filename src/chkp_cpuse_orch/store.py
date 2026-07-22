@@ -112,6 +112,12 @@ class EnvironmentRow(BaseModel):
     # which command variants (discovery, and future MDS-vs-SMS-specific tasks)
     # apply across every server in it.
     is_mds: bool = False
+    # UI default for the Management tab's per-install "skip verify" checkbox.
+    # Some environments chronically fail `installer verify` for reasons
+    # unrelated to whether the install itself would succeed (operator-
+    # reported, 2026-07-22) — this just pre-checks the box, it never skips
+    # verify on its own.
+    skip_verify_by_default: bool = False
 
 
 class EnvHostRow(BaseModel):
@@ -368,6 +374,13 @@ _MIGRATIONS: tuple[str, ...] = (
     """
     ALTER TABLE jobs ADD COLUMN install_log TEXT;
     """,
+    # v14: per-environment default for the Management tab's "skip verify"
+    # install checkbox — some environments chronically fail `installer verify`
+    # for reasons unrelated to the install itself. Existing environments
+    # default to 0 (unchecked), preserving current behaviour.
+    """
+    ALTER TABLE environments ADD COLUMN skip_verify_by_default INTEGER NOT NULL DEFAULT 0;
+    """,
 )
 
 
@@ -586,6 +599,16 @@ class Store:
             )
         return cur.rowcount > 0
 
+    def set_environment_skip_verify_default(self, name: str, skip: bool) -> bool:
+        """Set the Management tab's default for the per-install "skip verify"
+        checkbox in this environment. Returns False if unknown."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE environments SET skip_verify_by_default = ? WHERE name = ?",
+                (int(skip), name),
+            )
+        return cur.rowcount > 0
+
     def delete_environment(self, name: str) -> bool:
         """Deletes the environment and (via cascade) its env_hosts."""
         with self._connect() as conn:
@@ -601,16 +624,23 @@ class Store:
         ``new`` is already taken."""
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT created_at, credential_storage_enabled, is_mds"
+                "SELECT created_at, credential_storage_enabled, is_mds, skip_verify_by_default"
                 " FROM environments WHERE name = ?",
                 (old,),
             ).fetchone()
             if row is None:
                 return False
             conn.execute(
-                "INSERT INTO environments (name, created_at, credential_storage_enabled, is_mds)"
-                " VALUES (?, ?, ?, ?)",
-                (new, row["created_at"], row["credential_storage_enabled"], row["is_mds"]),
+                "INSERT INTO environments"
+                " (name, created_at, credential_storage_enabled, is_mds, skip_verify_by_default)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (
+                    new,
+                    row["created_at"],
+                    row["credential_storage_enabled"],
+                    row["is_mds"],
+                    row["skip_verify_by_default"],
+                ),
             )
             conn.execute("UPDATE env_hosts SET environment = ? WHERE environment = ?", (new, old))
             conn.execute(
@@ -966,6 +996,7 @@ def _environment_from_row(row: sqlite3.Row) -> EnvironmentRow:
         created_at=datetime.fromisoformat(row["created_at"]),
         credential_storage_enabled=bool(row["credential_storage_enabled"]),
         is_mds=bool(row["is_mds"]),
+        skip_verify_by_default=bool(row["skip_verify_by_default"]),
     )
 
 

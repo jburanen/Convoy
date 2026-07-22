@@ -7,6 +7,7 @@ from chkp_cpuse_orch.cpuse import (
     GaiaShell,
     PackageScope,
     PackageState,
+    extract_take,
     parse_package_detail,
     parse_packages,
     summarize_jumbo,
@@ -261,6 +262,41 @@ def test_summarize_jumbo_picks_highest_installed_take() -> None:
     summary = summarize_jumbo(packages)
     assert summary.version == "R82.10"
     assert summary.jhf == "Take 24"
+
+
+def test_extract_take_handles_underscore_terminated_filename() -> None:
+    # "..._Bundle_T36_FULL.tgz" — the Take number is followed by '_', not '.'
+    # or true end of string. Both digit and '_' are regex word characters, so
+    # `\b` right after the digits silently never matched this real, common
+    # naming convention (operator-confirmed, 2026-07-22).
+    assert extract_take("Check_Point_R82_10_jumbo_hf_main_Bundle_T36_FULL.tgz") == 36
+
+
+# Real `show installer packages all` output (operator-confirmed, 2026-07-22)
+# right after installing Take 36 over a previously-installed Take 24 — a
+# Refresh kept showing "Take 24" because of the extract_take bug above: the
+# newly-installed package's own filename couldn't be read for a Take number,
+# so summarize_jumbo silently fell back to the OTHER installed JHF entry it
+# could parse one out of — the stale, superseded Take 24.
+REAL_ALL_SCOPE_AFTER_JHF_INSTALL = """\
+**  ***************************************************** **
+**       Connection error. Packages list might be incomplete   **
+**  ***************************************************** **
+**  ***************************************************** **
+**                       Hotfixes                              **
+**  ***************************************************** **
+Display name                                                Status
+Check_Point_R82_10_ga_time_fix_main_Bundle_T9_FULL.tgz      Installed
+R82.10 Jumbo Hotfix Accumulator Recommended Jumbo Take 24   Installed as part of
+Check_Point_R82_10_jumbo_hf_main_Bundle_T36_FULL.tgz        Installed
+"""
+
+
+def test_summarize_jumbo_reads_new_take_from_real_all_scope_output() -> None:
+    packages = parse_packages(REAL_ALL_SCOPE_AFTER_JHF_INSTALL, PackageScope.ALL)
+    summary = summarize_jumbo(packages)
+    assert summary.version == "R82.10"
+    assert summary.jhf == "Take 36"
 
 
 def test_summarize_jumbo_handles_tarball_filename_convention() -> None:
