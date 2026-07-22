@@ -43,14 +43,18 @@ function toast(message) {
 }
 
 function fmtBytes(n) {
-  if (n >= 1e9) return (n / 1e9).toFixed(2) + " GB";
-  if (n >= 1e6) return (n / 1e6).toFixed(1) + " MB";
+  if (n >= 1e9) return (n / 1e9).toFixed(0) + " GB";
+  if (n >= 1e6) return (n / 1e6).toFixed(0) + " MB";
   if (n >= 1e3) return (n / 1e3).toFixed(0) + " kB";
   return n + " B";
 }
 
 function fmtTime(iso) {
   return iso ? new Date(iso).toLocaleString() : "";
+}
+
+function fmtDate(iso) {
+  return iso ? new Date(iso).toLocaleDateString() : "";
 }
 
 /* ---------- 1b. authentication / session ---------- */
@@ -1569,19 +1573,19 @@ async function loadPackages() {
     const row = el("tpl-package-row");
     row.querySelector(".pkg-filename").textContent = pkg.filename;
     row.querySelector(".pkg-size").textContent = fmtBytes(pkg.size);
-    const sha1 = row.querySelector(".pkg-sha1");
-    sha1.textContent = pkg.sha1;
-    sha1.title = pkg.sha1;
-    const sha256 = row.querySelector(".pkg-sha256");
-    sha256.textContent = pkg.sha256;
-    sha256.title = pkg.sha256;
+
+    const detail = el("tpl-package-detail");
+    detail.querySelector(".pkg-hashes").textContent = `sha1: ${pkg.sha1}  sha256: ${pkg.sha256}`;
 
     // Retention: ticked "Keep" == pinned (no expiry). Otherwise show the deadline.
     const pin = row.querySelector(".pkg-pin");
-    const expiry = row.querySelector(".pkg-expiry");
+    const expiry = detail.querySelector(".pkg-expiry");
+    const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
     const renderRetention = (rec) => {
       pin.checked = rec.expires_at == null;
-      expiry.textContent = rec.expires_at ? `expires ${fmtTime(rec.expires_at)}` : "kept indefinitely";
+      expiry.textContent = rec.expires_at ? `expires ${fmtDate(rec.expires_at)}` : "kept indefinitely";
+      const soon = rec.expires_at != null && new Date(rec.expires_at) - Date.now() <= WEEK_MS;
+      expiry.classList.toggle("warn", soon);
     };
     renderRetention(pkg);
     pin.addEventListener("change", async () => {
@@ -1609,6 +1613,7 @@ async function loadPackages() {
       } catch (e) { toast("Delete failed: " + e.message); }
     });
     tbody.appendChild(row);
+    tbody.appendChild(detail);
   }
   await populateCdtSelectors(); // keep the CDT dropdowns in sync with packages/servers
 }

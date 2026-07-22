@@ -255,6 +255,12 @@ th { color: var(--muted); font-weight: 600; font-size: 0.85rem; }
 tr.job-row { cursor: pointer; }
 tr.job-row:hover td { background: var(--badge-bg); }
 
+/* Packages table: filename/size + hashes/retention-hint form one grouped
+   two-line entry, so only the detail row carries the separator below it. */
+tr.pkg-row td { border-bottom: none; }
+tr.pkg-detail-row td { padding-top: 0; }
+.pkg-expiry.warn { color: var(--warn); font-weight: 600; }
+
 /* ---- forms & buttons ---- */
 form { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin: 0.5rem 0; }
 input, select, button {

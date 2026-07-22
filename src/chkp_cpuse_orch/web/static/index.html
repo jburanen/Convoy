@@ -225,13 +225,11 @@
           <tr>
             <th>Filename</th>
             <th>Size</th>
-            <th>SHA-1</th>
-            <th>SHA-256</th>
             <th>Retention</th>
             <th></th>
           </tr>
         </thead>
-        <tbody><!-- tpl-package-row instances --></tbody>
+        <tbody><!-- tpl-package-row / tpl-package-detail instances --></tbody>
       </table>
     </section>
 
@@ -675,18 +673,26 @@
 </template>
 
 <template id="tpl-package-row">
-  <tr>
+  <tr class="pkg-row">
     <td class="pkg-filename mono"></td>
     <td class="pkg-size"></td>
-    <td class="pkg-sha1 mono clip" title=""></td>
-    <td class="pkg-sha256 mono clip" title=""></td>
     <td class="pkg-retention">
       <label title="keep this package indefinitely (skip auto-delete)">
         <input type="checkbox" class="pkg-pin"> Keep
       </label>
-      <span class="pkg-expiry muted"></span>
     </td>
     <td><button class="btn-delete small danger">Delete</button></td>
+  </tr>
+</template>
+
+<!-- Second, detail line for a package: hashes under filename/size, the
+     retention hint under the Retention column so it lines up with the
+     checkbox directly above it. -->
+<template id="tpl-package-detail">
+  <tr class="pkg-detail-row">
+    <td colspan="2" class="pkg-hashes mono muted"></td>
+    <td class="pkg-expiry muted"></td>
+    <td></td>
   </tr>
 </template>
 
