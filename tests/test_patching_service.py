@@ -502,6 +502,41 @@ def test_install_job_verifies_then_installs(
     assert cached is not None and cached.agent_build == DA_BUILD
 
 
+def test_install_job_logs_raw_command_output_and_poll_detail(
+    store: Store, creds: CredentialStore, packages: PackageStore, inventory: Inventory
+) -> None:
+    # The Jobs tab is the primary troubleshooting surface — CPUSE's own text
+    # should show up there verbatim, not just our derived one-word summary.
+    transport = FakeTransport(
+        responses={
+            "installer install ": (0, "Install started; this may take a while."),
+            "show installer package ": "Status:           Installed\nInstallation log: /var/log/x",
+        }
+    )
+    _assign(store, inventory, "mgmt-01")
+    registry = EnvironmentRegistry()
+    registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
+    service = PatchingService(
+        registry=registry,
+        packages=packages,
+        runner=JobRunner(store),
+        vault=JobCredentialVault(),
+        store=store,
+        install_verify_attempts=2,
+        install_verify_delay=0,
+    )
+
+    job = service.submit_install(
+        "default", "mgmt-01", "Check_Point_R81_20_T89", confirmed=True, verify_first=False
+    )
+    _run(service)
+
+    assert store.get_job(job.id).status is JobStatus.SUCCEEDED
+    messages = " | ".join(e.message for e in store.events(job.id))
+    assert "Install started; this may take a while." in messages
+    assert "Installation log: /var/log/x" in messages
+
+
 def test_install_job_fails_if_status_never_shows_installed(
     store: Store, creds: CredentialStore, packages: PackageStore, inventory: Inventory
 ) -> None:
@@ -529,6 +564,9 @@ def test_install_job_fails_if_status_never_shows_installed(
     assert finished.status is JobStatus.FAILED
     assert finished.error is not None
     assert "does not show as Installed" in finished.error
+    # The last full `show installer package <id>` block, not just the status
+    # word, so an operator can troubleshoot from the error alone.
+    assert "Status:           Imported" in finished.error
     assert "'Imported'" in finished.error
 
 

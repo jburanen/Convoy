@@ -84,6 +84,18 @@ CLI syntax — Check Point changes these across releases.)
     packages drop the SSH session partway through polling (expected, not a
     failure); a dropped connection there triggers a reconnect rather than
     failing the job.
+  - **Job log verbosity for troubleshooting** (operator-requested, 2026-07-22,
+    after an install failed a second time): the Jobs tab log is the primary
+    troubleshooting surface, so it now carries CPUSE's own raw text rather
+    than just our derived summary. `PackageState.raw` holds the full
+    `show installer package <id>` block (set by `parse_package_detail`);
+    `_wait_until_installed` logs that whole block on *every* poll, not just
+    the Status line, and includes the last one verbatim in the final
+    `CPUSEError` if the install never confirms. `CPUSE.verify`/`install`/
+    `uninstall`/`import_local`/`import_cloud` now return the command's raw
+    stdout (previously discarded on success) and `PatchingService` logs it
+    right after the command returns — CPUSE can print something useful to
+    stdout even when the exit code is 0.
 - **Management servers are patched with CPUSE locally**, not via CDT.
 
 **CDT — Central Deployment Tool** (reference: sk111158; confirmed via docs MCP)

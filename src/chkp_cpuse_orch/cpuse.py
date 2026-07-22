@@ -48,6 +48,11 @@ class PackageState:
     identifier: str
     status: str  # raw status text, e.g. "Installed", "Imported", "Available for Install"
     description: str = ""
+    # Full `show installer package <id>` block this came from, if it came from
+    # that command (empty for list-parsed entries) — surfaced to the job log
+    # verbatim so an operator can read CPUSE's own fields (Installation log,
+    # Requires reboot, etc.) instead of just our derived Status/description.
+    raw: str = ""
 
     @property
     def is_installed(self) -> bool:
@@ -187,33 +192,33 @@ class CPUSE:
 
     # -- lifecycle (mutating; caller must gate on safety checks) ---------------
 
-    def import_local(self, remote_path: str) -> None:
+    def import_local(self, remote_path: str) -> str:
         """Import a package file already uploaded to the host (full path)."""
         if not remote_path.startswith("/"):
             raise CPUSEError(f"import local needs a FULL remote path, got {remote_path!r}")
         if not re.fullmatch(r"/[A-Za-z0-9/._-]+", remote_path) or "/../" in remote_path:
             raise CPUSEError(f"suspicious remote path: {remote_path!r}")
-        self._run_installer(f"import local {remote_path}", "import")
+        return self._run_installer(f"import local {remote_path}", "import")
 
-    def import_cloud(self, package_id: str) -> None:
+    def import_cloud(self, package_id: str) -> str:
         """Import a package directly from Check Point's cloud repository by its
         published identifier — no local file involved. ``show installer
         packages available`` lists what's importable this way; the target
         host fetches it itself (needs outbound internet access)."""
-        self._run_installer(f"import {_check_id(package_id)}", "cloud import")
+        return self._run_installer(f"import {_check_id(package_id)}", "cloud import")
 
-    def verify(self, package_id: str) -> None:
-        self._run_installer(f"verify {_check_id(package_id)}", "verify")
+    def verify(self, package_id: str) -> str:
+        return self._run_installer(f"verify {_check_id(package_id)}", "verify")
 
-    def install(self, package_id: str) -> None:
+    def install(self, package_id: str) -> str:
         """Install an imported package. May reboot the host — the caller must have
         gated this on HA-peer health first. See safety-constraints."""
-        self._run_installer(f"install {_check_id(package_id)}", "install")
+        return self._run_installer(f"install {_check_id(package_id)}", "install")
 
-    def uninstall(self, package_id: str) -> None:
-        self._run_installer(f"uninstall {_check_id(package_id)}", "uninstall")
+    def uninstall(self, package_id: str) -> str:
+        return self._run_installer(f"uninstall {_check_id(package_id)}", "uninstall")
 
-    def _run_installer(self, verb: str, action: str) -> None:
+    def _run_installer(self, verb: str, action: str) -> str:
         # Same config-database lock that can block the read commands
         # (see _override_lock) can hold up these mutating ones too.
         self._override_lock()
@@ -221,6 +226,7 @@ class CPUSE:
         result = self._clish(f"installer {verb} not-interactive")
         if not result.ok:
             raise CPUSEError(f"CPUSE {action} failed: {_failure_detail(result)}")
+        return result.stdout.strip()
 
     # -- command plumbing --------------------------------------------------------
 
@@ -366,6 +372,7 @@ def parse_package_detail(stdout: str, identifier: str) -> PackageState:
         identifier=identifier,
         status=fields.get("Status", ""),
         description=fields.get("Description", ""),
+        raw=stdout.strip(),
     )
 
 

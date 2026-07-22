@@ -318,7 +318,9 @@ class PatchingService:
             ctx.raise_if_cancelled()  # last safe stop before mutating CPUSE state
             ctx.log("importing into CPUSE repository (installer import local)")
             cpuse = CPUSE(client, shell=self._shell)
-            cpuse.import_local(remote_path)
+            output = cpuse.import_local(remote_path)
+            if output:
+                ctx.log(f"installer import output:\n{output}")
             ctx.log(
                 "import command returned — CPUSE processes it asynchronously, "
                 "confirming via `show installer packages imported` before cleanup"
@@ -437,11 +439,15 @@ class PatchingService:
             cpuse = CPUSE(client, shell=self._shell)
             if verify_first:
                 ctx.log(f"verifying {package_id} (installer verify)")
-                cpuse.verify(package_id)
+                output = cpuse.verify(package_id)
+                if output:
+                    ctx.log(f"installer verify output:\n{output}")
                 ctx.log("verify passed")
             ctx.raise_if_cancelled()  # last safe stop; install may reboot the host
             ctx.log(f"installing {package_id} — host may reboot when this completes")
-            cpuse.install(package_id)
+            output = cpuse.install(package_id)
+            if output:
+                ctx.log(f"installer install output:\n{output}")
             ctx.log(
                 "install command returned — CPUSE installs asynchronously, confirming "
                 "via `show installer package` before declaring success"
@@ -449,15 +455,15 @@ class PatchingService:
         finally:
             client.close()
 
-        installed, last_status = self._wait_until_installed(connector, host, creds, package_id, ctx)
+        installed, last_detail = self._wait_until_installed(connector, host, creds, package_id, ctx)
         if not installed:
             raise CPUSEError(
                 f"{package_id} does not show as Installed via `show installer package "
-                f"{package_id}` after waiting (last status: {last_status!r}) — check CPUSE "
-                "state on the host; the install may have failed, still be in progress, "
-                "or be waiting on a reboot"
+                f"{package_id}` after waiting (last status: {last_detail.status!r}) — check "
+                "CPUSE state on the host; the install may have failed, still be in progress, "
+                f"or be waiting on a reboot. Last known detail:\n{last_detail.raw}"
             )
-        ctx.log(f"confirmed: package is installed (status: {last_status!r})")
+        ctx.log(f"confirmed: package is installed (status: {last_detail.status!r})")
 
         ctx.log("refreshing detected state (version/JHF/packages ready to install)")
         try:
@@ -473,7 +479,7 @@ class PatchingService:
         creds: CredentialBundle | None,
         package_id: str,
         ctx: JobContext,
-    ) -> tuple[bool, str]:
+    ) -> tuple[bool, PackageState]:
         """Poll `show installer package <id>` until Status shows Installed.
         Manages its own connection independently of the caller's, since a
         reboot-required install drops the SSH session partway through —
@@ -486,9 +492,15 @@ class PatchingService:
         "Imported" (i.e. the install doesn't appear to have started at all)
         after ``install_stall_seconds``; a genuinely running install moves off
         "Imported" well before then, so there's no reason to wait out the
-        full 15 minutes for one that never started."""
+        full 15 minutes for one that never started.
+
+        Logs the full `show installer package <id>` block on every check
+        (not just the Status line) — CPUSE's own fields (Installation log,
+        Requires reboot, etc.) are the most direct way to troubleshoot an
+        install that reports failure or hangs, and reading them shouldn't
+        require re-running the command by hand on the box."""
         client: Transport | None = None
-        last_status = ""
+        last_detail = PackageState(package_id, "")
         started = time.monotonic()
         try:
             for attempt in range(1, self._install_verify_attempts + 1):
@@ -511,28 +523,28 @@ class PatchingService:
                         time.sleep(self._install_verify_delay)
                     continue
 
-                last_status = detail.status
-                if detail.is_installed:
-                    return True, last_status
-
+                last_detail = detail
                 elapsed = time.monotonic() - started
-                stalled = last_status.strip().lower().startswith("imported")
+                ctx.log(
+                    f"install status check {attempt}/{self._install_verify_attempts} "
+                    f"({elapsed:.0f}s elapsed):\n{detail.raw}"
+                )
+                if detail.is_installed:
+                    return True, last_detail
+
+                stalled = detail.status.strip().lower().startswith("imported")
                 if stalled and elapsed >= self._install_stall_seconds:
                     ctx.log(
-                        f"status is still {last_status!r} after {elapsed:.0f}s — the install "
-                        "doesn't appear to have started; giving up rather than waiting out "
-                        "the full timeout",
+                        f"status is still {detail.status!r} after {elapsed:.0f}s — the "
+                        "install doesn't appear to have started; giving up rather than "
+                        "waiting out the full timeout",
                         level="warning",
                     )
-                    return False, last_status
+                    return False, last_detail
 
                 if attempt < self._install_verify_attempts:
-                    ctx.log(
-                        f"not yet installed — status: {last_status!r} "
-                        f"(check {attempt}/{self._install_verify_attempts}, {elapsed:.0f}s elapsed)"
-                    )
                     time.sleep(self._install_verify_delay)
-            return False, last_status
+            return False, last_detail
         finally:
             if client is not None:
                 client.close()
