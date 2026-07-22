@@ -1253,7 +1253,9 @@ async function loadServers() {
     // Management tab: the action row. Credential assignment is display-only
     // here — change it via Edit on the Provisioning tab.
     const row = el("tpl-server-row");
-    row.querySelector(".srv-select").dataset.server = srv.name; // read by the bulk-import buttons
+    const selectCb = row.querySelector(".srv-select");
+    selectCb.dataset.server = srv.name; // read by the bulk-import buttons
+    selectCb.addEventListener("change", updateSelectAllState);
     row.querySelector(".srv-name").textContent = srv.name;
     row.querySelector(".srv-address").textContent = srv.address;
     row.querySelector(".srv-creds").textContent = srv.credential_set || "none — not assigned";
@@ -1275,6 +1277,7 @@ async function loadServers() {
     emptyRow(tbody, 5, "No management servers yet — add them on the Provisioning tab.");
   }
   updateServersInfoControls(editable.length > 0);
+  updateSelectAllState(); // rows were just rebuilt — reset to "none selected"
 
   chooseDefaultTab(servers.length);
 }
@@ -1399,6 +1402,23 @@ function selectedServerNames() {
   return [...document.querySelectorAll("#servers-table .srv-select:checked")]
     .map((cb) => cb.dataset.server);
 }
+
+// Keeps the header checkbox in sync with the per-row ones: checked when
+// every row is checked, indeterminate when only some are.
+function updateSelectAllState() {
+  const boxes = [...document.querySelectorAll("#servers-table .srv-select")];
+  const selectAll = document.getElementById("srv-select-all");
+  const checkedCount = boxes.filter((cb) => cb.checked).length;
+  selectAll.checked = boxes.length > 0 && checkedCount === boxes.length;
+  selectAll.indeterminate = checkedCount > 0 && checkedCount < boxes.length;
+}
+
+document.getElementById("srv-select-all").addEventListener("change", (ev) => {
+  for (const cb of document.querySelectorAll("#servers-table .srv-select")) {
+    cb.checked = ev.target.checked;
+  }
+  updateSelectAllState();
+});
 
 // Shared by both bulk-import buttons: runs `perServer(name)` for each checked
 // server in turn (not in parallel — mirrors "Refresh all"), refreshes the

@@ -341,17 +341,16 @@ button.link-btn:disabled { opacity: 0.5; text-decoration: none; }
 }
 
 /* Server row + its detected-state summary row read as one grouped entry.
-   vertical-align: middle (overriding the table default of top) so the plain
-   text cells (name/address/creds) line up with the select+button in the
-   Actions cell instead of sitting above them. The checkbox is explicitly
-   excluded — baseline (its default) sits its bottom edge on the text
-   baseline, which reads better than centering a small checkbox mid-row. */
-tr.srv-row td { border-bottom: none; vertical-align: middle; }
-tr.srv-row td.col-select { vertical-align: baseline; }
+   vertical-align: baseline (overriding the table default of top) on every
+   cell, checkbox included, so the name/address/creds text, the checkbox's
+   bottom edge, and the install picker's text all land on one shared
+   baseline instead of the table's default top alignment. */
+tr.srv-row td { border-bottom: none; vertical-align: baseline; }
 tr.srv-state-row td { padding-top: 0; }
-/* The select and button default to inline vertical-align: baseline, which
-   doesn't match each other (different control heights) — align both to the
-   cell's vertical center instead. */
+/* The select and button default to inline vertical-align: baseline relative
+   to EACH OTHER too, which doesn't match (different control heights) —
+   align both to the cell's vertical center between themselves. This is
+   independent of the cell-level baseline alignment above. */
 .srv-actions select,
 .srv-actions button { vertical-align: middle; }
 
@@ -362,9 +361,10 @@ tr.srv-state-row td { padding-top: 0; }
    install picker's longest option text. */
 .col-select { width: 2rem; text-align: center; }
 .col-fill { width: 100%; }
-/* Never shrink narrower than their content — the fill column (below) is what
-   absorbs/gives up space, not these. */
-.srv-name, .srv-address, .srv-creds { white-space: nowrap; }
+/* Never shrink narrower than their content — including the header label
+   itself — so these three columns don't wrap. The fill column (below) is
+   what absorbs/gives up space instead. */
+.srv-name, .srv-address, .srv-creds, .col-nowrap { white-space: nowrap; }
 /* A flex wrapper *inside* the cell, not the <td> itself — display: flex
    directly on a table-cell risks it dropping out of column-width
    calculations in some browsers. */
