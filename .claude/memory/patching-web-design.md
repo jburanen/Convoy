@@ -21,16 +21,29 @@ UI is the primary interface (see [[architecture]]); the CLI is secondary.
   - **Two import paths** (2026-07-22): bulk-import controls above the servers table,
     targeting one or more checkbox-selected servers, sequentially (not parallel —
     same pattern as "Refresh all"): (1) upload a package from the local store, SFTP
-    it to a staging path, `installer import local`, then **remove the temp copy**
-    (best-effort — a cleanup failure logs a `warning` job event, doesn't fail the
-    job, since the import already succeeded by that point); (2) `import_cloud()` —
-    give CPUSE a package identifier and it fetches + imports directly from Check
-    Point's cloud repo (`installer import <ID>`, no "local", no upload at all —
-    confirmed via docs MCP against sk92449's `show installer packages available` /
-    `installer import <name>` workflow). Install itself stays per-server (its own
-    dropdown of that server's cached "imported but not installed" packages,
+    it to a staging path, `installer import local`, **confirm via `show installer
+    packages imported`**, then remove the temp copy; (2) `import_cloud()` — give
+    CPUSE a package identifier and it fetches + imports directly from Check Point's
+    cloud repo (`installer import <ID>`, no "local", no upload at all — confirmed
+    via docs MCP against sk92449's `show installer packages available` / `installer
+    import <name>` workflow). Install itself stays per-server (its own dropdown of
+    that server's cached "imported but not installed" packages,
     `server_state.installable` — see below), not part of the bulk controls, since a
     reboot-worthy action needs one target at a time with its own confirmation.
+  - **`installer import local` is asynchronous — don't trust its exit status alone**
+    (bug found in production, 2026-07-22). The clish command returns before CPUSE
+    finishes processing the file ("Determining the package type" → "Examining the
+    file" → ... in `xpand` logs); the first cut of "remove the temp copy after
+    import" deleted it right after the command returned, racing CPUSE's own
+    pipeline, which then failed with *"The package file is missing from
+    /var/log/upload/"* — while our job still reported **succeeded**. Fix in
+    `PatchingService._wait_until_imported`: after `import_local`, poll `show
+    installer packages imported` (via `CPUSE.list_packages(PackageScope.IMPORTED)`)
+    until the package actually appears (default 60 attempts × 5s = 5 min) before
+    declaring success or touching the temp file; if it never shows up, the job
+    **fails** and the temp copy is left in place for manual investigation. Matches
+    by exact identifier or filename-stem substring (identifier format drifts across
+    Gaia versions — see `cpuse.parse_packages`).
 
 ## Decisions locked (2026-07-17)
 - **Gaia auth = both/mixed.** SSH key for the transport; admin **password** for

@@ -1179,6 +1179,27 @@ const ROLE_LABELS = {
 };
 const roleLabel = (role) => ROLE_LABELS[role] ?? role;
 
+// Management tab's server ordering: primaries first, then secondaries, then
+// log-plane roles, then SmartEvent last. Legacy management/mds rows are
+// equivalent to a primary (see ROLE_LABELS) so they sort into that tier too.
+const ROLE_SORT_RANK = {
+  primary_sms: 1,
+  primary_mds: 1,
+  management: 1,
+  mds: 1,
+  secondary_sms: 2,
+  secondary_mds: 2,
+  log_server: 3,
+  mlm: 3,
+  smartevent: 4,
+};
+function sortByRole(servers) {
+  return [...servers].sort((a, b) => {
+    const rank = (ROLE_SORT_RANK[a.role] ?? 99) - (ROLE_SORT_RANK[b.role] ?? 99);
+    return rank || a.name.localeCompare(b.name);
+  });
+}
+
 // Whether the current environment has at least one management server. Drives the
 // Provisioning panel's button (Connect-to-Primary vs Discover) and whether the
 // "Manually add a server" button is shown.
@@ -1249,7 +1270,7 @@ async function loadServers() {
     infoTbody.appendChild(info);
   }
 
-  for (const srv of servers) {
+  for (const srv of sortByRole(servers)) {
     // Management tab: the action row. Credential assignment is display-only
     // here — change it via Edit on the Provisioning tab.
     const row = el("tpl-server-row");
@@ -1258,7 +1279,7 @@ async function loadServers() {
     selectCb.addEventListener("change", updateSelectAllState);
     row.querySelector(".srv-name").textContent = srv.name;
     row.querySelector(".srv-address").textContent = srv.address;
-    row.querySelector(".srv-creds").textContent = srv.credential_set || "none — not assigned";
+    row.querySelector(".srv-role").textContent = roleLabel(srv.role);
     renderInstallSelect(row, srv.installable ?? []);
 
     const stateRow = el("tpl-server-state-row");
@@ -1903,43 +1924,74 @@ function updateJobsBadge(jobs) {
   pill.classList.toggle("hidden", n === 0);
 }
 
+function jobStatusClass(status) {
+  return status === "succeeded" ? "ok" : status === "running" || status === "pending" ? "warn" : "err";
+}
+
+// Fills in one job row's cells/badge/cancel-button visibility. Never touches
+// listeners — those are attached once in wireJobRow when the row is created,
+// so calling this repeatedly (every poll) is safe and cheap.
+function renderJobRow(row, job) {
+  row.querySelector(".job-kind").textContent = job.kind;
+  row.querySelector(".job-target").textContent = job.target ?? "";
+  row.querySelector(".job-env").textContent = job.environment ?? "";
+  const badge = row.querySelector(".job-status .badge");
+  badge.textContent = job.status;
+  badge.className = "badge " + jobStatusClass(job.status); // reset, not add — status can change
+  row.querySelector(".job-started").textContent = fmtTime(job.started_at ?? job.created_at);
+  const errorCell = row.querySelector(".job-error");
+  errorCell.textContent = job.error ?? "";
+  errorCell.title = job.error ?? ""; // full text on hover even while truncated/collapsed
+  row.querySelector(".btn-cancel").classList.toggle(
+    "hidden", !(job.status === "pending" || job.status === "running"),
+  );
+}
+
+function wireJobRow(row, jobId) {
+  row.dataset.jobId = jobId;
+  row.addEventListener("click", () => toggleJobLog(jobId, row));
+  row.querySelector(".btn-cancel").addEventListener("click", async (ev) => {
+    ev.stopPropagation(); // don't also toggle the log row
+    try { await api(`/api/jobs/${jobId}/cancel`, { method: "POST" }); }
+    catch (e) { toast("Cancel failed: " + e.message); }
+    await loadJobs();
+  });
+}
+
 async function loadJobs() {
   const tbody = document.querySelector("#jobs-table tbody");
   const jobs = await api("/api/jobs?limit=25");
   updateJobsBadge(jobs);
-  tbody.replaceChildren();
-  for (const job of jobs) {
-    const row = el("tpl-job-row");
-    row.querySelector(".job-kind").textContent = job.kind;
-    row.querySelector(".job-target").textContent = job.target ?? "";
-    row.querySelector(".job-env").textContent = job.environment ?? "";
-    const badge = row.querySelector(".job-status .badge");
-    badge.textContent = job.status;
-    badge.classList.add(
-      job.status === "succeeded" ? "ok" :
-      job.status === "running" || job.status === "pending" ? "warn" : "err",
-    );
-    row.querySelector(".job-started").textContent = fmtTime(job.started_at ?? job.created_at);
-    row.querySelector(".job-error").textContent = job.error ?? "";
 
-    if (job.status === "pending" || job.status === "running") {
-      const cbtn = row.querySelector(".btn-cancel");
-      cbtn.classList.remove("hidden");
-      cbtn.addEventListener("click", async (ev) => {
-        ev.stopPropagation(); // don't also toggle the log row
-        try { await api(`/api/jobs/${job.id}/cancel`, { method: "POST" }); }
-        catch (e) { toast("Cancel failed: " + e.message); }
-        await loadJobs();
-      });
-    }
+  // Drop tracking for any job that's aged out of the top 25 — its log row
+  // won't exist after the rebuild below, so there'd be nothing to refresh.
+  const currentIds = new Set(jobs.map((j) => j.id));
+  for (const id of openJobLogs) if (!currentIds.has(id)) openJobLogs.delete(id);
 
-    row.addEventListener("click", () => toggleJobLog(job.id, row));
-    tbody.appendChild(row);
+  // While the same set of jobs (same ids, same order — the common case on a
+  // poll tick) is still showing, update each row's text/badge in place
+  // instead of tearing down and rebuilding the table. Rebuilding every 2.5s
+  // was the source of the visible flicker, and it also blew away any open
+  // log's scroll position on every tick.
+  const existingRows = [...tbody.querySelectorAll("tr.job-row")];
+  const sameShape =
+    existingRows.length === jobs.length &&
+    existingRows.every((row, i) => row.dataset.jobId === jobs[i].id);
 
-    if (openJobLogs.has(job.id)) {
-      tbody.appendChild(await buildJobLogRow(job.id));
+  if (sameShape) {
+    jobs.forEach((job, i) => renderJobRow(existingRows[i], job));
+  } else {
+    tbody.replaceChildren();
+    for (const job of jobs) {
+      const row = el("tpl-job-row");
+      wireJobRow(row, job.id);
+      renderJobRow(row, job);
+      tbody.appendChild(row);
+      if (openJobLogs.has(job.id)) tbody.appendChild(buildJobLogRow(job.id));
     }
   }
+
+  for (const jobId of openJobLogs) await refreshJobLogRow(jobId);
 }
 
 async function toggleJobLog(jobId, row) {
@@ -1948,21 +2000,38 @@ async function toggleJobLog(jobId, row) {
     row.nextElementSibling?.classList.contains("job-events-row") && row.nextElementSibling.remove();
   } else {
     openJobLogs.add(jobId);
-    row.after(await buildJobLogRow(jobId));
+    row.after(buildJobLogRow(jobId));
+    await refreshJobLogRow(jobId);
   }
 }
 
-async function buildJobLogRow(jobId) {
+function buildJobLogRow(jobId) {
   const logRow = el("tpl-job-events");
+  logRow.dataset.jobId = jobId;
+  logRow.querySelector(".job-events").textContent = "loading…";
+  return logRow;
+}
+
+// Updates an already-open log row's text in place. Skips the DOM write
+// entirely when nothing changed, and — when the operator was scrolled to the
+// bottom (following live output) — re-pins the scroll position after growing;
+// otherwise leaves their scroll position alone so reading an earlier error
+// isn't disrupted by the next poll.
+async function refreshJobLogRow(jobId) {
+  const logRow = document.querySelector(`#jobs-table tr.job-events-row[data-job-id="${jobId}"]`);
+  if (!logRow) return;
+  const pre = logRow.querySelector(".job-events");
+  let text;
   try {
     const events = await api(`/api/jobs/${jobId}/events`);
-    logRow.querySelector(".job-events").textContent = events
-      .map((e) => `${fmtTime(e.ts)}  [${e.level}]  ${e.message}`)
-      .join("\n") || "(no events yet)";
+    text = events.map((e) => `${fmtTime(e.ts)}  [${e.level}]  ${e.message}`).join("\n") || "(no events yet)";
   } catch (e) {
-    logRow.querySelector(".job-events").textContent = "failed to load events: " + e.message;
+    text = "failed to load events: " + e.message;
   }
-  return logRow;
+  if (text === pre.textContent) return;
+  const wasAtBottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 20;
+  pre.textContent = text;
+  if (wasAtBottom) pre.scrollTop = pre.scrollHeight;
 }
 
 /* Poll while any job is active so statuses and logs stay live. */

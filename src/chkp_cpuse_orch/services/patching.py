@@ -5,8 +5,14 @@ into the operations the web UI exposes per management server:
 
 - **detect**        — live `show installer packages` (source of truth for the UI)
 - **import**        — SFTP the package to a temp path on the host, `installer
-  import local`, then remove the temp copy (best-effort — the import already
-  succeeded by that point)
+  import local`, then remove the temp copy. `installer import local` returns
+  before CPUSE has actually finished importing (it processes the file
+  asynchronously — "determining package type" → "examining the file" → ...) —
+  removing the temp file right after the command returns raced that and
+  produced a job that reported success while CPUSE itself then failed with
+  "package file is missing" (observed 2026-07-22). So: poll `show installer
+  packages imported` until the package actually appears before cleaning up
+  and declaring the job successful.
 - **import_cloud**  — direct the host to fetch + import a package from Check
   Point's cloud repository by identifier; no local file involved
 - **install**        — optional `installer verify`, then `installer install`
@@ -22,11 +28,12 @@ from __future__ import annotations
 
 import asyncio
 import posixpath
+import time
 from dataclasses import dataclass, field
 
 from ..cpuse import CPUSE, DEFAULT_STAGING_DIR, GaiaShell, PackageScope, PackageState
 from ..credentials import CredentialBundle, JobCredentialVault
-from ..errors import JobError, TransportError
+from ..errors import CPUSEError, JobError, TransportError
 from ..inventory import Host
 from ..jobs import JobContext, JobRunner
 from ..packages import PackageStore
@@ -77,6 +84,8 @@ class PatchingService:
         vault: JobCredentialVault,
         staging_dir: str = DEFAULT_STAGING_DIR,
         shell: GaiaShell = GaiaShell.EXPERT,
+        import_verify_attempts: int = 60,
+        import_verify_delay: float = 5.0,
     ) -> None:
         self.runner = runner
         self.registry = registry
@@ -84,6 +93,11 @@ class PatchingService:
         self._vault = vault
         self._staging_dir = staging_dir
         self._shell = shell
+        # How long we're willing to poll `show installer packages imported`
+        # for the just-uploaded package to actually show up, before giving up
+        # (60 * 5s = 5 minutes) — see the module docstring for why this exists.
+        self._import_verify_attempts = import_verify_attempts
+        self._import_verify_delay = import_verify_delay
         runner.register(JOB_IMPORT, self._import_job)
         runner.register(JOB_IMPORT_CLOUD, self._import_cloud_job)
         runner.register(JOB_INSTALL, self._install_job)
@@ -232,11 +246,23 @@ class PatchingService:
 
             ctx.raise_if_cancelled()  # last safe stop before mutating CPUSE state
             ctx.log("importing into CPUSE repository (installer import local)")
-            CPUSE(client, shell=self._shell).import_local(remote_path)
-            ctx.log("import finished")
+            cpuse = CPUSE(client, shell=self._shell)
+            cpuse.import_local(remote_path)
+            ctx.log(
+                "import command returned — CPUSE processes it asynchronously, "
+                "confirming via `show installer packages imported` before cleanup"
+            )
 
-            # Best-effort: the import already succeeded, so a cleanup failure
-            # here is a warning, not a job failure.
+            if not self._wait_until_imported(cpuse, package, ctx):
+                raise CPUSEError(
+                    f"{package} still isn't listed by `show installer packages imported` "
+                    f"after waiting — NOT removing the temp copy at {remote_path}; check "
+                    "CPUSE state on the host and re-import if needed"
+                )
+            ctx.log("confirmed: package is listed as imported")
+
+            # Best-effort: the import is confirmed, so a cleanup failure here
+            # is a warning, not a job failure.
             cleanup = client.run(f"rm -f {remote_path}")
             if cleanup.ok:
                 ctx.log(f"removed temp copy {remote_path}")
@@ -245,6 +271,24 @@ class PatchingService:
                 ctx.log(f"could not remove temp copy {remote_path}: {detail}", level="warning")
         finally:
             client.close()
+
+    def _wait_until_imported(self, cpuse: CPUSE, package_filename: str, ctx: JobContext) -> bool:
+        """Poll `show installer packages imported` for the just-uploaded file.
+        Matches by exact identifier or by its filename stem, since CPUSE's
+        parsed identifier is usually the filename itself but formatting has
+        drifted across Gaia versions (see cpuse.parse_packages)."""
+        stem = package_filename.rsplit(".", 1)[0]
+        for attempt in range(1, self._import_verify_attempts + 1):
+            imported = cpuse.list_packages(PackageScope.IMPORTED)
+            if any(p.identifier == package_filename or stem in p.identifier for p in imported):
+                return True
+            if attempt < self._import_verify_attempts:
+                ctx.log(
+                    f"not yet listed as imported (check {attempt}/{self._import_verify_attempts}) "
+                    "— waiting"
+                )
+                time.sleep(self._import_verify_delay)
+        return False
 
     def _do_import_cloud(self, ctx: JobContext) -> None:
         connector = self.registry.get(ctx.job.environment)

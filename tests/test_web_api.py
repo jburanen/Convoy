@@ -70,6 +70,10 @@ CANDIDATES_CSV = "Object Name,IP,Upgrade Order\nfw-a1,192.0.2.31,1\nfw-a2,192.0.
 def transport() -> FakeTransport:
     return FakeTransport(
         responses={
+            # More specific key first — FakeTransport._lookup matches in
+            # insertion order, and this must win over the generic "show
+            # installer packages" below for PatchingService._wait_until_imported.
+            "show installer packages imported": "jhf.tgz      Imported",
             "show installer packages": SHOW_PACKAGES_ALL,
             "show installer status build": DA_BUILD,
             "cat /opt/CPcdt/orch_candidates.csv": CANDIDATES_CSV,
@@ -546,7 +550,7 @@ def test_import_flow_end_to_end(client: TestClient, transport: FakeTransport) ->
     assert job["status"] == "succeeded", job["error"]
 
     events = client.get(f"/api/jobs/{job['id']}/events").json()
-    assert any("import finished" in e["message"] for e in events)
+    assert any("confirmed: package is listed as imported" in e["message"] for e in events)
     assert transport.puts[0][1] == "/var/log/upload/jhf.tgz"
 
 

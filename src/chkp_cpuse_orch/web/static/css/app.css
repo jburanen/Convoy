@@ -254,6 +254,15 @@ th { color: var(--muted); font-weight: 600; font-size: 0.85rem; }
 .row-actions { text-align: right; white-space: nowrap; }
 tr.job-row { cursor: pointer; }
 tr.job-row:hover td { background: var(--badge-bg); }
+/* Long error messages collapse to one line (full text on hover via the
+   title attribute, or click the row to expand the full progress log, which
+   includes the same message in context). */
+.job-error {
+  max-width: 18rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* Packages table: filename/size, sha1(+retention hint), sha256 form one
    grouped three-line entry, so only the last (sha256) row carries the
@@ -364,7 +373,7 @@ tr.srv-state-row td { padding-top: 0; }
 /* Never shrink narrower than their content — including the header label
    itself — so these three columns don't wrap. The fill column (below) is
    what absorbs/gives up space instead. */
-.srv-name, .srv-address, .srv-creds, .col-nowrap { white-space: nowrap; }
+.srv-name, .srv-address, .srv-role, .col-nowrap { white-space: nowrap; }
 /* A flex wrapper *inside* the cell, not the <td> itself — display: flex
    directly on a table-cell risks it dropping out of column-width
    calculations in some browsers. */

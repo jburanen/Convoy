@@ -78,6 +78,10 @@ def inventory() -> Inventory:
 def transport() -> FakeTransport:
     return FakeTransport(
         responses={
+            # More specific key first — FakeTransport._lookup matches in
+            # insertion order, and this must win over the generic "show
+            # installer packages" below for _wait_until_imported's poll.
+            "show installer packages imported": f"{PKG}      Imported",
             "show installer packages": SHOW_PACKAGES_ALL,
             "show installer status build": DA_BUILD,
         }
@@ -172,7 +176,7 @@ def test_import_job_uploads_then_imports(
     )
     messages = " | ".join(e.message for e in store.events(job.id))
     assert "upload complete" in messages
-    assert "import finished" in messages
+    assert "confirmed: package is listed as imported" in messages
     assert transport.closed is True
 
 
@@ -219,6 +223,42 @@ def test_import_job_cleanup_failure_is_a_warning_not_a_job_failure(
     assert any(
         level == "warning" and "could not remove temp copy" in msg for level, msg in messages
     )
+
+
+def test_import_job_fails_and_keeps_temp_copy_if_never_listed_as_imported(
+    store: Store, creds: CredentialStore, packages: PackageStore, inventory: Inventory
+) -> None:
+    # `installer import local` returns immediately while CPUSE keeps
+    # processing in the background — reproduces the observed failure where
+    # the temp file was removed before CPUSE finished, and CPUSE then failed
+    # with "package file is missing". `show installer packages imported`
+    # never mentions PKG here, standing in for that race.
+    transport = FakeTransport(
+        responses={
+            "show installer packages imported": "",
+            "show installer packages": SHOW_PACKAGES_ALL,
+            "show installer status build": DA_BUILD,
+        }
+    )
+    _assign(store, inventory, "mgmt-01")
+    registry = EnvironmentRegistry()
+    registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
+    service = PatchingService(
+        registry=registry,
+        packages=packages,
+        runner=JobRunner(store),
+        vault=JobCredentialVault(),
+        import_verify_attempts=2,
+        import_verify_delay=0,  # keep the test fast — real delay is only for production
+    )
+
+    job = service.submit_import("default", "mgmt-01", PKG)
+    _run(service)
+
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.FAILED
+    assert finished.error is not None and "NOT removing the temp copy" in finished.error
+    assert not any("rm -f" in c for c in transport.commands)  # never cleaned up
 
 
 # -- import-from-cloud job ---------------------------------------------------------
