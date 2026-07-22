@@ -257,7 +257,7 @@
 
       <div id="bulk-import">
         <div class="bulk-import-row">
-          <label class="muted" for="bulk-import-package">Import an uploaded package:</label>
+          <label class="muted" for="bulk-import-package">Import a stored package:</label>
           <select id="bulk-import-package"><option value="">— package —</option></select>
           <button type="button" id="bulk-import-btn" class="small">Import to selected</button>
         </div>
@@ -275,11 +275,11 @@
       <table id="servers-table">
         <thead>
           <tr>
-            <th></th>
+            <th class="col-select"></th>
             <th>Server</th>
             <th>Address</th>
             <th>Credential set</th>
-            <th>Packages imported and ready to install</th>
+            <th class="col-fill">Packages imported and ready to install</th>
           </tr>
         </thead>
         <tbody><!-- tpl-server-row / tpl-server-state-row instances --></tbody>
@@ -658,13 +658,15 @@
 
 <template id="tpl-server-row">
   <tr class="srv-row">
-    <td><input type="checkbox" class="srv-select" title="select as an import target"></td>
+    <td class="col-select"><input type="checkbox" class="srv-select" title="select as an import target"></td>
     <td class="srv-name"></td>
     <td class="srv-address mono"></td>
     <td class="srv-creds"></td>
-    <td class="srv-actions">
-      <select class="install-select"><option value="">— package —</option></select>
-      <button class="btn-install small danger">Install</button>
+    <td class="srv-actions col-fill">
+      <div class="srv-actions-inner">
+        <select class="install-select"><option value="">— package —</option></select>
+        <button class="btn-install small danger">Install</button>
+      </div>
     </td>
   </tr>
 </template>
@@ -672,10 +674,13 @@
 <!-- Detected-state summary: a second row under the server, one line
      ("Ver: … JHF: … CPUSE: …") derived from `show installer packages`,
      cached in the DB so it always shows the last-known state — plus when it
-     was last checked and a text link to refresh it live over SSH. -->
+     was last checked and a text link to refresh it live over SSH. The leading
+     empty cell matches the checkbox column's width so the summary text lines
+     up under "Server", not under the checkbox. -->
 <template id="tpl-server-state-row">
   <tr class="srv-state-row">
-    <td colspan="5" class="srv-agent muted">
+    <td class="col-select"></td>
+    <td colspan="4" class="srv-agent muted">
       <span class="srv-summary"></span>
       <span class="srv-checked"></span>
       <button type="button" class="link-btn srv-refresh-link">Refresh</button>

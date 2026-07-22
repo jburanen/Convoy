@@ -343,15 +343,35 @@ button.link-btn:disabled { opacity: 0.5; text-decoration: none; }
 /* Server row + its detected-state summary row read as one grouped entry.
    vertical-align: middle (overriding the table default of top) so the plain
    text cells (name/address/creds) line up with the select+button in the
-   Actions cell instead of sitting above them. */
+   Actions cell instead of sitting above them. The checkbox is explicitly
+   excluded — baseline (its default) sits its bottom edge on the text
+   baseline, which reads better than centering a small checkbox mid-row. */
 tr.srv-row td { border-bottom: none; vertical-align: middle; }
+tr.srv-row td.col-select { vertical-align: baseline; }
 tr.srv-state-row td { padding-top: 0; }
 /* The select and button default to inline vertical-align: baseline, which
-   doesn't match each other (different control heights) let alone the plain
-   text cells — align both to the cell's vertical center instead. */
-.srv-row .srv-select,
+   doesn't match each other (different control heights) — align both to the
+   cell's vertical center instead. */
 .srv-actions select,
 .srv-actions button { vertical-align: middle; }
+
+/* Checkbox column: narrow and fixed regardless of content. The "packages
+   imported" column takes width: 100% as a hint to the (default, content-
+   based) table layout algorithm — it soaks up whatever space the other,
+   naturally-narrow columns don't need, instead of stretching to fit the
+   install picker's longest option text. */
+.col-select { width: 2rem; text-align: center; }
+.col-fill { width: 100%; }
+/* A flex wrapper *inside* the cell, not the <td> itself — display: flex
+   directly on a table-cell risks it dropping out of column-width
+   calculations in some browsers. */
+.srv-actions-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.srv-actions-inner .install-select { max-width: 28rem; }
 
 /* ---- bulk import (above the servers table) ---- */
 .bulk-import-row {
