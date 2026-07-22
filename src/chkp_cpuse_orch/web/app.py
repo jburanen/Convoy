@@ -30,6 +30,7 @@ from starlette.middleware.base import RequestResponseEndpoint
 from .. import __version__
 from ..cdt import CandidatesFile
 from ..config import Config
+from ..cpuse import summarize_jumbo
 from ..credentials import (
     Credential,
     CredentialBundle,
@@ -65,7 +66,7 @@ from ..services.provisioning import (
     render_gaia_user_commands,
     render_mgmt_api_commands,
 )
-from ..store import JobEvent, JobRecord, PackageRecord, Store
+from ..store import JobEvent, JobRecord, PackageRecord, ServerStateRow, Store, utcnow
 from .auth import (
     SESSION_COOKIE_NAME,
     Authenticator,
@@ -730,17 +731,25 @@ def _register_routes(app: FastAPI) -> None:
     @app.get("/api/env/{env}/servers")
     def servers(env: str, request: Request) -> list[dict[str, Any]]:
         service = _service(request)
+        store: Store = request.app.state.store
         try:
-            return [
-                {
-                    "name": h.name,
-                    "address": h.address,
-                    "role": h.role.value,
-                    "ssh_user": h.ssh_user,
-                    "credential_set": service.assigned_credential(env, h.name),
-                }
-                for h in service.management_servers(env)
-            ]
+            result = []
+            for h in service.management_servers(env):
+                cached = store.get_server_state(env, h.name)
+                result.append(
+                    {
+                        "name": h.name,
+                        "address": h.address,
+                        "role": h.role.value,
+                        "ssh_user": h.ssh_user,
+                        "credential_set": service.assigned_credential(env, h.name),
+                        "version": cached.version if cached else None,
+                        "jhf": cached.jhf if cached else None,
+                        "agent_build": cached.agent_build if cached else None,
+                        "checked_at": cached.checked_at.isoformat() if cached else None,
+                    }
+                )
+            return result
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
@@ -749,16 +758,33 @@ def _register_routes(app: FastAPI) -> None:
         env: str, name: str, request: Request, body: QueryRequest | None = None
     ) -> dict[str, Any]:
         """Live CPUSE state (POST so storage-disabled environments can carry
-        one-shot credentials in the body; the body is empty otherwise)."""
+        one-shot credentials in the body; the body is empty otherwise). Cached
+        so the servers list can always show the last-known state."""
         creds = _op_creds(body, name, env)
         service = _service(request)
         try:
             detected = await asyncio.to_thread(service.detect, env, name, credentials=creds)
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
+        summary = summarize_jumbo(detected.packages)
+        checked_at = utcnow()
+        store: Store = request.app.state.store
+        store.upsert_server_state(
+            ServerStateRow(
+                environment=env,
+                host=name,
+                version=summary.version,
+                jhf=summary.jhf,
+                agent_build=detected.agent_build,
+                checked_at=checked_at,
+            )
+        )
         return {
             "host": detected.host,
             "agent_build": detected.agent_build,
+            "version": summary.version,
+            "jhf": summary.jhf,
+            "checked_at": checked_at.isoformat(),
             "packages": [
                 {
                     "identifier": p.identifier,

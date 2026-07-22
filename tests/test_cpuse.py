@@ -8,6 +8,7 @@ from chkp_cpuse_orch.cpuse import (
     PackageScope,
     PackageState,
     parse_packages,
+    summarize_jumbo,
 )
 from chkp_cpuse_orch.errors import CPUSEError
 from chkp_cpuse_orch.transport.ssh import CommandResult
@@ -140,3 +141,44 @@ def test_package_state_status_helpers() -> None:
     assert PackageState("x", "installed (reboot pending)").is_installed
     assert PackageState("x", "Available for Install").is_imported
     assert not PackageState("x", "Available for Download").is_imported
+
+
+def test_summarize_jumbo_picks_highest_installed_take() -> None:
+    # Take 19 is superseded by (installed as part of) the Take 24 bundle —
+    # the highest installed Take is the one actually running.
+    packages = [
+        PackageState("Check_Point_R82_10_ga_time_fix_main_Bundle_T9_FULL.tgz", "Imported"),
+        PackageState("R82.10 Jumbo Hotfix Accumulator Take 19", "Installed as part of"),
+        PackageState(
+            "R82.10 Jumbo Hotfix Accumulator Recommended Jumbo Take 24", "Installed"
+        ),
+        PackageState("Some Weird Package", "Not Applicable"),
+    ]
+    summary = summarize_jumbo(packages)
+    assert summary.version == "R82.10"
+    assert summary.jhf == "Take 24"
+
+
+def test_summarize_jumbo_handles_tarball_filename_convention() -> None:
+    packages = [
+        PackageState(
+            "Check_Point_R81_20_JUMBO_HF_MAIN_Bundle_T89_FULL.tgz",
+            "Available for Install",
+            "Jumbo Hotfix Accumulator for R81.20 (Take 89)",
+        ),
+        PackageState("Check_Point_R81.20_JHF_T99.tgz", "Imported"),
+        PackageState("Check_Point_R81_10_JHF_T45.tgz", "Installed"),
+    ]
+    summary = summarize_jumbo(packages)
+    assert summary.version == "R81.10"
+    assert summary.jhf == "Take 45"
+
+
+def test_summarize_jumbo_falls_back_to_any_installed_version_without_a_jhf() -> None:
+    summary = summarize_jumbo([PackageState("Check_Point_R82_10_ga_main.tgz", "Installed")])
+    assert summary.version == "R82.10"
+    assert summary.jhf is None
+
+
+def test_summarize_jumbo_empty_without_packages() -> None:
+    assert summarize_jumbo([]) == summarize_jumbo([PackageState("x", "Not Applicable")])

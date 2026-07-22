@@ -239,13 +239,20 @@
   <div class="tab-panel" id="tab-management">
 
     <section id="servers">
-      <h2>Patch management servers</h2>
+      <div class="section-head">
+        <h2>Patch management servers</h2>
+        <div class="section-head-actions">
+          <!-- Queries live show installer packages state for every server in
+               this environment, one after another. -->
+          <button type="button" id="refresh-all-btn" class="small">Refresh all</button>
+        </div>
+      </div>
       <p class="hint">
-        Patched locally via CPUSE (CDT does not patch management servers).
-        <strong>Refresh</strong> queries live <code>show installer packages</code> state over SSH.
-        <strong>Import</strong> uploads the selected package and imports it into the local
-        CPUSE repository. <strong>Install</strong> appears next to imported packages —
-        it can reboot the server, so it always asks for confirmation.
+        Patched locally via CPUSE (CDT does not patch management servers). The
+        detected state shown below (last row per server) is cached — click
+        <strong>Refresh</strong> on a server, or <strong>Refresh all</strong> above, to
+        query it live over SSH. <strong>Import</strong> uploads the selected package
+        and imports it into the local CPUSE repository.
       </p>
       <table id="servers-table">
         <thead>
@@ -253,7 +260,6 @@
             <th>Server</th>
             <th>Address</th>
             <th>Credential set</th>
-            <th>CPUSE state</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -640,9 +646,6 @@
         <option value="">— none —</option>
       </select>
     </td>
-    <td class="srv-state">
-      <button class="btn-refresh small">Refresh</button>
-    </td>
     <td class="srv-actions">
       <select class="pkg-select"><option value="">— package —</option></select>
       <button class="btn-import small">Import</button>
@@ -651,11 +654,16 @@
 </template>
 
 <!-- Detected-state summary: a second row under the server, one line
-     ("Ver: … JHF: … CPUSE: …") derived from `show installer packages`
-     instead of dumping the raw per-package list. -->
+     ("Ver: … JHF: … CPUSE: …") derived from `show installer packages`,
+     cached in the DB so it always shows the last-known state — plus when it
+     was last checked and a text link to refresh it live over SSH. -->
 <template id="tpl-server-state-row">
   <tr class="srv-state-row">
-    <td colspan="5" class="srv-agent muted"></td>
+    <td colspan="4" class="srv-agent muted">
+      <span class="srv-summary"></span>
+      <span class="srv-checked"></span>
+      <button type="button" class="link-btn srv-refresh-link">Refresh</button>
+    </td>
   </tr>
 </template>
 

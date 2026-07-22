@@ -422,12 +422,32 @@ def test_server_state_detects_live_packages(client: TestClient) -> None:
     assert body["agent_build"] == DA_BUILD
     assert body["packages"][0]["is_imported"] is True
     assert body["packages"][1]["is_installed"] is True
+    # Check_Point_R81_10_JHF_T45.tgz (installed) -> R81.10 / Take 45.
+    assert body["version"] == "R81.10"
+    assert body["jhf"] == "Take 45"
+    assert body["checked_at"]
 
 
 def test_server_state_without_credentials_is_409(client: TestClient) -> None:
     resp = client.post("/api/env/default/servers/mgmt-01/state")
     assert resp.status_code == 409
     assert "no credential assigned" in resp.json()["detail"]
+
+
+def test_servers_list_exposes_cached_state_after_a_refresh(client: TestClient) -> None:
+    _add_ssh_credential(client)
+    # Before any /state query, nothing is cached yet.
+    before = client.get("/api/env/default/servers").json()[0]
+    assert before["version"] is None
+    assert before["jhf"] is None
+    assert before["checked_at"] is None
+
+    client.post("/api/env/default/servers/mgmt-01/state")
+
+    after = client.get("/api/env/default/servers").json()[0]
+    assert after["version"] == "R81.10"
+    assert after["jhf"] == "Take 45"
+    assert after["checked_at"]
 
 
 # -- credentials ------------------------------------------------------------------

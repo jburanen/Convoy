@@ -126,6 +126,18 @@ class EnvHostRow(BaseModel):
     credential_set_id: str | None = None
 
 
+class ServerStateRow(BaseModel):
+    """Last-known detected CPUSE state for one management server, cached so the
+    UI can always show something instead of nothing until refreshed."""
+
+    environment: str
+    host: str
+    version: str | None = None
+    jhf: str | None = None
+    agent_build: str | None = None
+    checked_at: datetime
+
+
 class CredentialSetRow(BaseModel):
     """A named "login set" — ciphertext only; the store never sees plaintext.
     Each secret column is Fernet ciphertext (or None when that secret is unset).
@@ -319,6 +331,22 @@ _MIGRATIONS: tuple[str, ...] = (
     # Existing environments default to 0 (SMS), preserving current behaviour.
     """
     ALTER TABLE environments ADD COLUMN is_mds INTEGER NOT NULL DEFAULT 0;
+    """,
+    # v11: cache the last detected CPUSE state per server so the UI can always
+    # show something (instead of nothing until the operator clicks Refresh).
+    # Keyed by (environment, host) rather than an env_hosts FK — same choice
+    # as the pre-v8 credentials table — so it survives a server being removed
+    # and re-added under the same name.
+    """
+    CREATE TABLE server_state (
+        environment TEXT NOT NULL REFERENCES environments (name) ON DELETE CASCADE,
+        host        TEXT NOT NULL,
+        version     TEXT,
+        jhf         TEXT,
+        agent_build TEXT,
+        checked_at  TEXT NOT NULL,
+        PRIMARY KEY (environment, host)
+    );
     """,
 )
 
@@ -569,6 +597,9 @@ class Store:
                 "UPDATE credential_sets SET environment = ? WHERE environment = ?", (new, old)
             )
             conn.execute("UPDATE jobs SET environment = ? WHERE environment = ?", (new, old))
+            conn.execute(
+                "UPDATE server_state SET environment = ? WHERE environment = ?", (new, old)
+            )
             conn.execute("DELETE FROM environments WHERE name = ?", (old,))
         return True
 
@@ -612,7 +643,48 @@ class Store:
             cur = conn.execute(
                 "DELETE FROM env_hosts WHERE environment = ? AND name = ?", (environment, name)
             )
+            # Not an FK cascade (server_state is keyed by name, not env_hosts.id —
+            # see the v11 migration note) — clean it up explicitly.
+            conn.execute(
+                "DELETE FROM server_state WHERE environment = ? AND host = ?", (environment, name)
+            )
         return cur.rowcount > 0
+
+    # -- cached CPUSE state (per management server, refreshed on demand) ---------
+
+    def get_server_state(self, environment: str, host: str) -> ServerStateRow | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM server_state WHERE environment = ? AND host = ?",
+                (environment, host),
+            ).fetchone()
+        return None if row is None else _server_state_from_row(row)
+
+    def list_server_states(self, environment: str) -> dict[str, ServerStateRow]:
+        """Cached state for every server in an environment, keyed by host name."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM server_state WHERE environment = ?", (environment,)
+            ).fetchall()
+        return {r["host"]: _server_state_from_row(r) for r in rows}
+
+    def upsert_server_state(self, rec: ServerStateRow) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO server_state (environment, host, version, jhf, agent_build,"
+                " checked_at) VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT (environment, host) DO UPDATE SET"
+                " version = excluded.version, jhf = excluded.jhf,"
+                " agent_build = excluded.agent_build, checked_at = excluded.checked_at",
+                (
+                    rec.environment,
+                    rec.host,
+                    rec.version,
+                    rec.jhf,
+                    rec.agent_build,
+                    rec.checked_at.isoformat(),
+                ),
+            )
 
     # -- packages (metadata; file content lives in packages.py's directory) ------
 
@@ -887,6 +959,17 @@ def _env_host_from_row(row: sqlite3.Row) -> EnvHostRow:
         ssh_user=row["ssh_user"],
         notes=row["notes"],
         credential_set_id=row["credential_set_id"],
+    )
+
+
+def _server_state_from_row(row: sqlite3.Row) -> ServerStateRow:
+    return ServerStateRow(
+        environment=row["environment"],
+        host=row["host"],
+        version=row["version"],
+        jhf=row["jhf"],
+        agent_build=row["agent_build"],
+        checked_at=datetime.fromisoformat(row["checked_at"]),
     )
 
 

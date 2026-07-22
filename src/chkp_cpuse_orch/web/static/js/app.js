@@ -1204,7 +1204,7 @@ async function loadServers() {
     // No environments defined yet — prompt the operator toward the create dialog.
     const msg = "No environments. Use the Environment picker → New Environment…";
     emptyRow(infoTbody, 7, msg);
-    emptyRow(tbody, 5, msg);
+    emptyRow(tbody, 4, msg);
     updateServersInfoControls(false);
     return;
   }
@@ -1279,7 +1279,9 @@ async function loadServers() {
     }
 
     const stateRow = el("tpl-server-state-row");
-    row.querySelector(".btn-refresh").addEventListener("click", () => refreshState(srv.name, row, stateRow));
+    stateRow.dataset.server = srv.name; // looked up by the "Refresh all" button
+    renderStateRow(stateRow, srv.checked_at ? srv : null);
+    stateRow.querySelector(".srv-refresh-link").addEventListener("click", () => refreshState(srv.name, stateRow));
     row.querySelector(".btn-import").addEventListener("click", () => importPackage(srv.name, row));
     tbody.appendChild(row);
     tbody.appendChild(stateRow);
@@ -1287,7 +1289,7 @@ async function loadServers() {
 
   if (!editable.length) {
     emptyRow(infoTbody, 7, "No management servers yet — click Connect to Primary SMS/MDS above.");
-    emptyRow(tbody, 5, "No management servers yet — add them on the Provisioning tab.");
+    emptyRow(tbody, 4, "No management servers yet — add them on the Provisioning tab.");
   }
   updateServersInfoControls(editable.length > 0);
 
@@ -1319,76 +1321,58 @@ function emptyRow(target, colSpan, text) {
   target.appendChild(tr);
 }
 
-// Identifiers/descriptions come in at least two conventions (see cpuse.py /
-// tests/test_cpuse.py fixtures): human-readable ("Jumbo Hotfix Accumulator
-// for R81.20 (Take 89)") and tarball-filename ("Check_Point_R81_20_JHF_T99" /
-// "..._JUMBO_HF_MAIN_Bundle_T89_FULL"). Both are handled here.
-function pkgText(pkg) {
-  return `${pkg.identifier} ${pkg.description ?? ""}`;
-}
-function extractVersion(text) {
-  const m = text.match(/R(\d{2})[._](\d{2})/i);
-  return m ? `R${m[1]}.${m[2]}` : null;
-}
-function extractTake(text) {
-  const m = text.match(/take\s*(\d+)/i) ?? text.match(/_t(\d+)\b/i);
-  return m ? Number(m[1]) : null;
+// Detected-state summary row: version/JHF/agent build are derived server-side
+// (cpuse.summarize_jumbo) and cached in the DB, so `data` here is either a
+// server record carrying those fields (from GET /servers, or a fresh /state
+// response) or null when nothing has been checked yet.
+function renderStateRow(stateRow, data) {
+  const summary = stateRow.querySelector(".srv-summary");
+  const checked = stateRow.querySelector(".srv-checked");
+  if (data == null) {
+    summary.textContent = "Not yet checked.";
+    checked.textContent = "";
+    return;
+  }
+  summary.textContent =
+    `Ver: ${data.version ?? "—"}  JHF: ${data.jhf ?? "—"}  CPUSE: ${data.agent_build || "—"}`;
+  checked.textContent = data.checked_at ? `  (refreshed ${fmtTime(data.checked_at)})` : "";
 }
 
-// Best-effort summary of detected CPUSE state: the major Gaia version and
-// currently-installed Jumbo Hotfix Accumulator, read out of whichever
-// installed package's identifier/description mentions a JHF and carries the
-// highest Take number (a JHF often lists earlier Takes it superseded as
-// "installed as part of" — the highest Take is the one actually running).
-function deriveCpuseSummary(state) {
-  let bestTake = -1;
-  let version = null;
-  for (const pkg of state.packages ?? []) {
-    if (!pkg.is_installed) continue;
-    const text = pkgText(pkg);
-    if (!/jumbo|jhf/i.test(text)) continue;
-    const take = extractTake(text);
-    if (take != null && take > bestTake) {
-      bestTake = take;
-      version = extractVersion(text) ?? version;
-    }
-  }
-  if (version == null) {
-    // No installed JHF found — fall back to any installed package's version token.
-    for (const pkg of state.packages ?? []) {
-      if (!pkg.is_installed) continue;
-      const ver = extractVersion(pkgText(pkg));
-      if (ver) { version = ver; break; }
-    }
-  }
-  return {
-    version: version ?? "—",
-    jhf: bestTake >= 0 ? `Take ${bestTake}` : "—",
-  };
-}
-
-async function refreshState(name, row, stateRow) {
-  const btn = row.querySelector(".btn-refresh");
-  const agentDiv = stateRow.querySelector(".srv-agent");
+async function refreshState(name, stateRow) {
+  const link = stateRow.querySelector(".srv-refresh-link");
+  const summary = stateRow.querySelector(".srv-summary");
   const extra = await operationCredentials(name, "query live state");
   if (extra === null) return; // credential prompt cancelled
-  btn.disabled = true;
-  agentDiv.textContent = "querying…";
+  link.disabled = true;
+  summary.textContent = "querying…";
+  stateRow.querySelector(".srv-checked").textContent = "";
   try {
     const state = await api(envUrl(`/servers/${encodeURIComponent(name)}/state`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(extra),
     });
-    const { version, jhf } = deriveCpuseSummary(state);
-    agentDiv.textContent = `Ver: ${version}  JHF: ${jhf}  CPUSE: ${state.agent_build || "—"}`;
+    renderStateRow(stateRow, state);
   } catch (e) {
     cacheEvictCreds(name); // a cached wrong/stale password re-prompts next time
-    agentDiv.textContent = "detect failed: " + e.message;
+    summary.textContent = "detect failed: " + e.message;
+  } finally {
+    link.disabled = false;
+  }
+}
+
+document.getElementById("refresh-all-btn").addEventListener("click", async () => {
+  const btn = document.getElementById("refresh-all-btn");
+  btn.disabled = true;
+  try {
+    const stateRows = [...document.querySelectorAll("#servers-table tr.srv-state-row")];
+    for (const stateRow of stateRows) {
+      await refreshState(stateRow.dataset.server, stateRow);
+    }
   } finally {
     btn.disabled = false;
   }
-}
+});
 
 async function importPackage(name, row) {
   const select = row.querySelector(".pkg-select");

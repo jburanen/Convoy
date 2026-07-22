@@ -103,6 +103,15 @@ environment RBAC** — environments are DB rows partly for that reason.
   web click enqueues a persisted **Job** with a state machine
   (staged → imported → installed → reboot → verified) and live status (SSE/WebSocket,
   poll fallback). Jobs survive page refresh and container restart.
+- **Cached CPUSE state per server** (`server_state` table, migration v11,
+  2026-07-22). The Management tab no longer queries CPUSE state on page load —
+  `GET /servers` returns whatever was last detected (version/JHF/agent build/
+  checked_at), so the table always shows *something* without an SSH round trip.
+  A per-row text link + a top "Refresh all" button trigger a live
+  `POST .../state`, which re-derives the summary via `cpuse.summarize_jumbo()`
+  (major version + highest-Take installed JHF — earlier Takes a JHF superseded
+  show as "installed as part of") and persists it. Keyed by (environment, host)
+  name, not an `env_hosts` FK — same reasoning as the pre-v8 credentials table.
 
 ## Safety still applies to the "manual" mgmt-server flow
 Management servers are usually **HA pairs** and JHF installs often reboot. Even in

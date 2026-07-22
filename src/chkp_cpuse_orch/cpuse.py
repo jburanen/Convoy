@@ -59,6 +59,65 @@ class PackageState:
         return s.startswith("imported") or s.startswith("available for install")
 
 
+@dataclass(frozen=True)
+class JumboSummary:
+    """Best-effort major version + currently-installed Jumbo Hotfix Accumulator,
+    derived from detected package state for the UI's compact summary line."""
+
+    version: str | None
+    jhf: str | None  # e.g. "Take 24"
+
+
+# Identifiers/descriptions come in at least two conventions (see the fixtures in
+# tests/test_cpuse.py): human-readable ("Jumbo Hotfix Accumulator for R81.20
+# (Take 89)") and tarball-filename ("Check_Point_R81_20_JHF_T99" /
+# "..._JUMBO_HF_MAIN_Bundle_T89_FULL"). Both are handled here.
+_JUMBO_RE = re.compile(r"jumbo|jhf", re.IGNORECASE)
+_TAKE_RE = re.compile(r"take\s*(\d+)", re.IGNORECASE)
+_TAKE_FILENAME_RE = re.compile(r"_t(\d+)\b", re.IGNORECASE)
+_VERSION_RE = re.compile(r"R(\d{2})[._](\d{2})", re.IGNORECASE)
+
+
+def _pkg_text(pkg: PackageState) -> str:
+    return f"{pkg.identifier} {pkg.description}"
+
+
+def _extract_version(text: str) -> str | None:
+    m = _VERSION_RE.search(text)
+    return f"R{m.group(1)}.{m.group(2)}" if m else None
+
+
+def _extract_take(text: str) -> int | None:
+    m = _TAKE_RE.search(text) or _TAKE_FILENAME_RE.search(text)
+    return int(m.group(1)) if m else None
+
+
+def summarize_jumbo(packages: list[PackageState]) -> JumboSummary:
+    """Among *installed* jumbo/JHF packages, the highest Take number wins — a
+    JHF lists earlier Takes it superseded as "installed as part of", so the
+    highest Take is the one actually running."""
+    best_take = -1
+    version: str | None = None
+    for pkg in packages:
+        if not pkg.is_installed:
+            continue
+        text = _pkg_text(pkg)
+        if not _JUMBO_RE.search(text):
+            continue
+        take = _extract_take(text)
+        if take is not None and take > best_take:
+            best_take = take
+            version = _extract_version(text) or version
+    if version is None:
+        # No installed JHF found — fall back to any installed package's version token.
+        for pkg in packages:
+            if pkg.is_installed:
+                version = _extract_version(_pkg_text(pkg))
+                if version:
+                    break
+    return JumboSummary(version=version, jhf=f"Take {best_take}" if best_take >= 0 else None)
+
+
 class CPUSE:
     """CPUSE / Deployment Agent operations for one Gaia host."""
 
