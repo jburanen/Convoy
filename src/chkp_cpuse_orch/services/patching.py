@@ -22,6 +22,12 @@ into the operations the web UI exposes per management server:
   Point's cloud repository by identifier; no local file involved
 - **install**        — optional `installer verify`, then `installer install`
 
+Both import paths refresh and cache detected state (version/JHF/agent build/
+packages ready to install) right after a successful import, reusing the same
+already-open connection — so the UI reflects the newly-imported package
+without a separate manual Refresh. Best-effort: a refresh hiccup here is a
+warning, not a job failure, since the import itself already succeeded.
+
 Each mutating operation runs as a background job (a web click enqueues and
 returns). Blocking SSH work runs in a worker thread via ``asyncio.to_thread``.
 Install may reboot the host, so it additionally requires an explicit operator
@@ -36,7 +42,14 @@ import posixpath
 import time
 from dataclasses import dataclass, field
 
-from ..cpuse import CPUSE, DEFAULT_STAGING_DIR, GaiaShell, PackageScope, PackageState
+from ..cpuse import (
+    CPUSE,
+    DEFAULT_STAGING_DIR,
+    GaiaShell,
+    PackageScope,
+    PackageState,
+    summarize_jumbo,
+)
 from ..cpuse import extract_take as cpuse_extract_take
 from ..cpuse import extract_version as cpuse_extract_version
 from ..credentials import CredentialBundle, JobCredentialVault
@@ -45,7 +58,7 @@ from ..hfconfig import HfConfig, extract_hf_config
 from ..inventory import Host
 from ..jobs import JobContext, JobRunner
 from ..packages import PackageStore
-from ..store import JobRecord
+from ..store import JobRecord, ServerStateRow, Store, utcnow
 from .common import (
     ClientFactory,
     EnvironmentRegistry,
@@ -90,6 +103,7 @@ class PatchingService:
         packages: PackageStore,
         runner: JobRunner,
         vault: JobCredentialVault,
+        store: Store,
         staging_dir: str = DEFAULT_STAGING_DIR,
         shell: GaiaShell = GaiaShell.EXPERT,
         import_verify_attempts: int = 60,
@@ -99,6 +113,7 @@ class PatchingService:
         self.registry = registry
         self._packages = packages
         self._vault = vault
+        self._store = store
         self._staging_dir = staging_dir
         self._shell = shell
         # How long we're willing to poll `show installer packages imported`
@@ -127,23 +142,42 @@ class PatchingService:
         credentials: CredentialBundle | None = None,
     ) -> DetectedState:
         """Live-query CPUSE state. Blocking (SSH) — call via ``asyncio.to_thread``
-        from async contexts. Always detected state, never assumed.
-
-        ``credentials`` are used one-shot (never stored) when the environment
-        does not persist credentials; ignored when it does."""
+        from async contexts. Always detected state, never assumed. Caches the
+        result (see ``_cache_state``) so the servers list reflects it without
+        a separate read."""
         connector = self.registry.get(environment)
         host = connector.mgmt_host(host_name)
         creds = connector.require_credentials(host, credentials)
         client = connector.connect(host, creds)
         try:
             cpuse = CPUSE(client, shell=self._shell)
-            return DetectedState(
-                host=host.name,
-                agent_build=cpuse.agent_build(),
-                packages=cpuse.list_packages(PackageScope.ALL),
-            )
+            agent_build = cpuse.agent_build()
+            packages = cpuse.list_packages(PackageScope.ALL)
+            self._cache_state(environment, host.name, agent_build, packages)
+            return DetectedState(host=host.name, agent_build=agent_build, packages=packages)
         finally:
             client.close()
+
+    def _cache_state(
+        self, environment: str, host_name: str, agent_build: str, packages: list[PackageState]
+    ) -> None:
+        """Derive the UI's summary (version/JHF, packages ready to install)
+        from detected packages and persist it — shared by ``detect()`` (an
+        explicit Refresh) and both import job handlers (an automatic refresh
+        right after a successful import, reusing the same open connection)."""
+        summary = summarize_jumbo(packages)
+        installable = [p.identifier for p in packages if p.is_imported and not p.is_installed]
+        self._store.upsert_server_state(
+            ServerStateRow(
+                environment=environment,
+                host=host_name,
+                version=summary.version,
+                jhf=summary.jhf,
+                agent_build=agent_build,
+                checked_at=utcnow(),
+                installable=installable,
+            )
+        )
 
     # -- job submission ------------------------------------------------------------
 
@@ -288,8 +322,25 @@ class PatchingService:
             else:
                 detail = cleanup.stderr.strip() or cleanup.stdout.strip()
                 ctx.log(f"could not remove temp copy {remote_path}: {detail}", level="warning")
+
+            self._refresh_state_after_import(cpuse, ctx, host.name)
         finally:
             client.close()
+
+    def _refresh_state_after_import(self, cpuse: CPUSE, ctx: JobContext, host_name: str) -> None:
+        """Re-query and cache detected state right after a successful import,
+        reusing the still-open connection, so the servers list shows the
+        newly-imported package as ready to install without a separate manual
+        Refresh. Best-effort — the import already succeeded, so a hiccup here
+        is a warning, not a job failure."""
+        ctx.log("refreshing detected state (version/JHF/packages ready to install)")
+        try:
+            agent_build = cpuse.agent_build()
+            packages = cpuse.list_packages(PackageScope.ALL)
+            self._cache_state(ctx.job.environment, host_name, agent_build, packages)
+            ctx.log("detected state refreshed")
+        except CPUSEError as exc:
+            ctx.log(f"could not refresh detected state: {exc}", level="warning")
 
     def _remote_sha1(self, client: Transport, remote_path: str) -> str:
         """sha1 of the just-uploaded file, computed on the host itself — catches
@@ -349,8 +400,10 @@ class PatchingService:
         client = connector.connect(host, creds)
         try:
             ctx.log(f"importing {package_id} from Check Point's cloud (installer import)")
-            CPUSE(client, shell=self._shell).import_cloud(package_id)
+            cpuse = CPUSE(client, shell=self._shell)
+            cpuse.import_cloud(package_id)
             ctx.log("import finished")
+            self._refresh_state_after_import(cpuse, ctx, host.name)
         finally:
             client.close()
 

@@ -104,7 +104,11 @@ def service(
     registry = EnvironmentRegistry()
     registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
     return PatchingService(
-        registry=registry, packages=packages, runner=JobRunner(store), vault=JobCredentialVault()
+        registry=registry,
+        packages=packages,
+        runner=JobRunner(store),
+        vault=JobCredentialVault(),
+        store=store,
     )
 
 
@@ -237,7 +241,11 @@ def test_import_job_matches_by_hf_config_when_cpuse_uses_a_human_readable_identi
     registry = EnvironmentRegistry()
     registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
     service = PatchingService(
-        registry=registry, packages=ps, runner=JobRunner(store), vault=JobCredentialVault()
+        registry=registry,
+        packages=ps,
+        runner=JobRunner(store),
+        vault=JobCredentialVault(),
+        store=store,
     )
 
     job = service.submit_import("default", "mgmt-01", package_name)
@@ -288,7 +296,11 @@ def test_import_job_matches_the_real_device_display_name_type_output(
     registry = EnvironmentRegistry()
     registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
     service = PatchingService(
-        registry=registry, packages=ps, runner=JobRunner(store), vault=JobCredentialVault()
+        registry=registry,
+        packages=ps,
+        runner=JobRunner(store),
+        vault=JobCredentialVault(),
+        store=store,
     )
 
     job = service.submit_import("default", "mgmt-01", package_name)
@@ -345,6 +357,44 @@ def test_import_job_removes_temp_copy_after_import(
     assert "removed temp copy" in messages
 
 
+def test_import_job_refreshes_and_caches_state_after_success(
+    service: PatchingService, store: Store, transport: FakeTransport
+) -> None:
+    # No stored state yet — nothing has queried this server before.
+    assert store.get_server_state("default", "mgmt-01") is None
+
+    job = service.submit_import("default", "mgmt-01", PKG)
+    _run(service)
+
+    assert store.get_job(job.id).status is JobStatus.SUCCEEDED
+    cached = store.get_server_state("default", "mgmt-01")
+    assert cached is not None
+    assert cached.agent_build == DA_BUILD
+    # Check_Point_R81_10_JHF_T45.tgz (installed, per SHOW_PACKAGES_ALL) -> R81.10 / Take 45.
+    assert cached.version == "R81.10"
+    assert cached.jhf == "Take 45"
+    messages = " | ".join(e.message for e in store.events(job.id))
+    assert "refreshing detected state" in messages
+    assert "detected state refreshed" in messages
+
+
+def test_import_job_refresh_failure_is_a_warning_not_a_job_failure(
+    service: PatchingService, store: Store, transport: FakeTransport
+) -> None:
+    transport.responses["show installer status build"] = (1, "device busy")
+    job = service.submit_import("default", "mgmt-01", PKG)
+    _run(service)
+
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.SUCCEEDED, finished.error
+    messages = [(e.level, e.message) for e in store.events(job.id)]
+    assert any(
+        level == "warning" and "could not refresh detected state" in msg for level, msg in messages
+    )
+    # The import itself is still confirmed and cleaned up despite the refresh failing.
+    assert any("removed temp copy" in msg for _, msg in messages)
+
+
 def test_import_job_cleanup_failure_is_a_warning_not_a_job_failure(
     service: PatchingService, store: Store, transport: FakeTransport
 ) -> None:
@@ -384,6 +434,7 @@ def test_import_job_fails_and_keeps_temp_copy_if_never_listed_as_imported(
         packages=packages,
         runner=JobRunner(store),
         vault=JobCredentialVault(),
+        store=store,
         import_verify_attempts=2,
         import_verify_delay=0,  # keep the test fast — real delay is only for production
     )
@@ -417,6 +468,9 @@ def test_import_cloud_job_imports_by_id_with_no_upload(
     assert not any("import local" in c for c in transport.commands)
     messages = " | ".join(e.message for e in store.events(job.id))
     assert "import finished" in messages
+    assert "detected state refreshed" in messages
+    cached = store.get_server_state("default", "mgmt-01")
+    assert cached is not None and cached.agent_build == DA_BUILD
 
 
 # -- install job ------------------------------------------------------------------
@@ -474,7 +528,11 @@ def test_credential_set_shared_across_servers(
     registry = EnvironmentRegistry()
     registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
     service = PatchingService(
-        registry=registry, packages=packages, runner=JobRunner(store), vault=JobCredentialVault()
+        registry=registry,
+        packages=packages,
+        runner=JobRunner(store),
+        vault=JobCredentialVault(),
+        store=store,
     )
     assert service.detect("default", "mgmt-02").agent_build == DA_BUILD
 
@@ -494,14 +552,20 @@ def _disabled_service(
     store: Store, packages: PackageStore, inventory: Inventory, transport: FakeTransport
 ) -> tuple[PatchingService, JobCredentialVault]:
     vault = JobCredentialVault()
-    # No credential store needed at all for a storage-disabled environment.
+    # No credential store needed for a storage-disabled environment, but
+    # server_state.environment FKs to environments — create the row so the
+    # post-import state refresh (which persists there) doesn't fail closed.
+    if not store.environment_exists("default"):
+        store.insert_environment("default")
     registry = EnvironmentRegistry()
     registry.add(
         "default",
         HostConnector(inventory, None, make_factory(transport), credential_storage_enabled=False),
     )
     runner = JobRunner(store, on_job_finished=vault.discard)
-    service = PatchingService(registry=registry, packages=packages, runner=runner, vault=vault)
+    service = PatchingService(
+        registry=registry, packages=packages, runner=runner, vault=vault, store=store
+    )
     return service, vault
 
 
@@ -565,7 +629,11 @@ def test_set_in_other_environment_does_not_satisfy_unassigned_server(
     registry = EnvironmentRegistry()
     registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
     service = PatchingService(
-        registry=registry, packages=packages, runner=JobRunner(store), vault=JobCredentialVault()
+        registry=registry,
+        packages=packages,
+        runner=JobRunner(store),
+        vault=JobCredentialVault(),
+        store=store,
     )
     with pytest.raises(CredentialError, match="no credential assigned"):
         service.detect("default", "mgmt-02")

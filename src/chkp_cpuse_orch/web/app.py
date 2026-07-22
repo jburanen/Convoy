@@ -30,7 +30,6 @@ from starlette.middleware.base import RequestResponseEndpoint
 from .. import __version__
 from ..cdt import CandidatesFile
 from ..config import Config
-from ..cpuse import summarize_jumbo
 from ..credentials import (
     Credential,
     CredentialBundle,
@@ -66,7 +65,7 @@ from ..services.provisioning import (
     render_gaia_user_commands,
     render_mgmt_api_commands,
 )
-from ..store import JobEvent, JobRecord, PackageRecord, ServerStateRow, Store, utcnow
+from ..store import JobEvent, JobRecord, PackageRecord, Store
 from .auth import (
     SESSION_COOKIE_NAME,
     Authenticator,
@@ -342,7 +341,9 @@ def create_app(
         # Purge a job's in-memory credentials the moment it reaches any terminal
         # state (success/failure/cancel), guaranteed by the runner.
         runner = JobRunner(store, on_job_finished=vault.discard)
-        service = PatchingService(registry=registry, packages=packages, runner=runner, vault=vault)
+        service = PatchingService(
+            registry=registry, packages=packages, runner=runner, vault=vault, store=store
+        )
         cdt_service = CDTService(registry=registry, packages=packages, runner=runner, vault=vault)
         discovery = DiscoveryService(registry=registry, mgmt_client_factory=mgmt_client_factory)
 
@@ -771,30 +772,19 @@ def _register_routes(app: FastAPI) -> None:
             detected = await asyncio.to_thread(service.detect, env, name, credentials=creds)
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
-        summary = summarize_jumbo(detected.packages)
-        installable = [
-            p.identifier for p in detected.packages if p.is_imported and not p.is_installed
-        ]
-        checked_at = utcnow()
+        # detect() already persisted the summary/installable list — read it
+        # back rather than recomputing, so the response matches exactly what
+        # was cached (same timestamp too).
         store: Store = request.app.state.store
-        store.upsert_server_state(
-            ServerStateRow(
-                environment=env,
-                host=name,
-                version=summary.version,
-                jhf=summary.jhf,
-                agent_build=detected.agent_build,
-                checked_at=checked_at,
-                installable=installable,
-            )
-        )
+        cached = store.get_server_state(env, name)
+        assert cached is not None  # detect() just persisted it
         return {
             "host": detected.host,
             "agent_build": detected.agent_build,
-            "version": summary.version,
-            "jhf": summary.jhf,
-            "checked_at": checked_at.isoformat(),
-            "installable": installable,
+            "version": cached.version,
+            "jhf": cached.jhf,
+            "checked_at": cached.checked_at.isoformat(),
+            "installable": cached.installable,
             "packages": [
                 {
                     "identifier": p.identifier,
