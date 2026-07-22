@@ -8,9 +8,9 @@ Security model:
 - Plaintext secrets exist only in memory (``pydantic.SecretStr``); the SQLite row
   holds Fernet ciphertext. The repo is public and /data is a bind mount, so
   nothing readable may land on disk.
-- The Fernet key is derived (scrypt) from a master passphrase supplied at startup
+- The Fernet key is derived (Argon2id) from a master passphrase supplied at startup
   via ``CHKP_CPUSE_MASTER_KEY`` (or ``..._FILE`` for docker secrets) and is never
-  persisted. The scrypt salt and a canary token live in the DB so a wrong
+  persisted. The Argon2id salt and a canary token live in the DB so a wrong
   passphrase fails fast and loudly instead of yielding garbage.
 """
 
@@ -22,8 +22,8 @@ import secrets
 import threading
 from enum import StrEnum
 
+from argon2.low_level import Type, hash_secret_raw
 from cryptography.fernet import Fernet, InvalidToken
-from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from pydantic import BaseModel, SecretStr
 
 from .errors import CredentialError
@@ -279,9 +279,21 @@ class CredentialStore:
 
 
 def _derive_key(passphrase: str, salt: bytes) -> bytes:
-    """scrypt(passphrase) → urlsafe-b64 32-byte Fernet key. Interactive-grade cost."""
-    kdf = Scrypt(salt=salt, length=32, n=2**14, r=8, p=1)
-    return base64.urlsafe_b64encode(kdf.derive(passphrase.encode("utf-8")))
+    """Argon2id(passphrase) → urlsafe-b64 32-byte Fernet key.
+
+    This only runs once per process startup (not per-request), so the cost
+    parameters are set well above Argon2id's interactive-login defaults —
+    OWASP's higher-security recommendation (64 MiB, 3 iterations, 4 lanes)."""
+    raw = hash_secret_raw(
+        secret=passphrase.encode("utf-8"),
+        salt=salt,
+        time_cost=3,
+        memory_cost=65536,  # KiB (64 MiB)
+        parallelism=4,
+        hash_len=32,
+        type=Type.ID,
+    )
+    return base64.urlsafe_b64encode(raw)
 
 
 # -- ephemeral (in-memory-only) credentials for storage-disabled environments ------

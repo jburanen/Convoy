@@ -27,6 +27,7 @@ dependencies = [
   "httpx>=0.27",
   "tenacity>=8.2",
   "cryptography>=42.0",
+  "argon2-cffi>=23.1",  # Argon2id KDF for the credential-store master key
   "passlib>=1.7",  # sha512-crypt hashes for Gaia `set user ... password-hash`
 ]
 

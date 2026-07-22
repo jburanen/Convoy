@@ -147,11 +147,10 @@
         <button type="button" id="cred-add-btn" class="small">Add Credential</button>
       </div>
       <p class="hint">
-        Named <strong>login sets</strong>, stored encrypted at rest; secrets are never
+        Named login sets, stored encrypted at rest using <strong>argon2id</strong>; secrets are never
         displayed again after saving. Give one an SSH password <em>or</em> a private key
         (plus an optional expert password for privileged CPUSE steps), then assign it to
-        servers on the <strong>Management</strong> tab. One set can be assigned to many
-        servers.
+        servers below. One set can be assigned to many servers.
       </p>
       <p class="hint warn hidden" id="cred-storage-notice">
         Credential storage is <strong>disabled</strong> for this environment, so
@@ -169,7 +168,7 @@
 
     <section id="servers-info">
       <div class="section-head">
-        <h2>Direct CPUSE patching targets in <span id="prov-env-name">—</span></h2>
+        <h2>Management Servers</h2>
         <div class="section-head-actions">
           <!-- Shown once a primary exists (the first server is added via the
                Connect-to-Primary modal); opens the same modal as Edit, in add mode. -->
@@ -180,11 +179,10 @@
         </div>
       </div>
       <p class="hint">
-        The inventory of the environment selected in the top-right picker. Add or
-        remove servers here; patching actions live on the <strong>Management</strong>
-        tab. A server is ready once a credential set is assigned to it (assign on the
-        Management tab). To create another environment, use the picker's
-        <strong>New Environment…</strong> entry.
+        Connect to your primary SMS or MDS and discover/import any secondary servers
+        and SmartEvent servers. These will be used to orchestrate bulk patching of 
+        firewalls owned by this environment. The management servers can also be patched
+        with this tool on the <strong>CPUSE</strong> tab.
       </p>
       <table id="servers-info-table">
         <thead>

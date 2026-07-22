@@ -50,8 +50,8 @@ UI is the primary interface (see [[architecture]]); the CLI is secondary.
   Holds jobs, credential ciphertext, package metadata. Migrations are an
   append-only script list checked against `PRAGMA user_version`.
 - **Crypto = `cryptography` (Fernet)**, key derived from the master passphrase via
-  scrypt with a per-DB salt; a canary token in `meta` makes a wrong key fail fast.
-  Only new runtime dependency.
+  Argon2id (`argon2-cffi`) with a per-DB salt; a canary token in `meta` makes a
+  wrong key fail fast.
 
 ## Web frontend structure (operator preference — hand-editable, 2026-07-17)
 The operator wants to **hand-edit the UI files directly**, so the frontend must stay
