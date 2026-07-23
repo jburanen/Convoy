@@ -297,11 +297,26 @@ section h2 { margin: 0 0 0.75rem; font-size: 1.15rem; }
    collapsed — untouched native <details> behavior for any non-summary child,
    unaffected by this. */
 #provision-details, #servers-details, #firewalls-details { position: relative; }
-/* Collapsed panels only show the summary line, so the section's normal 1rem
-   top/bottom padding (sized for a full body) reads as excess air around it —
-   tighten to match the header's own line height instead. */
-section:has(> details:not([open])) { padding-top: 0.6rem; padding-bottom: 0.6rem; }
-section:has(> details:not([open])) > details > summary { margin-bottom: 0; }
+/* Collapsed panels only show the summary line, so the section's normal
+   bottom padding (sized for a full body) reads as excess air below it —
+   tighten just that side to match. Top padding is never touched, in either
+   state, so the header/summary line's vertical position never shifts on
+   screen when toggling (operator-reported: expanding/collapsing was visibly
+   bumping the header up/down). Scoped to these three panel ids specifically
+   — a bare `section:has(> details)` also matches the Jobs tab's Filters
+   <details>, which is likewise a direct child of its <section>, and would
+   wrongly shift the Jobs header too even though that section always shows
+   a table below the filters regardless of their open state. */
+section:has(> #provision-details:not([open])),
+section:has(> #servers-details:not([open])),
+section:has(> #firewalls-details:not([open])) {
+  padding-bottom: 0.6rem;
+}
+#provision-details:not([open]) > summary,
+#servers-details:not([open]) > summary,
+#firewalls-details:not([open]) > summary {
+  margin-bottom: 0;
+}
 #provision-details > .section-head-actions,
 #servers-details > .section-head-actions,
 #firewalls-details > .section-head-actions {
@@ -766,21 +781,23 @@ tr.srv-state-row td { padding-top: 0; }
   overflow-wrap: anywhere; /* long unbroken paths in job messages — see .job-install-log */
 }
 
-/* ---- credential-set form (stacked login-set fields) ---- */
-#credential-form.stacked {
+/* ---- stacked forms: label above field (credential sets, primary/server/
+   firewall add-edit modals) ---- */
+.stacked {
   flex-direction: column;
   align-items: stretch;
   max-width: 32rem;
 }
-#credential-form.stacked label {
+.stacked label {
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
   font-size: 0.9rem;
 }
-#credential-form.stacked input,
-#credential-form.stacked textarea { width: 100%; }
-#credential-form.stacked textarea { font-family: var(--mono); resize: vertical; }
+.stacked input,
+.stacked select,
+.stacked textarea { width: 100%; }
+.stacked textarea { font-family: var(--mono); resize: vertical; }
 
 /* ---- login page (login.html) ---- */
 /* Equal whitespace above the card (page top → card) and below it (card → footer):
