@@ -48,6 +48,10 @@ class Paths(BaseModel):
     db_path: Path = Path("state") / "orch.db"
     # Uploaded package files (JHFs, upgrades). Also git-ignored / on /data.
     packages_dir: Path = Path("packages")
+    # Flat-file archive of job records + progress logs (and any captured CPUSE
+    # install-log text) purged from the DB after they age out — see archive.py.
+    # Also git-ignored / on /data.
+    job_archive_path: Path = Path("state") / "job_archive.log"
     # Estate inventory (real file is git-ignored; see examples/inventory.example.yaml).
     inventory_path: Path = Path("inventory.yaml")
 

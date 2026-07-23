@@ -59,6 +59,7 @@ def _config(tmp_path: Path) -> Config:
             state_dir=tmp_path / "state",
             db_path=tmp_path / "state" / "orch.db",
             packages_dir=tmp_path / "packages",
+            job_archive_path=tmp_path / "state" / "job_archive.log",
             inventory_path=tmp_path / "inventory.yaml",
         )
     )
@@ -170,6 +171,7 @@ def test_status_reports_unlocked_and_counts(client: TestClient) -> None:
     assert body["credentials_unlocked"] is True
     assert body["management_servers"] == 1  # fw-01 is a gateway, not counted
     assert body["environments"] == ["default"]
+    assert body["job_archive_path"]  # Jobs tab points the operator here
 
 
 def test_environments_endpoint(client: TestClient) -> None:
@@ -595,6 +597,39 @@ def test_import_cloud_flow_end_to_end(client: TestClient, transport: FakeTranspo
     events = client.get(f"/api/jobs/{job['id']}/events").json()
     assert any("import finished" in e["message"] for e in events)
     assert transport.puts == []  # no upload — nothing was staged locally
+
+
+def test_jobs_facets_and_filters(client: TestClient) -> None:
+    _add_ssh_credential(client)
+    _upload_package(client)
+    import_job = client.post(
+        "/api/env/default/servers/mgmt-01/import", json={"package": "jhf.tgz"}
+    ).json()
+    cloud_job = client.post(
+        "/api/env/default/servers/mgmt-01/import-cloud",
+        json={"package_id": "Check_Point_R81.20_JHF_T99"},
+    ).json()
+    _wait_for_job(client, import_job["id"])
+    _wait_for_job(client, cloud_job["id"])
+
+    # Facets reflect every job, not just whatever a limited /api/jobs page shows.
+    facets = client.get("/api/jobs/facets").json()
+    assert set(facets["kinds"]) == {"cpuse.import", "cpuse.import_cloud"}
+    assert facets["targets"] == ["mgmt-01"]
+    assert facets["environments"] == ["default"]
+    assert facets["statuses"] == ["succeeded"]
+
+    by_kind = client.get("/api/jobs", params={"kind": "cpuse.import"}).json()
+    assert {j["id"] for j in by_kind} == {import_job["id"]}
+
+    by_status = client.get("/api/jobs", params={"status": "succeeded"}).json()
+    assert {j["id"] for j in by_status} >= {import_job["id"], cloud_job["id"]}
+
+    none_match = client.get("/api/jobs", params={"kind": "cpuse.install"}).json()
+    assert none_match == []
+
+    bad_status = client.get("/api/jobs", params={"status": "not-a-real-status"})
+    assert bad_status.status_code == 400
 
 
 def test_install_requires_confirmation_flag(client: TestClient) -> None:

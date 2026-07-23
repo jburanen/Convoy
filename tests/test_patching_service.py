@@ -511,6 +511,7 @@ def test_install_job_logs_raw_command_output_and_poll_detail(
         responses={
             "installer install ": (0, "Install started; this may take a while."),
             "show installer package ": "Status:           Installed\nInstallation log: /var/log/x",
+            "cat /var/log/x": "line one\nline two\n",
         }
     )
     _assign(store, inventory, "mgmt-01")
@@ -535,10 +536,11 @@ def test_install_job_logs_raw_command_output_and_poll_detail(
     messages = " | ".join(e.message for e in store.events(job.id))
     assert "Install started; this may take a while." in messages
     assert "Installation log: /var/log/x" in messages
-    # CPUSE's own Installation log field is captured on the job record too,
-    # for the Jobs tab to display as its own line (like the packages tab's
-    # hash lines).
-    assert store.get_job(job.id).install_log == "/var/log/x"
+    assert "captured installation log from /var/log/x" in messages
+    # The *content* of CPUSE's own install log file is fetched and captured
+    # on the job record — not just its path, which is worthless once CPUSE
+    # rotates or deletes the file.
+    assert store.get_job(job.id).install_log == "line one\nline two\n"
 
 
 def test_install_job_ignores_attempts_budget_once_percentage_progress_seen(

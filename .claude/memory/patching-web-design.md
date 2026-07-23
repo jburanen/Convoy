@@ -143,6 +143,48 @@ environment RBAC** — environments are DB rows partly for that reason.
   show as "installed as part of") and persists it. Keyed by (environment, host)
   name, not an `env_hosts` FK — same reasoning as the pre-v8 credentials table.
 
+- **Jobs tab retention + archival** (operator-directed, 2026-07-23). The Jobs
+  table is meant for recent operational history, not an indefinite audit log:
+  - **Display limit**: `GET /api/jobs?limit=N` — `N<=0` means unlimited (the
+    Jobs tab's "All" option). The tab's "Show N jobs" `<select>` (10/20/50/
+    All, default 10, persisted in localStorage) drives this. The live-count
+    badge is deliberately fed by `pollJobs()`'s own fixed `limit=25` fetch,
+    never by the display-limited one — otherwise a small display limit would
+    make the running/pending badge undercount.
+  - **Flat-file archive** (`archive.py`, `JobArchiver`, store migration
+    unaffected — reads/writes existing tables): a daily background sweep
+    (`_reap_old_jobs` in `web/app.py`, same pattern as the package-retention
+    reaper) moves *terminal* jobs older than 366 days — metadata, full
+    progress log, and any captured install-log text — out of the DB as one
+    JSON line per job appended to `cfg.paths.job_archive_path` (default
+    `state/job_archive.log`, alongside the DB on `/data`), then deletes them
+    (events cascade). The archive file is kept under 50MB by dropping the
+    *oldest* lines once a sweep would push it over, so it never grows
+    unbounded even across years of operation. Not browsable in the web UI —
+    the Jobs tab hint just names the path (`GET /api/status` →
+    `job_archive_path`) so an operator knows where to look.
+  - **Install log capture**: CPUSE's own "Installation log:" field (from
+    `show installer package <id>`) only names a *path* on the host — worthless
+    once CPUSE rotates/deletes the file. `PatchingService._capture_install_log`
+    `cat`s that path over the same SSH connection right after an install
+    finishes (success or failure) and saves the actual content on
+    `JobRecord.install_log` (capped at 2MB), not just the path. Best-effort —
+    a fetch failure is a warning, never a job failure. The Jobs tab renders it
+    as a collapsed-by-default `<details>` section under the job row (open
+    state persists across polls since the row isn't torn down); it's included
+    verbatim in the flat-file archive above.
+  - **Per-column multiselect filters** (operator-directed, 2026-07-23):
+    Kind/Target/Env/Status each get a native `<select multiple>` above the
+    table, OR'd within a column and AND'd across columns
+    (`GET /api/jobs?kind=a&kind=b&status=failed`, repeated query params).
+    Options come from `GET /api/jobs/facets` (`Store.list_job_facets`) —
+    `SELECT DISTINCT` over the *whole* jobs table, deliberately independent
+    of the display-limit query, so a "Show 10" view still offers every kind/
+    target/env/status that exists, not just what's on the current page. Null
+    `target` (CDT/non-host jobs) is excluded from the target facet — not a
+    selectable option. Facets refresh whenever the visible job set's shape
+    changes in `loadJobs()`, preserving the operator's current selections.
+
 ## Safety still applies to the "manual" mgmt-server flow
 Management servers are usually **HA pairs** and JHF installs often reboot. Even in
 button-driven mode the tool must warn/gate: never patch both HA members at once,

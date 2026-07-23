@@ -331,8 +331,34 @@
       <p class="hint">
         Every import/install/CDT action runs as a background job and survives page
         reloads. Click a row to see its progress log. Running jobs can be cancelled
-        at the next safe point.
+        at the next safe point. Jobs older than a year are archived to
+        <span id="job-archive-hint" class="mono">a flat file on the server</span> and
+        removed from this list.
       </p>
+      <div class="jobs-controls">
+        <label for="jobs-limit">
+          Show
+          <select id="jobs-limit">
+            <option value="10">10</option>
+            <option value="20">20</option>
+            <option value="50">50</option>
+            <option value="0">All</option>
+          </select>
+          jobs
+        </label>
+      </div>
+      <!-- Multiselect filters, one per column — options are populated from
+           /api/jobs/facets (every job that exists, not just the currently
+           displayed page) by loadJobFacets() in app.js. Ctrl/Cmd-click or
+           shift-click to select multiple; empty selection = no filter on
+           that column. -->
+      <div class="jobs-filters">
+        <label>Kind<select id="jobs-filter-kind" class="jobs-filter" multiple size="4"></select></label>
+        <label>Target<select id="jobs-filter-target" class="jobs-filter" multiple size="4"></select></label>
+        <label>Env<select id="jobs-filter-environment" class="jobs-filter" multiple size="4"></select></label>
+        <label>Status<select id="jobs-filter-status" class="jobs-filter" multiple size="4"></select></label>
+        <button type="button" id="jobs-filter-clear" class="small secondary">Clear filters</button>
+      </div>
       <table id="jobs-table">
         <thead>
           <tr>
@@ -610,7 +636,7 @@
     <span id="footer-version" class="muted"></span>
   </div>
   <div class="footer-notes muted">
-    <span>Written with Claude. Deploy and use this tool with appropriate caution.</span>
+    <span>Written by Claude under the direction of humans. Deploy, <strong>test</strong>, and use this tool with appropriate caution.</span>
     <span>Ideas? <a class="footer-link" href="https://github.com/jburanen/chkp-cpuse-orch/issues/new?labels=enhancement" target="_blank" rel="noopener">Submit an issue</a> at Github with the Enhancement label.</span>
   </div>
 </footer>
@@ -758,13 +784,18 @@
   </tr>
 </template>
 
-<!-- CPUSE's own "Installation log:" field (install jobs only, once CPUSE
-     reports one) — a permanent line under the job row, same idea as the
-     package hash lines on the Packages tab. Hidden (not inserted) when a job
-     has none. -->
+<!-- A copy of CPUSE's own install log file content (install jobs only, once
+     the job has finished and CPUSE reported a log path to fetch it from) — a
+     collapsed-by-default section under the job row. Hidden (not inserted)
+     when a job has none. -->
 <template id="tpl-job-install-log-row">
   <tr class="job-install-log-row">
-    <td colspan="7" class="job-install-log mono muted"></td>
+    <td colspan="7">
+      <details class="job-install-log-details">
+        <summary class="job-install-log-summary muted"></summary>
+        <pre class="job-install-log mono"></pre>
+      </details>
+    </td>
   </tr>
 </template>
 

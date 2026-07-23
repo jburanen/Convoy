@@ -30,8 +30,11 @@ into the operations the web UI exposes per management server:
   connection there reconnects and keeps waiting instead of failing closed.
   Once Status shows real progress (a percentage), the attempts budget is
   dropped and polling continues unbounded until it completes. CPUSE's
-  "Installation log" field, once available, is saved on the job record
-  (`JobRecord.install_log`) for the Jobs tab to display.
+  "Installation log" field, once available, names a path on the host — that
+  file's actual *content* is fetched over the same connection and saved on
+  the job record (`JobRecord.install_log`), since a bare path is worthless
+  once CPUSE rotates or deletes the file. The Jobs tab renders it collapsed
+  under the job row.
 
 Both import paths, and install, refresh and cache detected state (version/JHF/
 agent build/packages ready to install) right after succeeding — so the UI
@@ -50,6 +53,7 @@ from __future__ import annotations
 
 import asyncio
 import posixpath
+import shlex
 import time
 from dataclasses import dataclass, field
 
@@ -93,6 +97,10 @@ __all__ = [
 JOB_IMPORT = "cpuse.import"
 JOB_IMPORT_CLOUD = "cpuse.import_cloud"
 JOB_INSTALL = "cpuse.install"
+
+# Generous cap on captured install-log content — CPUSE logs are normally KBs,
+# this just bounds a pathological case from bloating the DB / archive file.
+_INSTALL_LOG_MAX_BYTES = 2 * 1024 * 1024
 
 
 @dataclass
@@ -461,7 +469,7 @@ class PatchingService:
 
         installed, last_detail = self._wait_until_installed(connector, host, creds, package_id, ctx)
         if last_detail.installation_log:
-            self._store.set_install_log(ctx.job.id, last_detail.installation_log)
+            self._capture_install_log(connector, host, creds, last_detail.installation_log, ctx)
         if not installed:
             raise CPUSEError(
                 f"{package_id} does not show as Installed via `show installer package "
@@ -566,6 +574,44 @@ class PatchingService:
         finally:
             if client is not None:
                 client.close()
+
+    def _capture_install_log(
+        self,
+        connector: HostConnector,
+        host: Host,
+        creds: CredentialBundle | None,
+        path: str,
+        ctx: JobContext,
+    ) -> None:
+        """Copy CPUSE's own install log file into our DB (JobRecord.install_log)
+        instead of just noting its path — the path is only useful while the
+        file still exists on the box; once CPUSE rotates or deletes it, a bare
+        path is worthless for later troubleshooting. Best-effort: a failure
+        here is a warning, not a job failure, since the install itself has
+        already succeeded or failed independently of this."""
+        path = path.strip()
+        if not path or path.upper() == "N/A" or not path.startswith("/"):
+            return
+        try:
+            client = connector.connect(host, creds)
+        except OrchestratorError as exc:
+            ctx.log(f"could not connect to capture installation log: {exc}", level="warning")
+            return
+        try:
+            result = client.run(f"cat {shlex.quote(path)}")
+        finally:
+            client.close()
+        if not result.ok:
+            detail = result.stderr.strip() or result.stdout.strip()
+            ctx.log(f"could not read installation log at {path}: {detail}", level="warning")
+            return
+        text = result.stdout
+        if len(text) > _INSTALL_LOG_MAX_BYTES:
+            text = text[:_INSTALL_LOG_MAX_BYTES] + (
+                f"\n... truncated at {_INSTALL_LOG_MAX_BYTES} bytes"
+            )
+        self._store.set_install_log(ctx.job.id, text)
+        ctx.log(f"captured installation log from {path} ({len(text)} bytes)")
 
 
 class ProgressReporter:

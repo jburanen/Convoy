@@ -48,6 +48,7 @@ def _config(tmp_path: Path) -> Config:
             state_dir=tmp_path / "state",
             db_path=tmp_path / "state" / "orch.db",
             packages_dir=tmp_path / "packages",
+            job_archive_path=tmp_path / "state" / "job_archive.log",
             inventory_path=tmp_path / "missing.yaml",  # no file → one empty "default" env
         )
     )

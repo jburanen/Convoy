@@ -264,11 +264,47 @@ tr.job-row:hover td { background: var(--badge-bg); }
   white-space: nowrap;
 }
 
-/* Installation log line (install jobs only, once CPUSE reports one) — grouped
-   under its job row the same way a package's hash lines are grouped under the
-   filename row: the job row's border moves down to this line instead. */
+/* A copy of CPUSE's own install log (install jobs only, once captured) —
+   grouped under its job row the same way a package's hash lines are grouped
+   under the filename row: the job row's border moves down to this line
+   instead. Collapsed by default (<details> with no "open" attribute); the
+   summary line is all that shows until clicked. */
 tr.job-row:has(+ tr.job-install-log-row) td { border-bottom: none; }
-tr.job-install-log-row td { padding-top: 0; }
+tr.job-install-log-row td { padding-top: 0; padding-bottom: 0.5rem; }
+.job-install-log-summary { cursor: pointer; }
+.job-install-log {
+  margin: 0.4rem 0 0;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg);
+  border-radius: 6px;
+  max-height: 16rem;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+/* Jobs tab: "Show N jobs" limit control, above the table. */
+.jobs-controls { margin: 0.5rem 0 0.75rem; }
+.jobs-controls label { display: flex; align-items: center; gap: 0.4rem; }
+
+/* Jobs tab: per-column multiselect filters, above the table. Each label
+   stacks its column name over the <select> so four fit comfortably in a row;
+   the select itself scrolls internally (size="4") rather than growing the
+   row when a column has many options. */
+.jobs-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+  margin: 0 0 0.75rem;
+}
+.jobs-filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.jobs-filters select[multiple] { min-width: 9rem; }
 
 /* Packages table: filename/size, sha1(+retention hint), sha256 form one
    grouped three-line entry, so only the last (sha256) row carries the

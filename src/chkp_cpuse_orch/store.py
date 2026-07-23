@@ -62,9 +62,11 @@ class JobRecord(BaseModel):
     finished_at: datetime | None = None
     error: str | None = None
     cancel_requested: bool = False
-    # CPUSE's own "Installation log:" field from `show installer package <id>`,
-    # captured once available (install jobs only) — shown on the Jobs tab as
-    # its own line, like the package hash lines on the Packages tab.
+    # A copy of CPUSE's own install log file *content* (install jobs only),
+    # fetched from the path `show installer package <id>` reports once
+    # available — shown on the Jobs tab as a collapsed section under the job
+    # row. Archived to a flat file (see archive.py) along with the job's
+    # progress log once the job ages out of the DB.
     install_log: str | None = None
 
 
@@ -823,17 +825,90 @@ class Store:
             raise StoreError(f"job not found: {job_id!r}")
         return _job_from_row(row)
 
-    def list_jobs(self, status: JobStatus | None = None, limit: int = 100) -> list[JobRecord]:
+    def list_jobs(
+        self,
+        status: JobStatus | None = None,
+        limit: int = 100,
+        *,
+        kinds: list[str] | None = None,
+        targets: list[str] | None = None,
+        environments: list[str] | None = None,
+        statuses: list[JobStatus] | None = None,
+    ) -> list[JobRecord]:
+        """Most recent jobs first. ``limit <= 0`` means unlimited (the Jobs
+        tab's "All" option). ``status`` is a single-value convenience kept for
+        existing callers; ``kinds``/``targets``/``environments``/``statuses``
+        are the general multi-value form — each is OR'd within itself and
+        AND'd with the others, powering the Jobs tab's filter dropdowns. Both
+        ``status`` and ``statuses`` may be given together (AND)."""
         query = "SELECT * FROM jobs"
-        args: tuple[Any, ...] = ()
+        clauses: list[str] = []
+        args: list[Any] = []
         if status is not None:
-            query += " WHERE status = ?"
-            args = (status.value,)
+            clauses.append("status = ?")
+            args.append(status.value)
+        for column, values in (
+            ("kind", kinds),
+            ("target", targets),
+            ("environment", environments),
+            ("status", [s.value for s in statuses] if statuses else None),
+        ):
+            if values:
+                clauses.append(f"{column} IN ({','.join('?' for _ in values)})")
+                args.extend(values)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
         # rowid breaks created_at ties (clock granularity) in true insertion order.
-        query += " ORDER BY created_at DESC, rowid DESC LIMIT ?"
+        query += " ORDER BY created_at DESC, rowid DESC"
+        if limit > 0:
+            query += " LIMIT ?"
+            args.append(limit)
         with self._connect() as conn:
-            rows = conn.execute(query, (*args, limit)).fetchall()
+            rows = conn.execute(query, args).fetchall()
         return [_job_from_row(r) for r in rows]
+
+    def list_job_facets(self) -> dict[str, list[str]]:
+        """Distinct kind/target/environment/status values that exist
+        *anywhere* in the jobs table, not just the currently displayed page —
+        powers the Jobs tab's filter dropdowns, which must offer every real
+        option regardless of the "Show N jobs" display limit."""
+        with self._connect() as conn:
+            kinds = conn.execute("SELECT DISTINCT kind FROM jobs ORDER BY kind").fetchall()
+            targets = conn.execute(
+                "SELECT DISTINCT target FROM jobs WHERE target IS NOT NULL ORDER BY target"
+            ).fetchall()
+            environments = conn.execute(
+                "SELECT DISTINCT environment FROM jobs ORDER BY environment"
+            ).fetchall()
+            statuses = conn.execute("SELECT DISTINCT status FROM jobs ORDER BY status").fetchall()
+        return {
+            "kinds": [r["kind"] for r in kinds],
+            "targets": [r["target"] for r in targets],
+            "environments": [r["environment"] for r in environments],
+            "statuses": [r["status"] for r in statuses],
+        }
+
+    def list_archivable_jobs(self, cutoff: datetime) -> list[JobRecord]:
+        """Terminal jobs created before ``cutoff`` — candidates for archival
+        (see archive.py). Never includes pending/running jobs, however old;
+        a job that's still active isn't finished, whatever its created_at."""
+        terminal = tuple(s.value for s in JobStatus if s.is_terminal)
+        placeholders = ",".join("?" for _ in terminal)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM jobs WHERE status IN ({placeholders}) AND created_at < ?"
+                " ORDER BY created_at",
+                (*terminal, cutoff.isoformat()),
+            ).fetchall()
+        return [_job_from_row(r) for r in rows]
+
+    def delete_job(self, job_id: str) -> bool:
+        """Deletes the job and (via cascade) its events. Used by archival,
+        after the job's data has already been copied to the flat-file
+        archive — see archive.py."""
+        with self._connect() as conn:
+            cur = conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+        return cur.rowcount > 0
 
     def claim_next_pending(self) -> JobRecord | None:
         """Atomically move the oldest PENDING job to RUNNING and return it."""
@@ -856,9 +931,12 @@ class Store:
             )
 
     def set_install_log(self, job_id: str, text: str) -> None:
-        """Save CPUSE's own "Installation log:" field on the job record, once
-        `show installer package <id>` reports one — best-effort UI detail,
-        not tied to the job's terminal state."""
+        """Save a *copy* of CPUSE's own install log file content on the job
+        record (PatchingService fetches it from the path `show installer
+        package <id>` reports, once available) — the path alone is only
+        useful while the file still exists on the box, so we keep the actual
+        text instead. Best-effort UI detail, not tied to the job's terminal
+        state."""
         with self._connect() as conn:
             conn.execute("UPDATE jobs SET install_log = ? WHERE id = ?", (text, job_id))
 

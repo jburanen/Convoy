@@ -18,9 +18,9 @@ import asyncio
 import contextlib
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import FastAPI, HTTPException, Request, Response, UploadFile
+from fastapi import FastAPI, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, SecretStr
@@ -28,6 +28,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import RequestResponseEndpoint
 
 from .. import __version__
+from ..archive import JobArchiver
 from ..cdt import CandidatesFile
 from ..config import Config
 from ..credentials import (
@@ -65,7 +66,7 @@ from ..services.provisioning import (
     render_gaia_user_commands,
     render_mgmt_api_commands,
 )
-from ..store import JobEvent, JobRecord, PackageRecord, Store
+from ..store import JobEvent, JobRecord, JobStatus, PackageRecord, Store
 from .auth import (
     SESSION_COOKIE_NAME,
     Authenticator,
@@ -83,6 +84,10 @@ _STATIC_DIR = Path(__file__).parent / "static"
 _REAP_INTERVAL_SECONDS = 3600.0
 # How often idle web sessions are swept from the DB.
 _SESSION_REAP_INTERVAL_SECONDS = 600.0
+# How often old jobs are swept into the flat-file archive. The retention
+# window is a year, so once a day is plenty — this just needs to run
+# regularly enough that the archive/DB don't fall meaningfully behind.
+_JOB_ARCHIVE_INTERVAL_SECONDS = 86400.0
 
 # Paths reachable without a valid session (login page + its assets, health, and
 # the auth endpoints login needs). Everything else is guarded when auth is on.
@@ -112,6 +117,23 @@ async def _reap_expired_packages(
                 logger.info("purged expired packages", count=len(purged), files=purged)
         except Exception as exc:  # keep the reaper alive across transient errors
             logger.warning("package reaper sweep failed", error=str(exc))
+        await asyncio.sleep(interval)
+
+
+async def _reap_old_jobs(
+    archiver: JobArchiver, interval: float = _JOB_ARCHIVE_INTERVAL_SECONDS
+) -> None:
+    """Periodically move jobs past the retention window into the flat-file
+    archive and delete them from the DB. Runs an immediate sweep on startup,
+    then every ``interval`` seconds. Never raises out of the loop — a failed
+    sweep is logged and retried next tick."""
+    while True:
+        try:
+            archived = await asyncio.to_thread(archiver.run)
+            if archived:
+                logger.info("archived old jobs", count=archived)
+        except Exception as exc:  # keep the reaper alive across transient errors
+            logger.warning("job archive sweep failed", error=str(exc))
         await asyncio.sleep(interval)
 
 
@@ -352,6 +374,7 @@ def create_app(
         discovery = DiscoveryService(registry=registry, mgmt_client_factory=mgmt_client_factory)
 
         app.state.store = store
+        app.state.job_archive_path = str(cfg.paths.job_archive_path)
         app.state.packages = packages
         app.state.credentials = credentials
         app.state.vault = vault
@@ -365,9 +388,11 @@ def create_app(
         interrupted = runner.recover()
         if interrupted:
             logger.warning("jobs interrupted by previous shutdown", count=len(interrupted))
+        archiver = JobArchiver(store, cfg.paths.job_archive_path)
         serve_task = asyncio.create_task(runner.serve())
         reaper_task = asyncio.create_task(_reap_expired_packages(packages))
-        bg_tasks = [reaper_task]
+        job_archive_task = asyncio.create_task(_reap_old_jobs(archiver))
+        bg_tasks = [reaper_task, job_archive_task]
         if auth is not None:
             bg_tasks.append(asyncio.create_task(_reap_idle_sessions(auth)))
         try:
@@ -511,6 +536,7 @@ def _register_routes(app: FastAPI) -> None:
                 len(service.management_servers(env)) for env in _registry(request).names()
             ),
             "packages": len(request.app.state.packages.list()),
+            "job_archive_path": request.app.state.job_archive_path,
         }
 
     # -- authentication ---------------------------------------------------------
@@ -1056,9 +1082,37 @@ def _register_routes(app: FastAPI) -> None:
     # -- jobs ------------------------------------------------------------------
 
     @app.get("/api/jobs")
-    def list_jobs(request: Request, limit: int = 50) -> list[JobRecord]:
+    def list_jobs(
+        request: Request,
+        limit: int = 10,
+        kind: Annotated[list[str] | None, Query()] = None,
+        target: Annotated[list[str] | None, Query()] = None,
+        environment: Annotated[list[str] | None, Query()] = None,
+        status: Annotated[list[str] | None, Query()] = None,
+    ) -> list[JobRecord]:
+        """``limit <= 0`` returns every job (the Jobs tab's "All" option).
+        kind/target/environment/status each accept repeated query params
+        (``?status=failed&status=succeeded``) and filter as OR within a field,
+        AND across fields — powers the Jobs tab's multiselect filters. Options
+        come from ``/api/jobs/facets``, not this endpoint."""
         store: Store = request.app.state.store
-        return store.list_jobs(limit=limit)
+        statuses: list[JobStatus] | None = None
+        if status:
+            try:
+                statuses = [JobStatus(s) for s in status]
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=f"invalid status: {exc}") from exc
+        return store.list_jobs(
+            limit=limit, kinds=kind, targets=target, environments=environment, statuses=statuses
+        )
+
+    @app.get("/api/jobs/facets")
+    def job_facets(request: Request) -> dict[str, list[str]]:
+        """Distinct kind/target/environment/status values across *every*
+        job, not just the currently displayed page — the Jobs tab's filter
+        dropdowns must offer every real option regardless of display limit."""
+        store: Store = request.app.state.store
+        return store.list_job_facets()
 
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: str, request: Request) -> JobRecord:

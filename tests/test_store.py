@@ -115,6 +115,62 @@ def test_list_jobs_filters_by_status(store: Store) -> None:
     assert len(store.list_jobs()) == 2
 
 
+def test_list_jobs_limit_zero_or_less_is_unlimited(store: Store) -> None:
+    for _ in range(3):
+        store.insert_job(JobRecord(kind="a"))
+    assert len(store.list_jobs(limit=2)) == 2
+    assert len(store.list_jobs(limit=0)) == 3  # the Jobs tab's "All" option
+    assert len(store.list_jobs(limit=-1)) == 3
+
+
+def test_list_jobs_multi_value_filters(store: Store) -> None:
+    a = JobRecord(kind="cpuse.install", target="mgmt-01", environment="corp")
+    b = JobRecord(kind="cpuse.import", target="mgmt-02", environment="corp")
+    c = JobRecord(kind="cpuse.install", target="mgmt-01", environment="dmz")
+    for job in (a, b, c):
+        store.insert_job(job)
+    store.claim_next_pending()  # a -> RUNNING
+    store.finish_job(a.id, JobStatus.SUCCEEDED)
+
+    # Each field is OR'd within itself...
+    assert {j.id for j in store.list_jobs(kinds=["cpuse.install"])} == {a.id, c.id}
+    assert {j.id for j in store.list_jobs(targets=["mgmt-01", "mgmt-02"])} == {a.id, b.id, c.id}
+    # ...and AND'd across fields.
+    assert {j.id for j in store.list_jobs(kinds=["cpuse.install"], environments=["dmz"])} == {c.id}
+    assert {j.id for j in store.list_jobs(statuses=[JobStatus.SUCCEEDED])} == {a.id}
+    assert store.list_jobs(kinds=["nonexistent"]) == []
+
+
+def test_list_job_facets_reflects_every_job_not_just_the_display_limit(store: Store) -> None:
+    a = JobRecord(kind="cpuse.install", target="mgmt-01", environment="corp")
+    b = JobRecord(kind="cpuse.import", target=None, environment="dmz")  # no target
+    store.insert_job(a)
+    store.insert_job(b)
+    store.claim_next_pending()  # a (oldest) -> RUNNING
+    store.finish_job(a.id, JobStatus.SUCCEEDED)  # b stays PENDING, untouched
+
+    facets = store.list_job_facets()
+    assert facets["kinds"] == ["cpuse.import", "cpuse.install"]
+    assert facets["targets"] == ["mgmt-01"]  # null target excluded, not a selectable option
+    assert facets["environments"] == ["corp", "dmz"]
+    assert set(facets["statuses"]) == {"succeeded", "pending"}
+    # A limit=1 fetch would only surface one job's kind — facets must not be
+    # derived from a limited/paginated query.
+    assert len(store.list_jobs(limit=1)) == 1
+    assert len(facets["kinds"]) == 2
+
+
+def test_delete_job_cascades_its_events(store: Store) -> None:
+    job = JobRecord(kind="a")
+    store.insert_job(job)
+    store.append_event(job.id, "one")
+    assert store.delete_job(job.id) is True
+    with pytest.raises(StoreError):
+        store.get_job(job.id)
+    assert store.events(job.id) == []  # cascaded, not orphaned
+    assert store.delete_job(job.id) is False  # already gone
+
+
 def test_events_append_and_resume_from_seq(store: Store) -> None:
     job = JobRecord(kind="a")
     store.insert_job(job)

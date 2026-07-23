@@ -985,6 +985,7 @@ async function refreshStatus() {
   try {
     const s = await api("/api/status");
     document.getElementById("footer-version").textContent = "v" + s.version;
+    document.getElementById("job-archive-hint").textContent = s.job_archive_path;
     // Chips are for warnings only (counts live on their own tabs).
     if (!s.credentials_unlocked) {
       addChip(box, "credential store LOCKED — set CHKP_CPUSE_MASTER_KEY and restart", "warn");
@@ -1993,11 +1994,15 @@ function renderJobRow(row, job) {
   );
 }
 
-// CPUSE's own "Installation log:" field, once an install job has one —
-// a permanent line right under the job row (like the package hash lines
-// on the Packages tab), inserted/updated/removed as it appears/changes.
-// Must run after `row` is attached to the table (`.after()` is a no-op on
-// a detached node).
+// A copy of CPUSE's own install log file content, once an install job has
+// one (only after it finishes and CPUSE reported a log path to fetch it
+// from) — a collapsed-by-default section right under the job row, like the
+// package hash lines on the Packages tab but foldable since log files can be
+// long. Inserted/updated/removed as it appears; a <details> element keeps
+// its own open/closed state across re-renders as long as the row itself
+// isn't torn down, which the "sameShape" fast path in loadJobs() guarantees.
+// Must run after `row` is attached to the table (`.after()` is a no-op on a
+// detached node).
 function syncInstallLogRow(row, job) {
   let logRow = row.nextElementSibling;
   if (!logRow || !logRow.classList.contains("job-install-log-row")) logRow = null;
@@ -2006,7 +2011,9 @@ function syncInstallLogRow(row, job) {
       logRow = el("tpl-job-install-log-row");
       row.after(logRow);
     }
-    logRow.querySelector(".job-install-log").textContent = `Installation log: ${job.install_log}`;
+    logRow.querySelector(".job-install-log-summary").textContent =
+      `Installation log (${fmtBytes(job.install_log.length)})`;
+    logRow.querySelector(".job-install-log").textContent = job.install_log;
   } else if (logRow) {
     logRow.remove();
   }
@@ -2023,13 +2030,78 @@ function wireJobRow(row, jobId) {
   });
 }
 
+// Persisted across reloads, like currentEnv. "0" means unlimited (the "All"
+// option) — matches the API's own limit<=0 convention, so it passes straight
+// through to /api/jobs without translation.
+function jobsLimit() {
+  const select = document.getElementById("jobs-limit");
+  return select.value;
+}
+
+const savedJobsLimit = localStorage.getItem("jobsLimit");
+if (savedJobsLimit) document.getElementById("jobs-limit").value = savedJobsLimit;
+document.getElementById("jobs-limit").addEventListener("change", async () => {
+  localStorage.setItem("jobsLimit", jobsLimit());
+  await loadJobs();
+});
+
+// Column -> query param name; also the "jobs-filter-<field>" select id suffix
+// and the /api/jobs/facets response key ("<field>s", e.g. "kinds").
+const JOBS_FILTER_FIELDS = ["kind", "target", "environment", "status"];
+
+function jobsFilterSelect(field) {
+  return document.getElementById(`jobs-filter-${field}`);
+}
+
+// Repeated query params (?kind=a&kind=b&...), one multiselect's selections
+// per field, OR'd within a field and AND'd across fields by the API.
+function jobsFilterParams() {
+  const params = new URLSearchParams();
+  for (const field of JOBS_FILTER_FIELDS) {
+    for (const opt of jobsFilterSelect(field).selectedOptions) params.append(field, opt.value);
+  }
+  return params;
+}
+
+// Populates each filter <select>'s options from every job that exists
+// (not just the currently displayed page — that's the whole point of
+// /api/jobs/facets), preserving whatever the operator already had selected.
+async function loadJobFacets() {
+  const facets = await api("/api/jobs/facets");
+  for (const field of JOBS_FILTER_FIELDS) {
+    const select = jobsFilterSelect(field);
+    const selected = new Set([...select.selectedOptions].map((o) => o.value));
+    select.replaceChildren();
+    for (const value of facets[`${field}s`]) {
+      const opt = new Option(value, value);
+      opt.selected = selected.has(value);
+      select.appendChild(opt);
+    }
+  }
+}
+
+for (const field of JOBS_FILTER_FIELDS) {
+  jobsFilterSelect(field).addEventListener("change", loadJobs);
+}
+document.getElementById("jobs-filter-clear").addEventListener("click", async () => {
+  for (const field of JOBS_FILTER_FIELDS) {
+    for (const opt of jobsFilterSelect(field).options) opt.selected = false;
+  }
+  await loadJobs();
+});
+
 async function loadJobs() {
   const tbody = document.querySelector("#jobs-table tbody");
-  const jobs = await api("/api/jobs?limit=25");
-  updateJobsBadge(jobs);
+  // The badge is deliberately NOT updated from this fetch — pollJobs() tracks
+  // it separately from its own fixed, generous limit, so a small display
+  // limit here (e.g. "10") never makes the running/pending count look lower
+  // than it really is.
+  const params = jobsFilterParams();
+  params.set("limit", jobsLimit());
+  const jobs = await api(`/api/jobs?${params.toString()}`);
 
-  // Drop tracking for any job that's aged out of the top 25 — its log row
-  // won't exist after the rebuild below, so there'd be nothing to refresh.
+  // Drop tracking for any job that's aged out of the visible list — its log
+  // row won't exist after the rebuild below, so there'd be nothing to refresh.
   const currentIds = new Set(jobs.map((j) => j.id));
   for (const id of openJobLogs) if (!currentIds.has(id)) openJobLogs.delete(id);
 
@@ -2049,6 +2121,10 @@ async function loadJobs() {
       syncInstallLogRow(existingRows[i], job);
     });
   } else {
+    // The visible set just changed shape — a plausible moment for a new
+    // kind/target/environment/status to have shown up too, so refresh the
+    // filter options (cheap; preserves the operator's current selections).
+    await loadJobFacets();
     tbody.replaceChildren();
     for (const job of jobs) {
       const row = el("tpl-job-row");
