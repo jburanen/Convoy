@@ -157,9 +157,9 @@ it is tested and confirmed by a human. There will not be a packaged release unti
 
 ✅ Implement ldap authentication
 ◻️ Implement local TLS support
-◻️ Test Nginx/NPM support
-◻️ SMS/Smart Center environment discovery and patching
-✅ MDS/Multi-Domain environment discovery and patching
+✅ Test Nginx/NPM support
+◻️ Test SMS/Smart Center environment discovery and patching
+✅ Test MDS/Multi-Domain environment discovery and patching
 ◻️ Gaia/Force Gateway patching
 ◻️ Gaia/Force ClusterXL patching
 ◻️ Spark patching

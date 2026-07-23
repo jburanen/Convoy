@@ -275,6 +275,7 @@ section h2 { margin: 0 0 0.75rem; font-size: 1.15rem; }
   flex: none;
   text-align: center;
   color: var(--muted);
+  font-size: 1.15rem; /* match the header h2 — crowds the 1.25rem gutter a bit, fine for now */
 }
 #provision-details[open] > summary::before,
 #servers-details[open] > summary::before { content: "▾"; }

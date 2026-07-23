@@ -2027,20 +2027,28 @@ function renderJobRow(row, job) {
 
 // A copy of CPUSE's own install log file content, once an install job has
 // one (only after it finishes and CPUSE reported a log path to fetch it
-// from) — a collapsed-by-default section right under the job row, like the
+// from) — a collapsed-by-default section under the job row, below the
+// command-output box (the job-events row) when one is open, like the
 // package hash lines on the Packages tab but foldable since log files can be
 // long. Inserted/updated/removed as it appears; a <details> element keeps
 // its own open/closed state across re-renders as long as the row itself
 // isn't torn down, which the "sameShape" fast path in loadJobs() guarantees.
-// Must run after `row` is attached to the table (`.after()` is a no-op on a
-// detached node).
+// Located by data-job-id, not position — a fixed "always row's next sibling"
+// assumption broke once the events row could also claim that slot
+// (operator-reported, 2026-07-23; the same class of bug toggleJobLog()
+// below was already fixed for). Must run after `row` is attached to the
+// table (`.after()` is a no-op on a detached node).
 function syncInstallLogRow(row, job) {
-  let logRow = row.nextElementSibling;
-  if (!logRow || !logRow.classList.contains("job-install-log-row")) logRow = null;
+  const jobId = row.dataset.jobId;
+  let logRow = document.querySelector(`#jobs-table tr.job-install-log-row[data-job-id="${jobId}"]`);
   if (job.install_log) {
     if (!logRow) {
       logRow = el("tpl-job-install-log-row");
-      row.after(logRow);
+      logRow.dataset.jobId = jobId;
+      // Below the command-output box when one is open, otherwise right
+      // after the job row.
+      const eventsRow = document.querySelector(`#jobs-table tr.job-events-row[data-job-id="${jobId}"]`);
+      (eventsRow ?? row).after(logRow);
     }
     logRow.querySelector(".job-install-log-summary").textContent =
       `Installation log (${fmtBytes(job.install_log.length)})`;
@@ -2212,8 +2220,12 @@ async function loadJobs() {
       wireJobRow(row, job.id);
       renderJobRow(row, job);
       tbody.appendChild(row);
+      // Events row (if open) before the install-log row, per the fixed order
+      // (job-row, events-row, install-log-row) — syncInstallLogRow() looks
+      // for an existing events row and homes the install-log row below it,
+      // so build the events row first.
+      if (openJobLogs.has(job.id)) row.after(buildJobLogRow(job.id));
       syncInstallLogRow(row, job);
-      if (openJobLogs.has(job.id)) tbody.appendChild(buildJobLogRow(job.id));
     }
   }
 
@@ -2230,16 +2242,12 @@ async function toggleJobLog(jobId, row) {
     document.querySelector(`#jobs-table tr.job-events-row[data-job-id="${jobId}"]`)?.remove();
   } else {
     openJobLogs.add(jobId);
-    // Insert after the install-log row too, when one is already present, so
-    // the fixed row order (job-row, install-log-row, events-row) holds —
-    // syncInstallLogRow() relies on the install-log row always being
-    // immediately after the job row to find/update/remove it, and inserting
-    // the events row there unconditionally displaced it, causing a new
-    // (duplicate) install-log row to be created on every subsequent poll.
-    const afterRow = row.nextElementSibling?.classList.contains("job-install-log-row")
-      ? row.nextElementSibling
-      : row;
-    afterRow.after(buildJobLogRow(jobId));
+    // Always directly after the job row — the command-output box comes
+    // first, per the fixed row order (job-row, events-row, install-log-row).
+    // If an install-log row is already sitting there, this pushes it down to
+    // follow the events row instead; syncInstallLogRow() locates it by
+    // data-job-id rather than position, so that re-homing doesn't race with it.
+    row.after(buildJobLogRow(jobId));
     await refreshJobLogRow(jobId);
   }
 }
