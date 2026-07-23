@@ -68,6 +68,10 @@ class JobRecord(BaseModel):
     # row. Archived to a flat file (see archive.py) along with the job's
     # progress log once the job ages out of the DB.
     install_log: str | None = None
+    # The path that content was fetched from, on the target server — display
+    # only (e.g. "Installation log (12.3 KB): /var/log/CPUpgrade.log"), since
+    # the file itself may since have been rotated/deleted by CPUSE.
+    install_log_path: str | None = None
 
 
 class JobEvent(BaseModel):
@@ -382,6 +386,12 @@ _MIGRATIONS: tuple[str, ...] = (
     # default to 0 (unchecked), preserving current behaviour.
     """
     ALTER TABLE environments ADD COLUMN skip_verify_by_default INTEGER NOT NULL DEFAULT 0;
+    """,
+    # v15: the on-host path the install_log content was fetched from, so the
+    # Jobs tab can show operators where the original file lives on the target
+    # server (display only — CPUSE may since have rotated or deleted it).
+    """
+    ALTER TABLE jobs ADD COLUMN install_log_path TEXT;
     """,
 )
 
@@ -930,15 +940,19 @@ class Store:
                 (status.value, utcnow().isoformat(), error, job_id),
             )
 
-    def set_install_log(self, job_id: str, text: str) -> None:
+    def set_install_log(self, job_id: str, text: str, path: str) -> None:
         """Save a *copy* of CPUSE's own install log file content on the job
         record (PatchingService fetches it from the path `show installer
         package <id>` reports, once available) — the path alone is only
         useful while the file still exists on the box, so we keep the actual
-        text instead. Best-effort UI detail, not tied to the job's terminal
-        state."""
+        text too. ``path`` is kept alongside purely for display, so operators
+        can see where the file lives on the target server. Best-effort UI
+        detail, not tied to the job's terminal state."""
         with self._connect() as conn:
-            conn.execute("UPDATE jobs SET install_log = ? WHERE id = ?", (text, job_id))
+            conn.execute(
+                "UPDATE jobs SET install_log = ?, install_log_path = ? WHERE id = ?",
+                (text, path, job_id),
+            )
 
     def request_cancel(self, job_id: str) -> None:
         with self._connect() as conn:
@@ -1065,6 +1079,7 @@ def _job_from_row(row: sqlite3.Row) -> JobRecord:
         error=row["error"],
         cancel_requested=bool(row["cancel_requested"]),
         install_log=row["install_log"],
+        install_log_path=row["install_log_path"],
     )
 
 

@@ -70,13 +70,14 @@ def test_leaves_old_but_still_active_jobs_alone(store: Store, tmp_path: Path) ->
 
 def test_install_log_is_included_in_the_archived_record(store: Store, tmp_path: Path) -> None:
     job = _old_finished_job(store)
-    store.set_install_log(job.id, "captured log text\nsecond line")
+    store.set_install_log(job.id, "captured log text\nsecond line", "/var/log/CPUpgrade.log")
     archive_path = tmp_path / "job_archive.log"
 
     JobArchiver(store, archive_path).run()
 
     record = json.loads(archive_path.read_text(encoding="utf-8").splitlines()[0])
     assert record["install_log"] == "captured log text\nsecond line"
+    assert record["install_log_path"] == "/var/log/CPUpgrade.log"
 
 
 def test_prunes_archived_entries_past_the_retention_window(store: Store, tmp_path: Path) -> None:

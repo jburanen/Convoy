@@ -73,6 +73,7 @@ def _archive_record(job: JobRecord, store: Store) -> dict[str, object]:
         "finished_at": job.finished_at.isoformat() if job.finished_at else None,
         "error": job.error,
         "install_log": job.install_log,
+        "install_log_path": job.install_log_path,
         "events": [
             {"ts": e.ts.isoformat(), "level": e.level, "message": e.message}
             for e in store.events(job.id)

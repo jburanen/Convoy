@@ -2059,7 +2059,11 @@ function renderJobRow(row, job) {
 // assumption broke once the events row could also claim that slot
 // (operator-reported, 2026-07-23; the same class of bug toggleJobLog()
 // below was already fixed for). Must run after `row` is attached to the
-// table (`.after()` is a no-op on a detached node).
+// table (`.after()` is a no-op on a detached node). The summary line (the
+// <details> toggle) shows the on-host path the content was fetched from —
+// display only, since CPUSE may since have rotated or deleted that file —
+// so an operator can go find the original without digging through job
+// events. Older jobs captured before install_log_path existed just omit it.
 function syncInstallLogRow(row, job) {
   const jobId = row.dataset.jobId;
   let logRow = document.querySelector(`#jobs-table tr.job-install-log-row[data-job-id="${jobId}"]`);
@@ -2072,8 +2076,9 @@ function syncInstallLogRow(row, job) {
       const eventsRow = document.querySelector(`#jobs-table tr.job-events-row[data-job-id="${jobId}"]`);
       (eventsRow ?? row).after(logRow);
     }
-    logRow.querySelector(".job-install-log-summary").textContent =
-      `Installation log (${fmtBytes(job.install_log.length)})`;
+    logRow.querySelector(".job-install-log-summary").textContent = job.install_log_path
+      ? `Installation log (${fmtBytes(job.install_log.length)}): ${job.install_log_path}`
+      : `Installation log (${fmtBytes(job.install_log.length)})`;
     logRow.querySelector(".job-install-log").textContent = job.install_log;
   } else if (logRow) {
     logRow.remove();

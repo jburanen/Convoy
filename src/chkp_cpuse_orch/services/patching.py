@@ -674,7 +674,7 @@ class PatchingService:
             text = text[:_INSTALL_LOG_MAX_BYTES] + (
                 f"\n... truncated at {_INSTALL_LOG_MAX_BYTES} bytes"
             )
-        self._store.set_install_log(ctx.job.id, text)
+        self._store.set_install_log(ctx.job.id, text, path)
         ctx.log(f"captured installation log from {path} ({len(text)} bytes)")
 
 

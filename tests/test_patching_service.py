@@ -601,8 +601,9 @@ def test_install_job_logs_raw_command_output_and_poll_detail(
     assert "captured installation log from /var/log/x" in messages
     # The *content* of CPUSE's own install log file is fetched and captured
     # on the job record — not just its path, which is worthless once CPUSE
-    # rotates or deletes the file.
+    # rotates or deletes the file — though the path is also kept for display.
     assert store.get_job(job.id).install_log == "line one\nline two\n"
+    assert store.get_job(job.id).install_log_path == "/var/log/x"
 
 
 def test_install_job_ignores_attempts_budget_once_percentage_progress_seen(
