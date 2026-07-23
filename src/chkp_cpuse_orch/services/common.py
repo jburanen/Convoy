@@ -20,7 +20,7 @@ from ..credentials import (
     ensure_ssh_credential,
 )
 from ..errors import CredentialError, InventoryError
-from ..inventory import FIREWALL_ROLES, MANAGEMENT_PLANE_ROLES, Host, Inventory
+from ..inventory import FIREWALL_ROLES, MANAGEMENT_PLANE_ROLES, Host, Inventory, Role
 from ..jobs import JobRunner
 from ..store import JobRecord, new_id
 from ..transport.ssh import CommandResult, SSHClient
@@ -92,6 +92,24 @@ class HostConnector:
 
     def management_servers(self) -> list[Host]:
         return [h for role in _MGMT_ROLES for h in self.inventory.hosts_by_role(role)]
+
+    def primary_mgmt_host(self) -> Host:
+        """The environment's one primary management server (Primary SMS or
+        Primary MDS). Environments are modeled as having exactly one — never a
+        Primary SMS *and* a Primary MDS, and never more than one of either —
+        so discovery flows resolve it automatically instead of asking the
+        operator to pick a source server."""
+        primaries = [
+            h
+            for role in (Role.PRIMARY_SMS, Role.PRIMARY_MDS)
+            for h in self.inventory.hosts_by_role(role)
+        ]
+        if not primaries:
+            raise InventoryError(
+                f"environment {self.environment!r} has no Primary SMS or Primary MDS "
+                "server configured — add one on the Provisioning tab"
+            )
+        return primaries[0]
 
     def mgmt_host(self, host_name: str) -> Host:
         host = self.inventory.host(host_name)  # raises InventoryError if unknown

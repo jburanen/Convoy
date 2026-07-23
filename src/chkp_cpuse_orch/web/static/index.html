@@ -751,8 +751,11 @@
 </div>
 
 <!-- ============ Discover firewalls modal (CPUSE tab) ========================= -->
-<!-- Scans the estate from a chosen primary and lets the operator review/correct the
-     detected firewalls + roles before importing. Import reuses the add-firewall API. -->
+<!-- Scans the estate from the environment's one primary management server (no
+     source picker — see services/discovery.py) and lets the operator review/correct
+     the detected firewalls + roles before importing. On an MDS, gateways live inside
+     a specific Domain/CMA, so the Domain picker above is required and populated from
+     GET .../domains. Import reuses the add-firewall API. -->
 <div id="discover-firewalls-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="discover-firewalls-title">
   <div class="modal-card">
     <div class="modal-head">
@@ -760,13 +763,13 @@
       <button id="discover-firewalls-close" class="small" title="Close">✕</button>
     </div>
     <p class="hint">
-      Connects to a primary management server and enumerates gateways and cluster
-      members via the Management API. Uses the credential set assigned to the primary.
-      Review the detected roles and import the ones you want.
+      Connects to the environment's primary management server and enumerates gateways
+      and cluster members via the Management API. Uses the credential set assigned to
+      the primary. Review the detected roles and import the ones you want.
     </p>
     <form id="discover-firewalls-form">
-      <label>Discover from
-        <select id="discover-firewalls-primary"><!-- filled with the environment's primaries --></select>
+      <label id="discover-firewalls-domain-label" class="hidden">Domain
+        <select id="discover-firewalls-domain"><!-- filled with the MDS's domains --></select>
       </label>
       <button type="submit" id="discover-firewalls-run">Scan</button>
     </form>

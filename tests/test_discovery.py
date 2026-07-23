@@ -3,7 +3,7 @@ from __future__ import annotations
 from pydantic import SecretStr
 
 from chkp_cpuse_orch.credentials import Credential, CredentialBundle, CredentialKind
-from chkp_cpuse_orch.errors import TransportError
+from chkp_cpuse_orch.errors import InventoryError, TransportError
 from chkp_cpuse_orch.inventory import FIREWALL_ROLES, Host, Inventory, Role, Site
 from chkp_cpuse_orch.services.discovery import (
     DiscoveryService,
@@ -109,8 +109,14 @@ def test_parse_mdsquerydb_mdss_ignores_noise() -> None:
 
 
 class _FakeMgmtClient:
-    def __init__(self, objects: list[dict[str, object]], **kwargs: object) -> None:
+    def __init__(
+        self,
+        objects: list[dict[str, object]],
+        domains: list[dict[str, object]] | None = None,
+        **kwargs: object,
+    ) -> None:
         self._objects = objects
+        self._domains = domains or []
         self.kwargs = kwargs
 
     def __enter__(self) -> _FakeMgmtClient:
@@ -121,6 +127,9 @@ class _FakeMgmtClient:
 
     def show_gateways_and_servers(self, *, details_level: str = "full") -> list[dict[str, object]]:
         return self._objects
+
+    def show_domains(self) -> list[dict[str, object]]:
+        return self._domains
 
 
 class _FakeConnector:
@@ -139,6 +148,13 @@ class _FakeConnector:
 
     def mgmt_host(self, name: str) -> Host:
         return self.inventory.host(name)
+
+    def primary_mgmt_host(self) -> Host:
+        for site in self.inventory.sites:
+            for h in site.hosts:
+                if h.role in (Role.PRIMARY_SMS, Role.PRIMARY_MDS):
+                    return h
+        raise InventoryError("no Primary SMS or Primary MDS server configured")
 
     def firewalls(self) -> list[Host]:
         return [h for s in self.inventory.sites for h in s.hosts if h.role in FIREWALL_ROLES]
@@ -268,7 +284,9 @@ def test_discover_firewalls_flags_existing_and_maps_roles() -> None:
         mgmt_client_factory=lambda host, **kw: _FakeMgmtClient(GATEWAYS_AND_SERVERS, **kw),
     )
 
-    result = service.discover_firewalls("default", "mgmt-01")
+    # No source server is passed — an environment has exactly one primary, so
+    # it's resolved via primary_mgmt_host() instead of an operator-picked name.
+    result = service.discover_firewalls("default")
     by_name = {s.name: s for s in result.servers}
 
     assert set(by_name) == {"fw-01", "cluster-01"}
@@ -278,7 +296,7 @@ def test_discover_firewalls_flags_existing_and_maps_roles() -> None:
     assert not result.warnings
 
 
-def test_discover_firewalls_mds_warns_about_global_domain_scope() -> None:
+def test_discover_firewalls_mds_without_domain_asks_operator_to_pick_one() -> None:
     inv = _inventory(Host(name="mds-primary", address="10.0.0.1", role=Role.PRIMARY_MDS))
     connector = _FakeConnector(inv, _api_bundle(), is_mds=True)
     service = DiscoveryService(
@@ -286,8 +304,58 @@ def test_discover_firewalls_mds_warns_about_global_domain_scope() -> None:
         mgmt_client_factory=lambda host, **kw: _FakeMgmtClient([], **kw),
     )
 
-    result = service.discover_firewalls("default", "mds-primary")
-    assert any("Global domain" in w for w in result.warnings)
+    result = service.discover_firewalls("default")
+    assert result.servers == []
+    assert any("select a Domain" in w for w in result.warnings)
+
+
+def test_discover_firewalls_mds_scans_the_chosen_domain() -> None:
+    inv = _inventory(Host(name="mds-primary", address="10.0.0.1", role=Role.PRIMARY_MDS))
+    connector = _FakeConnector(inv, _api_bundle(), is_mds=True)
+    seen_kwargs: list[dict[str, object]] = []
+
+    def factory(host: object, **kw: object) -> _FakeMgmtClient:
+        seen_kwargs.append(kw)
+        return _FakeMgmtClient(GATEWAYS_AND_SERVERS, **kw)
+
+    service = DiscoveryService(_FakeRegistry(connector), mgmt_client_factory=factory)  # type: ignore[arg-type]
+    result = service.discover_firewalls("default", domain="Domain1")
+
+    assert seen_kwargs[0]["domain"] == "Domain1"
+    by_name = {s.name: s for s in result.servers}
+    assert set(by_name) == {"fw-01", "cluster-01"}
+    assert not result.warnings
+
+
+def test_list_domains_logs_in_without_a_domain_and_returns_names() -> None:
+    inv = _inventory(Host(name="mds-primary", address="10.0.0.1", role=Role.PRIMARY_MDS))
+    connector = _FakeConnector(inv, _api_bundle(), is_mds=True)
+    seen_kwargs: list[dict[str, object]] = []
+    domains = [{"name": "Domain2"}, {"name": "Domain1"}]
+
+    def factory(host: object, **kw: object) -> _FakeMgmtClient:
+        seen_kwargs.append(kw)
+        return _FakeMgmtClient([], domains=domains, **kw)
+
+    service = DiscoveryService(_FakeRegistry(connector), mgmt_client_factory=factory)  # type: ignore[arg-type]
+    result = service.list_domains("default")
+
+    assert "domain" not in seen_kwargs[0]  # show-domains needs the MDS system context
+    assert result.domains == ["Domain1", "Domain2"]  # sorted
+    assert not result.warnings
+
+
+def test_list_domains_api_failure_becomes_warning() -> None:
+    inv = _inventory(Host(name="mds-primary", address="10.0.0.1", role=Role.PRIMARY_MDS))
+    connector = _FakeConnector(inv, _api_bundle(), is_mds=True)
+
+    def boom(host: object, **kw: object) -> _FakeMgmtClient:
+        raise TransportError("connection refused")
+
+    service = DiscoveryService(_FakeRegistry(connector), mgmt_client_factory=boom)  # type: ignore[arg-type]
+    result = service.list_domains("default")
+    assert result.domains == []
+    assert any("Management API domain lookup failed" in w for w in result.warnings)
 
 
 def test_discover_mds_nonzero_exit_surfaces_command_and_status() -> None:

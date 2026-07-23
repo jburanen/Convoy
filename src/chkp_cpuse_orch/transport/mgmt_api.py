@@ -144,6 +144,28 @@ class ManagementAPIClient:
                 break
         return objects
 
+    def show_domains(self) -> list[dict[str, Any]]:
+        """Return every Domain (CMA) a Multi-Domain Server knows about.
+
+        Only meaningful for a session logged into the MDS system context (no
+        ``domain`` in the login payload) — ``show-domains`` operates above any
+        single Domain/Global scope. Paged the same way as
+        ``show_gateways_and_servers``."""
+        objects: list[dict[str, Any]] = []
+        offset = 0
+        while True:
+            data = self._post(
+                "show-domains",
+                {"limit": _PAGE_LIMIT, "offset": offset},
+            )
+            batch = data.get("objects") or []
+            objects.extend(batch)
+            total = int(data.get("total", len(objects)))
+            offset += len(batch)
+            if not batch or offset >= total:
+                break
+        return objects
+
     # -- transport ---------------------------------------------------------------
 
     def _post(

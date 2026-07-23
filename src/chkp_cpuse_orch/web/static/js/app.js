@@ -123,6 +123,10 @@ let currentEnv = localStorage.getItem("currentEnv") || null;
 // When false, SSH actions prompt for credentials (kept in memory only).
 let envStorage = {}; // name -> boolean
 
+// Per-environment MDS-vs-SMS kind, refreshed by loadEnvironments — used to
+// show/hide the Domain picker in the discover-firewalls modal.
+let envIsMds = {}; // name -> boolean
+
 function storageEnabled(name = currentEnv) {
   return envStorage[name] !== false; // unknown → assume enabled (safe default)
 }
@@ -250,6 +254,7 @@ async function loadEnvironments() {
   const envs = await api("/api/environments");
   envStorage = Object.fromEntries(envs.map((e) => [e.name, e.credential_storage_enabled]));
   envSkipVerifyDefault = Object.fromEntries(envs.map((e) => [e.name, e.skip_verify_by_default]));
+  envIsMds = Object.fromEntries(envs.map((e) => [e.name, e.is_mds]));
   picker.replaceChildren();
   if (!envs.length) {
     // Placeholder so the manage entry is never the pre-selected option — a
@@ -1957,12 +1962,18 @@ document.getElementById("firewall-modal").addEventListener("click", (ev) => {
 
 /* ---------- 3d. discover firewalls ---------- */
 
-// The discover-from primary's SSH identity, captured when a scan runs so
-// imported firewalls can inherit it — same idea as discoverPrimarySshUser/
-// discoverPrimaryCredSet above, kept separate since the two discovery flows
-// are independent (per the Firewalls panel's design).
+// The primary's SSH identity, captured when a scan runs so imported firewalls
+// can inherit it — same idea as discoverPrimarySshUser/discoverPrimaryCredSet
+// above, kept separate since the two discovery flows are independent (per the
+// Firewalls panel's design).
 let discoverFwPrimarySshUser = "admin";
 let discoverFwPrimaryCredSet = null;
+
+// An environment has exactly one primary (SMS or MDS) — the modal never asks
+// the operator to pick a source server, it just finds it.
+function findPrimaryServer(servers) {
+  return servers.find((s) => s.role === "primary_sms" || s.role === "primary_mds") || null;
+}
 
 async function openDiscoverFirewallsModal() {
   if (!currentEnv) { toast("Create an environment and add a primary management server first."); return; }
@@ -1970,20 +1981,29 @@ async function openDiscoverFirewallsModal() {
   try {
     servers = await api(`/api/environments/${encodeURIComponent(currentEnv)}/servers`);
   } catch (e) { toast("Could not load servers: " + e.message); return; }
-  const primaries = servers.filter((s) => s.role === "primary_sms" || s.role === "primary_mds");
-  if (!primaries.length) {
+  if (!findPrimaryServer(servers)) {
     toast("Add a Primary SMS or Primary MDS server on the Provisioning tab before discovering firewalls.");
     return;
   }
-  const select = document.getElementById("discover-firewalls-primary");
-  select.replaceChildren();
-  for (const s of primaries) {
-    const opt = document.createElement("option");
-    opt.value = s.name;
-    opt.textContent = `${s.name} (${roleLabel(s.role)})`;
-    select.appendChild(opt);
-  }
   resetDiscoverFirewallsResults();
+  const domainLabel = document.getElementById("discover-firewalls-domain-label");
+  const domainSelect = document.getElementById("discover-firewalls-domain");
+  domainSelect.replaceChildren();
+  const status = document.getElementById("discover-firewalls-status");
+  if (envIsMds[currentEnv]) {
+    domainLabel.classList.remove("hidden");
+    status.textContent = "Loading domains…";
+    try {
+      const { domains, warnings } = await api(`/api/environments/${encodeURIComponent(currentEnv)}/domains`);
+      for (const d of domains) domainSelect.appendChild(new Option(d, d));
+      status.textContent = domains.length ? "" : "No Domains found on the primary MDS.";
+      for (const w of warnings || []) toast(w);
+    } catch (e) {
+      status.textContent = "Could not load domains: " + e.message;
+    }
+  } else {
+    domainLabel.classList.add("hidden");
+  }
   document.getElementById("discover-firewalls-modal").classList.remove("hidden");
 }
 
@@ -2004,27 +2024,30 @@ function closeDiscoverFirewallsModal() {
 
 document.getElementById("discover-firewalls-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
-  const primary = document.getElementById("discover-firewalls-primary").value;
-  if (!primary || !currentEnv) return;
+  if (!currentEnv) return;
+  const isMds = !!envIsMds[currentEnv];
+  const domain = isMds ? document.getElementById("discover-firewalls-domain").value : null;
+  if (isMds && !domain) { toast("Select a Domain to discover firewalls from."); return; }
   resetDiscoverFirewallsResults();
   const status = document.getElementById("discover-firewalls-status");
-  status.textContent = `Scanning from ${primary}…`;
   const runBtn = document.getElementById("discover-firewalls-run");
   runBtn.disabled = true;
   try {
     const editableServers = await api(`/api/environments/${encodeURIComponent(currentEnv)}/servers`);
-    const primarySrv = editableServers.find((s) => s.name === primary);
-    discoverFwPrimarySshUser = primarySrv ? primarySrv.ssh_user : "admin";
+    const primarySrv = findPrimaryServer(editableServers);
+    if (!primarySrv) { status.textContent = "No Primary SMS/MDS server configured."; return; }
+    status.textContent = `Scanning from ${primarySrv.name}…`;
+    discoverFwPrimarySshUser = primarySrv.ssh_user;
     discoverFwPrimaryCredSet = null;
     if (storageEnabled()) {
       const srvs = await api(envUrl("/servers"));
-      const match = srvs.find((s) => s.name === primary);
+      const match = srvs.find((s) => s.name === primarySrv.name);
       discoverFwPrimaryCredSet = match ? match.credential_set : null;
     }
     const result = await api(`/api/environments/${encodeURIComponent(currentEnv)}/discover-firewalls`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ primary }),
+      body: JSON.stringify({ domain }),
     });
     renderDiscoverFirewallsResults(result);
   } catch (e) {

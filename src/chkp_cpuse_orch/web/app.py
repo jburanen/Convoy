@@ -289,6 +289,13 @@ class DiscoverIn(BaseModel):
     primary: str  # name of the already-defined management server to scan from
 
 
+class DiscoverFirewallsIn(BaseModel):
+    # No source server here — an environment has exactly one primary (SMS or
+    # MDS), so DiscoveryService resolves it automatically. MDS only: which
+    # Domain/CMA (from the /domains endpoint) to scan for gateways.
+    domain: str | None = None
+
+
 class FirewallIn(BaseModel):
     name: str
     address: str
@@ -855,14 +862,14 @@ def _register_routes(app: FastAPI) -> None:
         return {"deleted": True}
 
     @app.post("/api/environments/{env}/discover-firewalls")
-    def discover_firewalls(env: str, body: DiscoverIn, request: Request) -> dict[str, Any]:
-        """Scan the estate from an already-defined primary and return candidate
-        firewalls (gateways/cluster members) for the operator to review and
-        import. Read-only: nothing is added here — the UI posts confirmed rows
-        back to the add-firewall endpoint."""
+    def discover_firewalls(env: str, body: DiscoverFirewallsIn, request: Request) -> dict[str, Any]:
+        """Scan the estate from the environment's primary management server and
+        return candidate firewalls (gateways/cluster members) for the operator
+        to review and import. Read-only: nothing is added here — the UI posts
+        confirmed rows back to the add-firewall endpoint."""
         discovery: DiscoveryService = request.app.state.discovery
         try:
-            result = discovery.discover_firewalls(env, body.primary)
+            result = discovery.discover_firewalls(env, domain=body.domain)
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
         return {
@@ -880,6 +887,18 @@ def _register_routes(app: FastAPI) -> None:
             ],
             "warnings": result.warnings,
         }
+
+    @app.get("/api/environments/{env}/domains")
+    def env_domains(env: str, request: Request) -> dict[str, Any]:
+        """Enumerate Domains (CMAs) on the environment's primary MDS, for the
+        discover-firewalls modal's domain picker. SMS environments never call
+        this — the picker is hidden client-side."""
+        discovery: DiscoveryService = request.app.state.discovery
+        try:
+            result = discovery.list_domains(env)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        return {"domains": result.domains, "warnings": result.warnings}
 
     # -- service-account provisioning (pure rendering; nothing stored) ---------
 

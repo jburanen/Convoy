@@ -19,3 +19,4 @@ Load this at the start of each session; read a linked file when its hook looks r
 - [Provisioning command order](provisioning-command-order.md) — RBA role assignment must precede the shell→bash switch
 - [MDS discovery command](mds-discovery-command.md) — locate MDSDIR via `/opt/CPmds-R*` glob, don't trust any pre-set env var over SSH exec; SmartEvent on MDS confirmed via API login domain="Global"
 - [Environment kind (SMS vs MDS)](environment-kind.md) — `environments.is_mds` flag, set via UI checkbox, drives command selection (not host role)
+- [Firewall discovery domain picker](firewall-discovery-domain-picker.md) — no source-server picker (one primary/env); MDS picks a Domain via `show-domains` (unverified against live gear)

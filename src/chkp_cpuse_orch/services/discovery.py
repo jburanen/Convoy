@@ -31,6 +31,13 @@ table and the operator confirms before anything is imported (reusing the normal
 add-server path). Detection is best-effort — especially primary-vs-secondary — so
 ambiguous rows are flagged ``needs_review`` for the operator to correct. See
 .claude/memory/architecture.md (thin wrappers, decisions in services).
+
+Firewall discovery (``discover_firewalls``) never takes a source-server argument —
+an environment has exactly one primary (SMS or MDS), so ``HostConnector.primary_mgmt_host``
+resolves it instead of asking the operator to pick. On an MDS, gateways live inside a
+specific Domain/CMA, so the operator picks one first via ``list_domains`` (``show-domains``,
+logged in with no ``domain`` — that's the MDS system context, above any single Domain or
+``Global``) and the UI passes it back in as ``domain``.
 """
 
 from __future__ import annotations
@@ -70,6 +77,12 @@ class DiscoveryResult:
     warnings: list[str] = field(default_factory=list)
 
 
+@dataclass
+class DomainsResult:
+    domains: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+
 class MgmtClientContext(Protocol):
     """The slice of ManagementAPIClient discovery uses (as a context manager)."""
 
@@ -81,6 +94,7 @@ class MgmtClientContext(Protocol):
         tb: TracebackType | None,
     ) -> None: ...
     def show_gateways_and_servers(self, *, details_level: str = ...) -> list[dict[str, Any]]: ...
+    def show_domains(self) -> list[dict[str, Any]]: ...
 
 
 # Factory so tests can inject a fake API client without a live server.
@@ -103,13 +117,22 @@ class DiscoveryService:
         self._registry = registry
         self._mgmt_client_factory = mgmt_client_factory or _default_mgmt_client_factory
 
-    def discover_firewalls(self, environment: str, primary_host_name: str) -> DiscoveryResult:
-        """Scan the estate from a primary management server for firewalls
-        (gateways/cluster members) instead of management-plane servers — same
-        Management API call, opposite half of the object list. Only the API
-        side applies (mdsquerydb only enumerates MDS peers, not gateways)."""
+    def discover_firewalls(
+        self, environment: str, *, domain: str | None = None
+    ) -> DiscoveryResult:
+        """Scan the estate from the environment's primary management server for
+        firewalls (gateways/cluster members) instead of management-plane
+        servers — same Management API call, opposite half of the object list.
+        Only the API side applies (mdsquerydb only enumerates MDS peers, not
+        gateways).
+
+        An environment has exactly one primary (SMS or MDS), so the caller
+        never names a source server here — ``primary_mgmt_host`` resolves it.
+        On an MDS, gateways live inside a specific Domain/CMA rather than the
+        Global domain, so the caller must supply which ``domain`` to scan
+        (see ``list_domains``)."""
         connector = self._registry.get(environment)
-        primary = connector.mgmt_host(primary_host_name)  # validates it's a mgmt role
+        primary = connector.primary_mgmt_host()
         bundle = connector.host_credentials(primary)
 
         result = DiscoveryResult()
@@ -119,18 +142,15 @@ class DiscoveryService:
 
         is_mds = connector.is_mds
         if is_mds:
-            # Gateways live in per-Domain CMAs, not the Global domain — a Global
-            # login (used for shared servers like SmartEvent) won't see them.
-            # Per-Domain enumeration isn't implemented yet; surface that instead
-            # of silently returning nothing.
-            result.warnings.append(
-                "This is a Multi-Domain environment — firewall discovery only scans the "
-                "Global domain and will not find gateways inside individual Domains/CMAs. "
-                "Add those manually for now."
-            )
-        self._discover_firewalls_via_api(
-            primary, bundle, result, domain="Global" if is_mds else None
-        )
+            if not domain:
+                result.warnings.append(
+                    "This is a Multi-Domain environment — select a Domain to discover "
+                    "firewalls from."
+                )
+                return result
+            self._discover_firewalls_via_api(primary, bundle, result, domain=domain)
+        else:
+            self._discover_firewalls_via_api(primary, bundle, result, domain=None)
 
         deduped: list[DiscoveredServer] = []
         seen: set[str] = set()
@@ -142,6 +162,31 @@ class DiscoveryService:
             srv.already_in_inventory = srv.name in existing_names or srv.address in existing_addrs
             deduped.append(srv)
         result.servers = deduped
+        return result
+
+    def list_domains(self, environment: str) -> DomainsResult:
+        """Enumerate the Domains (CMAs) a Multi-Domain environment's primary
+        MDS knows about, so the operator can pick which one to scope firewall
+        discovery into. Logs in with no ``domain`` in the payload — that's
+        reserved for a specific Domain or the ``Global`` domain, while
+        ``show-domains`` operates at the MDS system level, above either."""
+        connector = self._registry.get(environment)
+        primary = connector.primary_mgmt_host()
+        bundle = connector.host_credentials(primary)
+
+        result = DomainsResult()
+        try:
+            auth = _api_auth(bundle)
+        except CredentialError as exc:
+            result.warnings.append(str(exc))
+            return result
+        try:
+            with self._mgmt_client_factory(primary, **auth) as client:
+                objects = client.show_domains()
+        except TransportError as exc:
+            result.warnings.append(f"Management API domain lookup failed: {exc}")
+            return result
+        result.domains = sorted({str(o.get("name") or "").strip() for o in objects} - {""})
         return result
 
     def _discover_firewalls_via_api(
@@ -441,6 +486,7 @@ __all__ = [
     "DiscoveredServer",
     "DiscoveryResult",
     "DiscoveryService",
+    "DomainsResult",
     "map_gateways_and_servers",
     "map_gateways_only",
     "parse_mdsquerydb_mdss",
