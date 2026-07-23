@@ -254,9 +254,7 @@ def test_summarize_jumbo_picks_highest_installed_take() -> None:
     packages = [
         PackageState("Check_Point_R82_10_ga_time_fix_main_Bundle_T9_FULL.tgz", "Imported"),
         PackageState("R82.10 Jumbo Hotfix Accumulator Take 19", "Installed as part of"),
-        PackageState(
-            "R82.10 Jumbo Hotfix Accumulator Recommended Jumbo Take 24", "Installed"
-        ),
+        PackageState("R82.10 Jumbo Hotfix Accumulator Recommended Jumbo Take 24", "Installed"),
         PackageState("Some Weird Package", "Not Applicable"),
     ]
     summary = summarize_jumbo(packages)

@@ -4,10 +4,11 @@ from pydantic import SecretStr
 
 from chkp_cpuse_orch.credentials import Credential, CredentialBundle, CredentialKind
 from chkp_cpuse_orch.errors import TransportError
-from chkp_cpuse_orch.inventory import Host, Inventory, Role, Site
+from chkp_cpuse_orch.inventory import FIREWALL_ROLES, Host, Inventory, Role, Site
 from chkp_cpuse_orch.services.discovery import (
     DiscoveryService,
     map_gateways_and_servers,
+    map_gateways_only,
     parse_mdsquerydb_mdss,
 )
 
@@ -59,6 +60,18 @@ def test_map_gateways_and_servers_roles() -> None:
     assert by_name["log-01"].detected_role is Role.LOG_SERVER
     assert by_name["se-01"].detected_role is Role.SMARTEVENT
     assert all(s.source == "api" for s in servers)
+
+
+def test_map_gateways_only_roles() -> None:
+    firewalls = map_gateways_only(GATEWAYS_AND_SERVERS)
+    by_name = {s.name: s for s in firewalls}
+
+    # Management-plane objects are dropped — the mirror image of the servers test.
+    assert set(by_name) == {"fw-01", "cluster-01"}
+    assert by_name["fw-01"].detected_role is Role.GATEWAY
+    assert by_name["cluster-01"].detected_role is Role.CLUSTER_MEMBER
+    assert all(s.source == "api" for s in firewalls)
+    assert all(s.needs_review is False for s in firewalls)
 
 
 # ---- `mdsquerydb MDSs` parsing (pure) --------------------------------------------
@@ -126,6 +139,9 @@ class _FakeConnector:
 
     def mgmt_host(self, name: str) -> Host:
         return self.inventory.host(name)
+
+    def firewalls(self) -> list[Host]:
+        return [h for s in self.inventory.sites for h in s.hosts if h.role in FIREWALL_ROLES]
 
     def host_credentials(self, host: Host) -> CredentialBundle:
         return self._bundle
@@ -239,6 +255,39 @@ def test_discover_mds_over_ssh() -> None:
     assert "ls -d /opt/CPmds-R*" in sent
     assert '"$MDSDIR/scripts/mdsquerydb" MDSs' in sent
     assert ssh.closed is True  # transport is always closed
+
+
+def test_discover_firewalls_flags_existing_and_maps_roles() -> None:
+    inv = _inventory(
+        Host(name="mgmt-01", address="192.0.2.10", role=Role.PRIMARY_SMS),
+        Host(name="fw-01", address="192.0.2.20", role=Role.GATEWAY),
+    )
+    connector = _FakeConnector(inv, _api_bundle())
+    service = DiscoveryService(
+        _FakeRegistry(connector),  # type: ignore[arg-type]
+        mgmt_client_factory=lambda host, **kw: _FakeMgmtClient(GATEWAYS_AND_SERVERS, **kw),
+    )
+
+    result = service.discover_firewalls("default", "mgmt-01")
+    by_name = {s.name: s for s in result.servers}
+
+    assert set(by_name) == {"fw-01", "cluster-01"}
+    assert by_name["fw-01"].already_in_inventory is True  # already a firewall in inventory
+    assert by_name["cluster-01"].already_in_inventory is False
+    assert by_name["cluster-01"].detected_role is Role.CLUSTER_MEMBER
+    assert not result.warnings
+
+
+def test_discover_firewalls_mds_warns_about_global_domain_scope() -> None:
+    inv = _inventory(Host(name="mds-primary", address="10.0.0.1", role=Role.PRIMARY_MDS))
+    connector = _FakeConnector(inv, _api_bundle(), is_mds=True)
+    service = DiscoveryService(
+        _FakeRegistry(connector),  # type: ignore[arg-type]
+        mgmt_client_factory=lambda host, **kw: _FakeMgmtClient([], **kw),
+    )
+
+    result = service.discover_firewalls("default", "mds-primary")
+    assert any("Global domain" in w for w in result.warnings)
 
 
 def test_discover_mds_nonzero_exit_surfaces_command_and_status() -> None:

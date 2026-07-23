@@ -103,6 +103,70 @@ class DiscoveryService:
         self._registry = registry
         self._mgmt_client_factory = mgmt_client_factory or _default_mgmt_client_factory
 
+    def discover_firewalls(self, environment: str, primary_host_name: str) -> DiscoveryResult:
+        """Scan the estate from a primary management server for firewalls
+        (gateways/cluster members) instead of management-plane servers — same
+        Management API call, opposite half of the object list. Only the API
+        side applies (mdsquerydb only enumerates MDS peers, not gateways)."""
+        connector = self._registry.get(environment)
+        primary = connector.mgmt_host(primary_host_name)  # validates it's a mgmt role
+        bundle = connector.host_credentials(primary)
+
+        result = DiscoveryResult()
+        existing = connector.firewalls()
+        existing_names = {h.name for h in existing}
+        existing_addrs = {h.address for h in existing}
+
+        is_mds = connector.is_mds
+        if is_mds:
+            # Gateways live in per-Domain CMAs, not the Global domain — a Global
+            # login (used for shared servers like SmartEvent) won't see them.
+            # Per-Domain enumeration isn't implemented yet; surface that instead
+            # of silently returning nothing.
+            result.warnings.append(
+                "This is a Multi-Domain environment — firewall discovery only scans the "
+                "Global domain and will not find gateways inside individual Domains/CMAs. "
+                "Add those manually for now."
+            )
+        self._discover_firewalls_via_api(
+            primary, bundle, result, domain="Global" if is_mds else None
+        )
+
+        deduped: list[DiscoveredServer] = []
+        seen: set[str] = set()
+        for srv in result.servers:
+            key = srv.address or srv.name
+            if key in seen:
+                continue
+            seen.add(key)
+            srv.already_in_inventory = srv.name in existing_names or srv.address in existing_addrs
+            deduped.append(srv)
+        result.servers = deduped
+        return result
+
+    def _discover_firewalls_via_api(
+        self,
+        primary: Host,
+        bundle: dict[CredentialKind, Any],
+        result: DiscoveryResult,
+        *,
+        domain: str | None = None,
+    ) -> None:
+        try:
+            auth = _api_auth(bundle)
+        except CredentialError as exc:
+            result.warnings.append(str(exc))
+            return
+        if domain is not None:
+            auth = {**auth, "domain": domain}
+        try:
+            with self._mgmt_client_factory(primary, **auth) as client:
+                objects = client.show_gateways_and_servers(details_level="full")
+        except TransportError as exc:
+            result.warnings.append(f"Management API discovery failed: {exc}")
+            return
+        result.servers.extend(map_gateways_only(objects))
+
     def discover(self, environment: str, primary_host_name: str) -> DiscoveryResult:
         connector = self._registry.get(environment)
         primary = connector.mgmt_host(primary_host_name)  # validates it's a mgmt role
@@ -282,6 +346,37 @@ def _role_for_object(
     return None, False, None
 
 
+def map_gateways_only(objects: list[dict[str, Any]]) -> list[DiscoveredServer]:
+    """Map ``show-gateways-and-servers`` objects to firewalls (gateways/cluster
+    members) — the mirror image of map_gateways_and_servers, which drops these
+    same objects because they're never management-plane servers."""
+    out: list[DiscoveredServer] = []
+    for obj in objects:
+        type_ = str(obj.get("type") or "").lower()
+        # Same test map_gateways_and_servers uses to *drop* these objects,
+        # kept here to *keep* them instead.
+        if not (any(h in type_ for h in _GATEWAY_HINTS) and "management" not in type_):
+            continue
+        name = str(obj.get("name") or "").strip()
+        address = str(obj.get("ipv4-address") or obj.get("ipv6-address") or "").strip()
+        if not name and not address:
+            continue
+        is_cluster = any(h in type_ for h in ("cluster", "vs-cluster", "gateway-cluster"))
+        role = Role.CLUSTER_MEMBER if is_cluster else Role.GATEWAY
+        note = "VSX" if "vsx" in type_ else None
+        out.append(
+            DiscoveredServer(
+                name=name or address,
+                address=address,
+                detected_role=role,
+                source="api",
+                needs_review=False,
+                note=note,
+            )
+        )
+    return out
+
+
 def _truthy_any(blades: dict[str, Any], keys: tuple[str, ...]) -> bool:
     return any(bool(blades.get(k)) for k in keys)
 
@@ -347,5 +442,6 @@ __all__ = [
     "DiscoveryResult",
     "DiscoveryService",
     "map_gateways_and_servers",
+    "map_gateways_only",
     "parse_mdsquerydb_mdss",
 ]

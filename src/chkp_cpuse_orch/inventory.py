@@ -29,8 +29,10 @@ class Role(StrEnum):
     # the UI picker anymore; treated as management-plane for gating.
     MANAGEMENT = "management"  # legacy: Security Management Server → see PRIMARY_SMS
     MDS = "mds"  # legacy: Multi-Domain Server → see PRIMARY_MDS
-    # Gateways are discovered by CDT at deploy time, never added to this inventory.
-    GATEWAY = "gateway"  # Security Gateway (patched via CDT)
+    # Firewalls, patched directly via CPUSE (one host at a time — see
+    # FIREWALL_ROLES/firewalls.py). CDT's bulk gateway-fleet push is a separate
+    # subsystem that discovers its own targets and never stores them here.
+    GATEWAY = "gateway"  # Security Gateway
     CLUSTER_MEMBER = "cluster_member"  # Gateway that is part of a ClusterXL/HA cluster
 
 
@@ -48,6 +50,14 @@ MANAGEMENT_PLANE_ROLES: tuple[Role, ...] = (
     Role.SMARTEVENT,
     Role.MANAGEMENT,  # legacy
     Role.MDS,  # legacy
+)
+
+# Roles for firewalls patched directly via CPUSE (one host at a time — distinct
+# from CDT's bulk gateway-fleet push, which discovers its own targets and never
+# stores them here).
+FIREWALL_ROLES: tuple[Role, ...] = (
+    Role.GATEWAY,
+    Role.CLUSTER_MEMBER,
 )
 
 

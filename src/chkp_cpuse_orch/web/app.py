@@ -60,6 +60,7 @@ from ..services.cdt_ops import CDTService
 from ..services.common import ClientFactory, EnvironmentRegistry
 from ..services.discovery import DiscoveryService, MgmtClientFactory
 from ..services.environments import EnvironmentManager
+from ..services.firewalls import FirewallManager
 from ..services.patching import PatchingService
 from ..services.pkgs_ops import PackageJobService
 from ..services.provisioning import (
@@ -287,6 +288,16 @@ class DiscoverIn(BaseModel):
     primary: str  # name of the already-defined management server to scan from
 
 
+class FirewallIn(BaseModel):
+    name: str
+    address: str
+    # One of the two firewall roles (see inventory.FIREWALL_ROLES).
+    role: str = "gateway"
+    ssh_user: str = "admin"
+    ssh_port: int = 22
+    notes: str | None = None
+
+
 # -- app factory -------------------------------------------------------------------
 
 
@@ -353,6 +364,7 @@ def create_app(
         env_manager = EnvironmentManager(store, registry, credentials, client_factory)
         env_manager.seed_from_config(cfg)
         env_manager.rebuild()
+        firewall_manager = FirewallManager(store, env_manager)
 
         # Without authentication, persisting credentials is not permitted. Enabling
         # storage is blocked at the API, but a pre-existing (e.g. config-seeded)
@@ -384,6 +396,7 @@ def create_app(
         app.state.vault = vault
         app.state.registry = registry
         app.state.env_manager = env_manager
+        app.state.firewall_manager = firewall_manager
         app.state.runner = runner
         app.state.service = service
         app.state.cdt = cdt_service
@@ -769,6 +782,80 @@ def _register_routes(app: FastAPI) -> None:
             "warnings": result.warnings,
         }
 
+    # -- firewalls (environment-scoped; CRUD + discovery) ------------------------
+
+    def _fwmgr(request: Request) -> FirewallManager:
+        manager: FirewallManager = request.app.state.firewall_manager
+        return manager
+
+    @app.get("/api/environments/{env}/firewalls")
+    def env_firewalls(env: str, request: Request) -> list[dict[str, Any]]:
+        """Full editable firewall list for the environment editor."""
+        try:
+            return [
+                {
+                    "name": h.name,
+                    "address": h.address,
+                    "role": h.role,
+                    "ssh_user": h.ssh_user,
+                    "ssh_port": h.ssh_port,
+                }
+                for h in _fwmgr(request).list_firewalls(env)
+            ]
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+
+    @app.post("/api/environments/{env}/firewalls", status_code=201)
+    def add_firewall(env: str, body: FirewallIn, request: Request) -> dict[str, str]:
+        try:
+            _fwmgr(request).add_firewall(
+                env,
+                name=body.name,
+                address=body.address,
+                role=body.role,
+                ssh_user=body.ssh_user,
+                ssh_port=body.ssh_port,
+                notes=body.notes,
+            )
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        return {"name": body.name}
+
+    @app.delete("/api/environments/{env}/firewalls/{name}")
+    def remove_firewall(env: str, name: str, request: Request) -> dict[str, bool]:
+        try:
+            _fwmgr(request).remove_firewall(env, name)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        return {"deleted": True}
+
+    @app.post("/api/environments/{env}/discover-firewalls")
+    def discover_firewalls(env: str, body: DiscoverIn, request: Request) -> dict[str, Any]:
+        """Scan the estate from an already-defined primary and return candidate
+        firewalls (gateways/cluster members) for the operator to review and
+        import. Read-only: nothing is added here — the UI posts confirmed rows
+        back to the add-firewall endpoint."""
+        discovery: DiscoveryService = request.app.state.discovery
+        try:
+            result = discovery.discover_firewalls(env, body.primary)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        return {
+            "servers": [
+                {
+                    "name": s.name,
+                    "address": s.address,
+                    "role": s.detected_role.value,
+                    "source": s.source,
+                    "already_in_inventory": s.already_in_inventory,
+                    "needs_review": s.needs_review,
+                    "note": s.note,
+                }
+                for s in result.servers
+            ],
+            "warnings": result.warnings,
+        }
+
     # -- service-account provisioning (pure rendering; nothing stored) ---------
 
     @app.post("/api/provision")
@@ -888,6 +975,119 @@ def _register_routes(app: FastAPI) -> None:
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
+    # -- firewalls (patching view; same CPUSE mechanics as servers) --------------
+    # These are thin wrappers around the exact same PatchingService methods used
+    # above — CPUSE import/install doesn't care whether the target is a
+    # management server or a firewall (see HostConnector.patchable_host).
+    # Separate URLs purely so the UI/Jobs semantics read as "distinct from
+    # management," matching the Firewalls panel.
+
+    @app.get("/api/env/{env}/firewalls")
+    def firewalls(env: str, request: Request) -> list[dict[str, Any]]:
+        service = _service(request)
+        store: Store = request.app.state.store
+        try:
+            result = []
+            for h in service.firewalls(env):
+                cached = store.get_server_state(env, h.name)
+                result.append(
+                    {
+                        "name": h.name,
+                        "address": h.address,
+                        "role": h.role.value,
+                        "ssh_user": h.ssh_user,
+                        "credential_set": service.assigned_credential(env, h.name),
+                        "version": cached.version if cached else None,
+                        "jhf": cached.jhf if cached else None,
+                        "agent_build": cached.agent_build if cached else None,
+                        "checked_at": cached.checked_at.isoformat() if cached else None,
+                        "installable": cached.installable if cached else [],
+                    }
+                )
+            return result
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+
+    @app.post("/api/env/{env}/firewalls/{name}/state")
+    async def firewall_state(
+        env: str, name: str, request: Request, body: QueryRequest | None = None
+    ) -> dict[str, Any]:
+        creds = _op_creds(body, name, env)
+        service = _service(request)
+        try:
+            detected = await asyncio.to_thread(service.detect, env, name, credentials=creds)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        store: Store = request.app.state.store
+        cached = store.get_server_state(env, name)
+        assert cached is not None  # detect() just persisted it
+        return {
+            "host": detected.host,
+            "agent_build": detected.agent_build,
+            "version": cached.version,
+            "jhf": cached.jhf,
+            "checked_at": cached.checked_at.isoformat(),
+            "installable": cached.installable,
+            "packages": [
+                {
+                    "identifier": p.identifier,
+                    "status": p.status,
+                    "description": p.description,
+                    "is_installed": p.is_installed,
+                    "is_imported": p.is_imported,
+                }
+                for p in detected.packages
+            ],
+        }
+
+    @app.post("/api/env/{env}/firewalls/{name}/import", status_code=202)
+    def firewall_import(env: str, name: str, body: ImportRequest, request: Request) -> JobRecord:
+        try:
+            return _service(request).submit_import(
+                env, name, body.package, credentials=_build_credentials(body.credentials, name, env)
+            )
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+
+    @app.post("/api/env/{env}/firewalls/{name}/import-cloud", status_code=202)
+    def firewall_import_cloud(
+        env: str, name: str, body: ImportCloudRequest, request: Request
+    ) -> JobRecord:
+        try:
+            return _service(request).submit_import_cloud(
+                env,
+                name,
+                body.package_id,
+                credentials=_build_credentials(body.credentials, name, env),
+            )
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+
+    @app.post("/api/env/{env}/firewalls/{name}/install", status_code=202)
+    def firewall_install(env: str, name: str, body: InstallRequest, request: Request) -> JobRecord:
+        try:
+            return _service(request).submit_install(
+                env,
+                name,
+                body.package_id,
+                confirmed=body.confirmed,
+                verify_first=body.verify_first,
+                credentials=_build_credentials(body.credentials, name, env),
+            )
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+
+    @app.post("/api/env/{env}/firewalls/{name}/credential")
+    def assign_firewall_credential(
+        env: str, name: str, body: CredentialAssignmentIn, request: Request
+    ) -> dict[str, str | None]:
+        """Assign a credential set (by name) to a firewall, or clear it."""
+        try:
+            _fwmgr(request).assign_credential(env, name, body.set)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        return {"credential_set": body.set}
+
     # -- packages ------------------------------------------------------------
     # Upload/keep/unkeep/delete all run as pkgs.* jobs (see services/pkgs_ops.py)
     # for Jobs-tab visibility and audit history — each returns a JobRecord
@@ -933,9 +1133,7 @@ def _register_routes(app: FastAPI) -> None:
             raise
 
     @app.post("/api/packages/{filename}/retention", status_code=202)
-    def set_package_retention(
-        filename: str, body: RetentionRequest, request: Request
-    ) -> JobRecord:
+    def set_package_retention(filename: str, body: RetentionRequest, request: Request) -> JobRecord:
         """Pin a package to keep it indefinitely, or un-pin it so the retention
         window applies again — runs as a pkgs.keep/pkgs.notkeep job."""
         try:

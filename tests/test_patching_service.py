@@ -130,6 +130,10 @@ def test_management_servers_excludes_gateways(service: PatchingService) -> None:
     assert [h.name for h in service.management_servers("default")] == ["mgmt-01", "mgmt-02"]
 
 
+def test_firewalls_lists_only_gateway_role_hosts(service: PatchingService) -> None:
+    assert [h.name for h in service.firewalls("default")] == ["fw-01"]
+
+
 def test_detect_parses_live_state_and_closes(
     service: PatchingService, transport: FakeTransport
 ) -> None:
@@ -155,11 +159,21 @@ def test_assigned_credential_summary(service: PatchingService) -> None:
 # -- submission validation --------------------------------------------------------
 
 
-def test_submit_import_rejects_unknown_and_gateway_hosts(service: PatchingService) -> None:
+def test_submit_import_rejects_unknown_host(service: PatchingService) -> None:
     with pytest.raises(InventoryError, match="not found"):
         service.submit_import("default", "nope", PKG)
-    with pytest.raises(InventoryError, match="patched via CDT"):
-        service.submit_import("default", "fw-01", PKG)
+
+
+def test_submit_import_allows_a_credentialed_firewall_host(
+    service: PatchingService, store: Store
+) -> None:
+    # Firewalls (gateway/cluster_member role) are patched directly via CPUSE
+    # exactly like management servers — patchable_host doesn't reject them.
+    row = store.get_credential_set_by_name("default", "primary")
+    assert row is not None
+    service.registry.get("default").inventory.host("fw-01").credential_set_id = row.id
+    job = service.submit_import("default", "fw-01", PKG)
+    assert job.target == "fw-01"
 
 
 def test_submit_import_rejects_missing_package(service: PatchingService) -> None:

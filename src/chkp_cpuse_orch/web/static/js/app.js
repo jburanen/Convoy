@@ -1086,25 +1086,73 @@ function flashCopied(btn) {
   setTimeout(() => btn.classList.remove("copied"), 1500);
 }
 
+// Generate a credential-set name that doesn't collide with any set already in
+// the current environment, by appending "-2", "-3", ... to the base name.
+function uniqueCredentialName(base) {
+  const taken = new Set(credentialSets.map((s) => s.name));
+  if (!taken.has(base)) return base;
+  let n = 2;
+  while (taken.has(`${base}-${n}`)) n++;
+  return `${base}-${n}`;
+}
+
+// Resolves once the operator picks an outcome in the overwrite-gate modal:
+// "overwrite" | "new" | "skip" (also returned on close/backdrop click).
+let _provOverwriteResolve = null;
+
+function promptOverwriteChoice(username, existingName) {
+  document.getElementById("prov-overwrite-hint").textContent =
+    `The SSH username "${username}" is already stored in credential set "${existingName}". ` +
+    "Overwrite that set with the new password, save these as a separate new entry, " +
+    "or skip saving entirely?";
+  document.getElementById("prov-overwrite-modal").classList.remove("hidden");
+  return new Promise((resolve) => { _provOverwriteResolve = resolve; });
+}
+
+function closeProvOverwriteModal(result) {
+  document.getElementById("prov-overwrite-modal").classList.add("hidden");
+  const resolve = _provOverwriteResolve;
+  _provOverwriteResolve = null;
+  if (resolve) resolve(result);
+}
+
+document.getElementById("prov-overwrite-new").addEventListener("click", () => closeProvOverwriteModal("new"));
+document.getElementById("prov-overwrite-overwrite").addEventListener("click", () => closeProvOverwriteModal("overwrite"));
+document.getElementById("prov-overwrite-skip").addEventListener("click", () => closeProvOverwriteModal("skip"));
+document.getElementById("prov-overwrite-close").addEventListener("click", () => closeProvOverwriteModal("skip"));
+document.getElementById("prov-overwrite-modal").addEventListener("click", (ev) => {
+  if (ev.target.id === "prov-overwrite-modal") closeProvOverwriteModal("skip"); // backdrop click cancels
+});
+
 // Save the bootstrap username/password as a named credential set so the operator
 // doesn't re-enter them. Best-effort: needs a current environment with credential
-// storage enabled. Returns a status for the notes area.
+// storage enabled. If the username already backs another stored set, the operator
+// is asked to overwrite it, save these as a new (auto-uniquified) entry, or skip
+// saving altogether. Returns a status for the notes area.
 async function saveBootstrapCredential(setName, username, password) {
   if (!currentEnv) return { ok: false, reason: "no environment selected" };
   if (!storageEnabled()) return { ok: false, reason: "credential storage is disabled for this environment" };
+  await loadCredentialSets(); // refresh before checking for a username collision
+  const existing = credentialSets.find((s) => s.ssh_username === username);
+  let name = setName;
+  if (existing) {
+    const choice = await promptOverwriteChoice(username, existing.name);
+    if (choice === "skip") return { ok: false, reason: "you chose not to save them" };
+    name = choice === "overwrite" ? existing.name : uniqueCredentialName(setName);
+  }
   try {
     await api(envUrl("/credentials"), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        name: setName,
+        name,
         ssh_username: username,
         ssh_password: password,
         default_if_none: true, // first credentials become the environment default
       }),
     });
     await Promise.all([loadCredentialSets(), loadServers()]);
-    return { ok: true, name: setName };
+    return { ok: true, name };
   } catch (e) {
     return { ok: false, reason: e.message };
   }
@@ -1206,6 +1254,8 @@ const ROLE_LABELS = {
   smartevent: "SmartEvent",
   management: "Management (legacy)",
   mds: "MDS (legacy)",
+  gateway: "Gateway",
+  cluster_member: "Cluster Member",
 };
 const roleLabel = (role) => ROLE_LABELS[role] ?? role;
 
@@ -1332,6 +1382,7 @@ async function loadServers() {
   updateSelectAllState(); // rows were just rebuilt — reset to "none selected"
 
   chooseDefaultTab(servers.length);
+  await loadFirewalls();
 }
 
 function emptyRow(target, colSpan, text) {
@@ -1491,14 +1542,16 @@ document.getElementById("srv-select-all").addEventListener("change", (ev) => {
   updateSelectAllState();
 });
 
-// Shared by both bulk-import buttons: runs `perServer(name)` for each checked
-// server in turn (not in parallel — mirrors "Refresh all"), refreshes the
-// Jobs tab once done, and re-enables `btn` even if a server's import failed
-// to start (so one bad target doesn't stop the rest).
-async function bulkImport(btn, perServer) {
-  const targets = selectedServerNames();
+// Shared by every bulk-import button (management servers and firewalls alike):
+// runs `perServer(name)` for each checked row in turn (not in parallel —
+// mirrors "Refresh all"), refreshes the Jobs tab once done, and re-enables
+// `btn` even if a target's import failed to start (so one bad target doesn't
+// stop the rest). `getTargets` supplies the checked row names for whichever
+// table `btn` belongs to.
+async function bulkImport(btn, getTargets, perServer) {
+  const targets = getTargets();
   if (!targets.length) {
-    toast("Select at least one server below (checkbox next to the server name) first.");
+    toast("Select at least one row below (checkbox in the first column) first.");
     return;
   }
   btn.disabled = true;
@@ -1521,7 +1574,7 @@ document.getElementById("bulk-import-btn").addEventListener("click", () => {
   const btn = document.getElementById("bulk-import-btn");
   const pkg = document.getElementById("bulk-import-package").value;
   if (!pkg) { toast("Choose a package first."); return; }
-  bulkImport(btn, async (name) => {
+  bulkImport(btn, selectedServerNames, async (name) => {
     const extra = await operationCredentials(name, "import a package");
     if (extra === null) return; // credential prompt cancelled for this host
     const job = await api(envUrl(`/servers/${encodeURIComponent(name)}/import`), {
@@ -1537,7 +1590,7 @@ document.getElementById("bulk-import-cloud-btn").addEventListener("click", () =>
   const btn = document.getElementById("bulk-import-cloud-btn");
   const packageId = document.getElementById("bulk-import-cloud-id").value.trim();
   if (!packageId) { toast("Enter a CPUSE package identifier first."); return; }
-  bulkImport(btn, async (name) => {
+  bulkImport(btn, selectedServerNames, async (name) => {
     const extra = await operationCredentials(name, "import a package from Check Point's cloud");
     if (extra === null) return;
     const job = await api(envUrl(`/servers/${encodeURIComponent(name)}/import-cloud`), {
@@ -1549,7 +1602,471 @@ document.getElementById("bulk-import-cloud-btn").addEventListener("click", () =>
   });
 });
 
-/* ---------- 3b. gateway deployment (CDT) ---------- */
+/* ---------- 3b. firewalls (CPUSE tab; single combined CRUD+action table) ---------- */
+
+// Firewalls patched directly via CPUSE, one host at a time — distinct from the
+// CDT bulk gateway-fleet push below. Reuses renderStateRow/renderInstallSelect
+// (already generic over row/data shape) and the shared bulkImport() helper.
+
+async function loadFirewalls() {
+  const tbody = document.querySelector("#firewalls-table tbody");
+  tbody.replaceChildren();
+
+  if (!currentEnv) {
+    emptyRow(tbody, 9, "No environments. Use the Environment picker → New Environment…");
+    return;
+  }
+
+  const [firewalls, editable, packages] = await Promise.all([
+    api(envUrl("/firewalls")),
+    api(`/api/environments/${encodeURIComponent(currentEnv)}/firewalls`),
+    api("/api/packages"),
+  ]);
+  const stateByName = new Map(firewalls.map((f) => [f.name, f]));
+
+  const bulkPackageSelect = document.getElementById("fw-bulk-import-package");
+  bulkPackageSelect.replaceChildren(new Option("— package —", ""));
+  for (const pkg of packages) bulkPackageSelect.appendChild(new Option(pkg.filename, pkg.filename));
+
+  for (const fw of sortByRole(editable)) {
+    const state = stateByName.get(fw.name);
+    const row = el("tpl-firewall-row");
+    const selectCb = row.querySelector(".fw-select");
+    selectCb.dataset.firewall = fw.name; // read by the bulk-import buttons
+    selectCb.addEventListener("change", updateFirewallSelectAllState);
+    row.querySelector(".fw-name").textContent = fw.name;
+    row.querySelector(".fw-address").textContent = fw.address;
+    row.querySelector(".fw-role").textContent = roleLabel(fw.role);
+    row.querySelector(".fw-user").textContent = fw.ssh_user;
+    row.querySelector(".fw-port").textContent = fw.ssh_port;
+    row.querySelector(".fw-creds").textContent =
+      (state && state.credential_set) || "none — not assigned";
+    renderInstallSelect(row, state?.installable ?? []);
+    row.querySelector(".skip-verify").checked = !!envSkipVerifyDefault[currentEnv];
+
+    const stateRow = el("tpl-firewall-state-row");
+    stateRow.dataset.firewall = fw.name; // looked up by the "Refresh all" button
+    renderStateRow(stateRow, state && state.checked_at ? state : null);
+    stateRow
+      .querySelector(".srv-refresh-link")
+      .addEventListener("click", () => refreshFirewallState(fw.name, row, stateRow));
+    row.querySelector(".btn-install").addEventListener("click", () => installFirewallPackage(fw.name, row));
+    row.querySelector(".btn-edit").addEventListener("click", () => {
+      openEditFirewallModal(fw, state && state.credential_set);
+    });
+    row.querySelector(".btn-remove").addEventListener("click", async () => {
+      if (!confirm(`Remove firewall ${fw.name} from ${currentEnv}?`)) return;
+      try {
+        await api(
+          `/api/environments/${encodeURIComponent(currentEnv)}/firewalls/${encodeURIComponent(fw.name)}`,
+          { method: "DELETE" },
+        );
+        await loadFirewalls();
+      } catch (e) { toast("Remove failed: " + e.message); }
+    });
+    tbody.appendChild(row);
+    tbody.appendChild(stateRow);
+  }
+
+  if (!editable.length) {
+    emptyRow(tbody, 9, "No firewalls yet — add one manually or discover from a primary.");
+  }
+  updateFirewallSelectAllState(); // rows were just rebuilt — reset to "none selected"
+}
+
+async function refreshFirewallState(name, row, stateRow) {
+  const link = stateRow.querySelector(".srv-refresh-link");
+  const summary = stateRow.querySelector(".srv-summary");
+  const extra = await operationCredentials(name, "query live state");
+  if (extra === null) return; // credential prompt cancelled
+  link.disabled = true;
+  summary.textContent = "querying…";
+  stateRow.querySelector(".srv-checked").textContent = "";
+  try {
+    const state = await api(envUrl(`/firewalls/${encodeURIComponent(name)}/state`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(extra),
+    });
+    renderStateRow(stateRow, state);
+    renderInstallSelect(row, state.installable ?? []);
+  } catch (e) {
+    cacheEvictCreds(name); // a cached wrong/stale password re-prompts next time
+    summary.textContent = "detect failed: " + e.message;
+  } finally {
+    link.disabled = false;
+  }
+}
+
+document.getElementById("fw-refresh-all-btn").addEventListener("click", async () => {
+  const btn = document.getElementById("fw-refresh-all-btn");
+  btn.disabled = true;
+  try {
+    const stateRows = [...document.querySelectorAll("#firewalls-table tr.srv-state-row")];
+    for (const stateRow of stateRows) {
+      await refreshFirewallState(stateRow.dataset.firewall, stateRow.previousElementSibling, stateRow);
+    }
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+async function installFirewallPackage(name, row) {
+  const select = row.querySelector(".install-select");
+  if (!select.value) { toast("Choose a package first."); return; }
+  const packageId = select.value;
+  const verifyFirst = !row.querySelector(".skip-verify").checked;
+  // Installs can REBOOT the firewall — always confirm explicitly.
+  const sure = confirm(
+    `Install ${packageId} on ${name}?\n\n` +
+    (verifyFirst ? "" : "Skipping `installer verify` — installing directly.\n\n") +
+    "This may reboot the firewall when it completes. " +
+    "Make sure this is inside a maintenance window and any HA peer is healthy."
+  );
+  if (!sure) return;
+  const extra = await operationCredentials(name, "install a package");
+  if (extra === null) return;
+  try {
+    await api(envUrl(`/firewalls/${encodeURIComponent(name)}/install`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        package_id: packageId,
+        confirmed: true,
+        verify_first: verifyFirst,
+        ...extra,
+      }),
+    });
+    await loadJobs();
+  } catch (e) {
+    cacheEvictCreds(name);
+    toast("Install failed to start: " + e.message);
+  }
+}
+
+function selectedFirewallNames() {
+  return [...document.querySelectorAll("#firewalls-table .fw-select:checked")]
+    .map((cb) => cb.dataset.firewall);
+}
+
+function updateFirewallSelectAllState() {
+  const boxes = [...document.querySelectorAll("#firewalls-table .fw-select")];
+  const selectAll = document.getElementById("fw-select-all");
+  const checkedCount = boxes.filter((cb) => cb.checked).length;
+  selectAll.checked = boxes.length > 0 && checkedCount === boxes.length;
+  selectAll.indeterminate = checkedCount > 0 && checkedCount < boxes.length;
+}
+
+document.getElementById("fw-select-all").addEventListener("change", (ev) => {
+  for (const cb of document.querySelectorAll("#firewalls-table .fw-select")) {
+    cb.checked = ev.target.checked;
+  }
+  updateFirewallSelectAllState();
+});
+
+document.getElementById("fw-bulk-import-btn").addEventListener("click", () => {
+  const btn = document.getElementById("fw-bulk-import-btn");
+  const pkg = document.getElementById("fw-bulk-import-package").value;
+  if (!pkg) { toast("Choose a package first."); return; }
+  bulkImport(btn, selectedFirewallNames, async (name) => {
+    const extra = await operationCredentials(name, "import a package");
+    if (extra === null) return;
+    const job = await api(envUrl(`/firewalls/${encodeURIComponent(name)}/import`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ package: pkg, ...extra }),
+    });
+    lastJobStatus.set(job.id, job.status);
+  });
+});
+
+document.getElementById("fw-bulk-import-cloud-btn").addEventListener("click", () => {
+  const btn = document.getElementById("fw-bulk-import-cloud-btn");
+  const packageId = document.getElementById("fw-bulk-import-cloud-id").value.trim();
+  if (!packageId) { toast("Enter a CPUSE package identifier first."); return; }
+  bulkImport(btn, selectedFirewallNames, async (name) => {
+    const extra = await operationCredentials(name, "import a package from Check Point's cloud");
+    if (extra === null) return;
+    const job = await api(envUrl(`/firewalls/${encodeURIComponent(name)}/import-cloud`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ package_id: packageId, ...extra }),
+    });
+    lastJobStatus.set(job.id, job.status);
+  });
+});
+
+/* ---------- 3c. add/edit firewall (modal) ---------- */
+
+async function populateFirewallCredSelect(assignedSetName) {
+  const enabled = storageEnabled();
+  document.getElementById("fm-user-label").classList.toggle("hidden", enabled);
+  document.getElementById("fm-cred-label").classList.toggle("hidden", !enabled);
+  if (!enabled) return;
+  const select = document.getElementById("fm-cred-select");
+  select.querySelectorAll("option:not(:first-child)").forEach((o) => o.remove());
+  const sets = await fetchCredentialSets();
+  for (const set of sets) {
+    const opt = document.createElement("option");
+    opt.value = set.name;
+    opt.textContent = set.name;
+    opt.dataset.sshUser = set.ssh_username || "";
+    select.appendChild(opt);
+  }
+  select.value = assignedSetName || "";
+}
+
+async function addFirewall({ name, address, role, ssh_user, ssh_port }) {
+  await api(`/api/environments/${encodeURIComponent(currentEnv)}/firewalls`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, address, role, ssh_user, ssh_port }),
+  });
+}
+
+async function openAddFirewallModal() {
+  if (!currentEnv) { toast("Create an environment first (picker → New Environment…)."); return; }
+  document.getElementById("firewall-form").reset();
+  document.getElementById("fm-name").disabled = false;
+  document.getElementById("firewall-modal-title").textContent = "Add firewall";
+  document.getElementById("firewall-modal-submit").textContent = "Add firewall";
+  await populateFirewallCredSelect();
+  document.getElementById("firewall-modal").classList.remove("hidden");
+  document.getElementById("fm-name").focus();
+}
+async function openEditFirewallModal(fw, assignedSetName) {
+  document.getElementById("fm-name").value = fw.name;
+  document.getElementById("fm-name").disabled = true;
+  document.getElementById("fm-address").value = fw.address;
+  document.getElementById("fm-role").value = fw.role;
+  document.getElementById("fm-user").value = fw.ssh_user;
+  document.getElementById("fm-port").value = fw.ssh_port;
+  document.getElementById("firewall-modal-title").textContent = `Edit ${fw.name}`;
+  document.getElementById("firewall-modal-submit").textContent = "Save changes";
+  await populateFirewallCredSelect(assignedSetName);
+  document.getElementById("firewall-modal").classList.remove("hidden");
+  document.getElementById("fm-address").focus();
+}
+function closeFirewallModal() {
+  document.getElementById("firewall-modal").classList.add("hidden");
+}
+
+document.getElementById("add-firewall-btn").addEventListener("click", openAddFirewallModal);
+document.getElementById("firewall-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  if (!currentEnv) return;
+  const name = document.getElementById("fm-name").value.trim();
+  const credSelect = document.getElementById("fm-cred-select");
+  const credSet = storageEnabled() ? credSelect.value : null;
+  const sshUser = storageEnabled()
+    ? credSelect.selectedOptions[0]?.dataset.sshUser || "admin"
+    : document.getElementById("fm-user").value.trim() || "admin";
+  try {
+    await addFirewall({
+      name,
+      address: document.getElementById("fm-address").value.trim(),
+      role: document.getElementById("fm-role").value,
+      ssh_user: sshUser,
+      ssh_port: Number(document.getElementById("fm-port").value) || 22,
+    });
+    if (storageEnabled()) {
+      await api(envUrl(`/firewalls/${encodeURIComponent(name)}/credential`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ set: credSet || null }),
+      });
+    }
+    closeFirewallModal();
+    await loadFirewalls();
+  } catch (e) { toast("Save failed: " + e.message); }
+});
+document.getElementById("firewall-modal-close").addEventListener("click", closeFirewallModal);
+document.getElementById("firewall-modal-cancel").addEventListener("click", closeFirewallModal);
+document.getElementById("firewall-modal").addEventListener("click", (ev) => {
+  if (ev.target.id === "firewall-modal") closeFirewallModal(); // backdrop closes
+});
+
+/* ---------- 3d. discover firewalls ---------- */
+
+// The discover-from primary's SSH identity, captured when a scan runs so
+// imported firewalls can inherit it — same idea as discoverPrimarySshUser/
+// discoverPrimaryCredSet above, kept separate since the two discovery flows
+// are independent (per the Firewalls panel's design).
+let discoverFwPrimarySshUser = "admin";
+let discoverFwPrimaryCredSet = null;
+
+async function openDiscoverFirewallsModal() {
+  if (!currentEnv) { toast("Create an environment and add a primary management server first."); return; }
+  let servers = [];
+  try {
+    servers = await api(`/api/environments/${encodeURIComponent(currentEnv)}/servers`);
+  } catch (e) { toast("Could not load servers: " + e.message); return; }
+  const primaries = servers.filter((s) => s.role === "primary_sms" || s.role === "primary_mds");
+  if (!primaries.length) {
+    toast("Add a Primary SMS or Primary MDS server on the Provisioning tab before discovering firewalls.");
+    return;
+  }
+  const select = document.getElementById("discover-firewalls-primary");
+  select.replaceChildren();
+  for (const s of primaries) {
+    const opt = document.createElement("option");
+    opt.value = s.name;
+    opt.textContent = `${s.name} (${roleLabel(s.role)})`;
+    select.appendChild(opt);
+  }
+  resetDiscoverFirewallsResults();
+  document.getElementById("discover-firewalls-modal").classList.remove("hidden");
+}
+
+function resetDiscoverFirewallsResults() {
+  document.getElementById("discover-firewalls-status").textContent = "";
+  const warn = document.getElementById("discover-firewalls-warnings");
+  warn.classList.add("hidden");
+  warn.replaceChildren();
+  const table = document.getElementById("discover-firewalls-table");
+  table.classList.add("hidden");
+  table.querySelector("tbody").replaceChildren();
+  document.getElementById("discover-firewalls-import").disabled = true;
+}
+
+function closeDiscoverFirewallsModal() {
+  document.getElementById("discover-firewalls-modal").classList.add("hidden");
+}
+
+document.getElementById("discover-firewalls-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const primary = document.getElementById("discover-firewalls-primary").value;
+  if (!primary || !currentEnv) return;
+  resetDiscoverFirewallsResults();
+  const status = document.getElementById("discover-firewalls-status");
+  status.textContent = `Scanning from ${primary}…`;
+  const runBtn = document.getElementById("discover-firewalls-run");
+  runBtn.disabled = true;
+  try {
+    const editableServers = await api(`/api/environments/${encodeURIComponent(currentEnv)}/servers`);
+    const primarySrv = editableServers.find((s) => s.name === primary);
+    discoverFwPrimarySshUser = primarySrv ? primarySrv.ssh_user : "admin";
+    discoverFwPrimaryCredSet = null;
+    if (storageEnabled()) {
+      const srvs = await api(envUrl("/servers"));
+      const match = srvs.find((s) => s.name === primary);
+      discoverFwPrimaryCredSet = match ? match.credential_set : null;
+    }
+    const result = await api(`/api/environments/${encodeURIComponent(currentEnv)}/discover-firewalls`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ primary }),
+    });
+    renderDiscoverFirewallsResults(result);
+  } catch (e) {
+    status.textContent = "Discovery failed: " + e.message;
+  } finally {
+    runBtn.disabled = false;
+  }
+});
+
+function renderDiscoverFirewallsResults(result) {
+  const status = document.getElementById("discover-firewalls-status");
+  const warn = document.getElementById("discover-firewalls-warnings");
+  for (const w of result.warnings || []) {
+    warn.classList.remove("hidden");
+    const line = document.createElement("div");
+    line.textContent = "⚠ " + w;
+    warn.appendChild(line);
+  }
+  const servers = result.servers || [];
+  if (!servers.length) {
+    status.textContent = "No additional firewalls found.";
+    return;
+  }
+  const already = servers.filter((s) => s.already_in_inventory).length;
+  status.textContent =
+    `Found ${servers.length} firewall${servers.length === 1 ? "" : "s"}` +
+    (already ? ` (${already} already in inventory)` : "") +
+    ". Review roles, then import the ones you want.";
+  const table = document.getElementById("discover-firewalls-table");
+  const tbody = table.querySelector("tbody");
+  tbody.replaceChildren();
+  for (const s of servers) {
+    const row = el("tpl-discovered-firewall-row");
+    const pick = row.querySelector(".disc-pick");
+    const name = row.querySelector(".disc-name");
+    const address = row.querySelector(".disc-address");
+    const roleSel = row.querySelector(".disc-role");
+    const note = row.querySelector(".disc-note");
+    name.value = s.name;
+    address.value = s.address;
+    roleSel.value = s.role;
+    let noteText = s.note || "";
+    if (s.already_in_inventory) {
+      noteText = "already in inventory";
+      pick.checked = false;
+      pick.disabled = name.disabled = address.disabled = roleSel.disabled = true;
+      row.classList.add("disc-existing");
+    } else {
+      pick.checked = true;
+      if (s.needs_review) {
+        noteText = noteText ? noteText + " — review" : "review the detected role";
+        row.classList.add("disc-review");
+      }
+    }
+    note.textContent = noteText;
+    tbody.appendChild(row);
+  }
+  table.classList.remove("hidden");
+  document.getElementById("discover-firewalls-import").disabled =
+    servers.length === already; // nothing new to import
+}
+
+document.getElementById("discover-firewalls-import").addEventListener("click", async () => {
+  const rows = [...document.querySelectorAll("#discover-firewalls-table tbody tr")];
+  const picks = rows.filter((r) => {
+    const pick = r.querySelector(".disc-pick");
+    return pick.checked && !pick.disabled;
+  });
+  if (!picks.length) { toast("Nothing selected to import."); return; }
+  const importBtn = document.getElementById("discover-firewalls-import");
+  importBtn.disabled = true;
+  let ok = 0;
+  const failed = [];
+  for (const r of picks) {
+    const name = r.querySelector(".disc-name").value.trim();
+    const address = r.querySelector(".disc-address").value.trim();
+    const role = r.querySelector(".disc-role").value;
+    if (!name || !address) { failed.push(name || address || "(unnamed)"); continue; }
+    try {
+      await api(`/api/environments/${encodeURIComponent(currentEnv)}/firewalls`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, address, role, ssh_user: discoverFwPrimarySshUser }),
+      });
+      if (storageEnabled() && discoverFwPrimaryCredSet) {
+        await api(envUrl(`/firewalls/${encodeURIComponent(name)}/credential`), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ set: discoverFwPrimaryCredSet }),
+        });
+      }
+      ok++;
+    } catch (e) { failed.push(`${name}: ${e.message}`); }
+  }
+  await loadFirewalls();
+  if (failed.length) {
+    toast(`Imported ${ok}. Failed: ${failed.join("; ")}`);
+    importBtn.disabled = false;
+  } else {
+    closeDiscoverFirewallsModal();
+  }
+});
+
+document.getElementById("discover-firewalls-btn").addEventListener("click", openDiscoverFirewallsModal);
+document.getElementById("discover-firewalls-close").addEventListener("click", closeDiscoverFirewallsModal);
+document.getElementById("discover-firewalls-cancel").addEventListener("click", closeDiscoverFirewallsModal);
+document.getElementById("discover-firewalls-modal").addEventListener("click", (ev) => {
+  if (ev.target.id === "discover-firewalls-modal") closeDiscoverFirewallsModal(); // backdrop click closes
+});
+
+/* ---------- 3e. gateway deployment (CDT) ---------- */
 
 // Candidate rows held in memory between Load and Save. Kept as
 // { header: [...], rows: [[...], ...] } exactly as the API speaks.

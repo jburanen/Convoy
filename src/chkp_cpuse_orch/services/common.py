@@ -20,12 +20,17 @@ from ..credentials import (
     ensure_ssh_credential,
 )
 from ..errors import CredentialError, InventoryError
-from ..inventory import MANAGEMENT_PLANE_ROLES, Host, Inventory
+from ..inventory import FIREWALL_ROLES, MANAGEMENT_PLANE_ROLES, Host, Inventory
 from ..jobs import JobRunner
 from ..store import JobRecord, new_id
 from ..transport.ssh import CommandResult, SSHClient
 
 _MGMT_ROLES = MANAGEMENT_PLANE_ROLES
+_FW_ROLES = FIREWALL_ROLES
+# Any host this tool can drive through the CPUSE import/install lifecycle
+# directly (management server or firewall) — CDT-only gateway fleets aren't
+# stored here at all, so this gate never needs to exclude them separately.
+_PATCHABLE_ROLES = _MGMT_ROLES + _FW_ROLES
 
 
 class Transport(Protocol):
@@ -94,6 +99,26 @@ class HostConnector:
             raise InventoryError(
                 f"host {host_name!r} is a {host.role.value}, not a management server — "
                 "gateways are patched via CDT, not addressed directly"
+            )
+        return host
+
+    def firewalls(self) -> list[Host]:
+        return [h for role in _FW_ROLES for h in self.inventory.hosts_by_role(role)]
+
+    def firewall_host(self, host_name: str) -> Host:
+        host = self.inventory.host(host_name)  # raises InventoryError if unknown
+        if host.role not in _FW_ROLES:
+            raise InventoryError(f"host {host_name!r} is a {host.role.value}, not a firewall")
+        return host
+
+    def patchable_host(self, host_name: str) -> Host:
+        """Resolve any host this tool CPUSE-patches directly — management
+        server or firewall. Used by PatchingService, which doesn't care which
+        of the two it's talking to; the mechanics are identical."""
+        host = self.inventory.host(host_name)  # raises InventoryError if unknown
+        if host.role not in _PATCHABLE_ROLES:
+            raise InventoryError(
+                f"host {host_name!r} is a {host.role.value}, which isn't patched directly"
             )
         return host
 

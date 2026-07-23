@@ -1,7 +1,9 @@
-"""Management-server patching service (the CPUSE-local subsystem).
+"""CPUSE-local patching service — one host at a time, over SSH.
 
 Glues inventory + credential store + package store + CPUSE wrapper + job runner
-into the operations the web UI exposes per management server:
+into the operations the web UI exposes per host. Serves both management
+servers and firewalls identically (see HostConnector.patchable_host) — the
+CPUSE mechanics below don't care which kind of Gaia host they're talking to:
 
 - **detect**        — live `show installer packages` (source of truth for the UI)
 - **import**        — checks free disk space on `/var/log` (3x the package
@@ -179,6 +181,9 @@ class PatchingService:
     def management_servers(self, environment: str) -> list[Host]:
         return self.registry.get(environment).management_servers()
 
+    def firewalls(self, environment: str) -> list[Host]:
+        return self.registry.get(environment).firewalls()
+
     def assigned_credential(self, environment: str, host_name: str) -> str | None:
         """Name of the credential set assigned to a server, or None if unassigned."""
         return self.registry.get(environment).assigned_credential(host_name)
@@ -195,7 +200,7 @@ class PatchingService:
         result (see ``_cache_state``) so the servers list reflects it without
         a separate read."""
         connector = self.registry.get(environment)
-        host = connector.mgmt_host(host_name)
+        host = connector.patchable_host(host_name)
         creds = connector.require_credentials(host, credentials)
         client = connector.connect(host, creds)
         try:
@@ -240,7 +245,7 @@ class PatchingService:
     ) -> JobRecord:
         """Enqueue: SFTP the stored package to the host + `installer import local`."""
         connector = self.registry.get(environment)
-        host = connector.mgmt_host(host_name)
+        host = connector.patchable_host(host_name)
         self._packages.path_for(package_filename)  # validates record + content file
         return submit_host_job(
             self.runner,
@@ -264,7 +269,7 @@ class PatchingService:
         Check Point's cloud repository by identifier. No local file or upload —
         the host needs outbound internet access."""
         connector = self.registry.get(environment)
-        host = connector.mgmt_host(host_name)
+        host = connector.patchable_host(host_name)
         return submit_host_job(
             self.runner,
             self._vault,
@@ -293,7 +298,7 @@ class PatchingService:
                 "install requires explicit confirmation — it may reboot the management server"
             )
         connector = self.registry.get(environment)
-        host = connector.mgmt_host(host_name)
+        host = connector.patchable_host(host_name)
         return submit_host_job(
             self.runner,
             self._vault,
@@ -317,7 +322,7 @@ class PatchingService:
 
     def _do_import(self, ctx: JobContext) -> None:
         connector = self.registry.get(ctx.job.environment)
-        host = connector.mgmt_host(ctx.job.target or "")
+        host = connector.patchable_host(ctx.job.target or "")
         package = str(ctx.job.params["package"])
         local_path = self._packages.path_for(package)
         local_size = local_path.stat().st_size
@@ -483,7 +488,7 @@ class PatchingService:
 
     def _do_import_cloud(self, ctx: JobContext) -> None:
         connector = self.registry.get(ctx.job.environment)
-        host = connector.mgmt_host(ctx.job.target or "")
+        host = connector.patchable_host(ctx.job.target or "")
         package_id = str(ctx.job.params["package_id"])
 
         creds = job_run_credentials(connector, self._vault, ctx.job)
@@ -499,7 +504,7 @@ class PatchingService:
 
     def _do_install(self, ctx: JobContext) -> None:
         connector = self.registry.get(ctx.job.environment)
-        host = connector.mgmt_host(ctx.job.target or "")
+        host = connector.patchable_host(ctx.job.target or "")
         package_id = str(ctx.job.params["package_id"])
         verify_first = bool(ctx.job.params.get("verify_first", True))
 

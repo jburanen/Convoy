@@ -117,7 +117,7 @@
           </div>
           <label class="prov-api-toggle" title="Emit the expert-mode commands that grant Management API access — required for estate auto-discovery">
             <input type="checkbox" id="prov-api" checked>
-            Also provision Management API access
+            Also generate commands to provision management API access
           </label>
         </form>
         <!-- Two blocks: each explanatory-notes block sits directly above the output
@@ -297,6 +297,59 @@
             </tr>
           </thead>
           <tbody><!-- tpl-server-row / tpl-server-state-row instances --></tbody>
+        </table>
+      </details>
+    </section>
+
+    <section id="firewalls">
+      <!-- Same collapsible UI factors as #servers-details, a distinct entity:
+           firewalls patched directly via CPUSE, one host at a time (not CDT's
+           bulk gateway-fleet push, which stays on the Gateways tab). -->
+      <details id="firewalls-details" open>
+        <summary><h2>Firewalls</h2></summary>
+        <div class="section-head-actions">
+          <button type="button" id="add-firewall-btn" class="small">Manually add a firewall</button>
+          <button type="button" id="discover-firewalls-btn" class="small">Discover firewalls</button>
+          <button type="button" id="fw-refresh-all-btn" class="small">Refresh all</button>
+        </div>
+        <p class="hint">
+          Standalone gateways or cluster members, patched directly over SSH — distinct
+          from CDT's bulk fleet push on the Gateways tab. Add them manually or discover
+          them from a Primary SMS/MDS. The detected state shown below (last row per
+          firewall) is cached — click <strong>Refresh</strong> on a firewall, or
+          <strong>Refresh all</strong> above, to query it live over SSH.
+        </p>
+
+        <div id="fw-bulk-import">
+          <div class="bulk-import-row">
+            <label class="muted" for="fw-bulk-import-package">Import a stored package:</label>
+            <select id="fw-bulk-import-package"><option value="">— package —</option></select>
+            <button type="button" id="fw-bulk-import-btn" class="small">Upload and import to selected</button>
+          </div>
+          <div class="bulk-import-row">
+            <label class="muted" for="fw-bulk-import-cloud-id">Or import directly from Check Point's cloud:</label>
+            <input type="text" id="fw-bulk-import-cloud-id" placeholder="CPUSE package identifier">
+            <button type="button" id="fw-bulk-import-cloud-btn" class="small">Import from cloud to selected</button>
+          </div>
+        </div>
+
+        <table id="firewalls-table">
+          <thead>
+            <tr>
+              <th class="col-select">
+                <input type="checkbox" id="fw-select-all" title="select/deselect all firewalls">
+              </th>
+              <th class="col-nowrap">Firewall</th>
+              <th class="col-nowrap">Address</th>
+              <th class="col-nowrap">Role</th>
+              <th class="col-nowrap">SSH user</th>
+              <th class="col-nowrap">Port</th>
+              <th class="col-nowrap">Credential set</th>
+              <th class="col-fill">Packages imported and ready to install</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody><!-- tpl-firewall-row / tpl-firewall-state-row instances --></tbody>
         </table>
       </details>
     </section>
@@ -533,6 +586,25 @@
   </div>
 </div>
 
+<!-- ============ Bootstrap credential overwrite gate (Provisioning tab) ====== -->
+<!-- Shown when the SSH username just provisioned already backs another stored
+     credential set. Blocks the silent save until the operator picks one of the
+     three outcomes explicitly. -->
+<div id="prov-overwrite-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="prov-overwrite-title">
+  <div class="modal-card narrow">
+    <div class="modal-head">
+      <h2 id="prov-overwrite-title">Username already stored</h2>
+      <button id="prov-overwrite-close" class="small" title="Close">✕</button>
+    </div>
+    <p class="hint" id="prov-overwrite-hint"></p>
+    <div class="cred-modal-actions">
+      <button type="button" id="prov-overwrite-new">Save as new entry</button>
+      <button type="button" id="prov-overwrite-overwrite" class="danger">Overwrite existing set</button>
+      <button type="button" id="prov-overwrite-skip" class="secondary">Don't save</button>
+    </div>
+  </div>
+</div>
+
 <!-- ============ Connect to Primary modal (opened from the Provisioning tab) == -->
 <!-- Configures the first (primary) management server for an empty environment. Once
      a primary exists, the inline add form appears for manual additions and this
@@ -645,6 +717,74 @@
   </div>
 </div>
 
+<!-- ============ Add/Edit firewall modal (CPUSE tab) ========================= -->
+<!-- Shared by "Manually add a firewall" and each row's Edit button. In edit mode
+     Name is locked (add/update is upsert-by-name, same as the server modal). -->
+<div id="firewall-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="firewall-modal-title">
+  <div class="modal-card narrow">
+    <div class="modal-head">
+      <h2 id="firewall-modal-title">Add firewall</h2>
+      <button id="firewall-modal-close" class="small" title="Close">✕</button>
+    </div>
+    <form id="firewall-form" class="stacked">
+      <label>Name<input type="text" id="fm-name" required></label>
+      <label>Address / IP<input type="text" id="fm-address" required></label>
+      <label>Role
+        <select id="fm-role">
+          <option value="gateway">Gateway</option>
+          <option value="cluster_member">Cluster Member</option>
+        </select>
+      </label>
+      <label id="fm-user-label">SSH user<input type="text" id="fm-user" value="admin"></label>
+      <label id="fm-cred-label" class="hidden">Credential set
+        <select id="fm-cred-select"><option value="">none — assign later</option></select>
+      </label>
+      <label>SSH port<input type="number" id="fm-port" value="22" min="1" max="65535"></label>
+      <div class="cred-modal-actions">
+        <button type="submit" id="firewall-modal-submit">Add firewall</button>
+        <button type="button" id="firewall-modal-cancel" class="secondary">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ============ Discover firewalls modal (CPUSE tab) ========================= -->
+<!-- Scans the estate from a chosen primary and lets the operator review/correct the
+     detected firewalls + roles before importing. Import reuses the add-firewall API. -->
+<div id="discover-firewalls-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="discover-firewalls-title">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2 id="discover-firewalls-title">Discover firewalls</h2>
+      <button id="discover-firewalls-close" class="small" title="Close">✕</button>
+    </div>
+    <p class="hint">
+      Connects to a primary management server and enumerates gateways and cluster
+      members via the Management API. Uses the credential set assigned to the primary.
+      Review the detected roles and import the ones you want.
+    </p>
+    <form id="discover-firewalls-form">
+      <label>Discover from
+        <select id="discover-firewalls-primary"><!-- filled with the environment's primaries --></select>
+      </label>
+      <button type="submit" id="discover-firewalls-run">Scan</button>
+    </form>
+    <p class="hint" id="discover-firewalls-status"></p>
+    <div id="discover-firewalls-warnings" class="hint warn hidden"></div>
+    <table id="discover-firewalls-table" class="hidden">
+      <thead>
+        <tr>
+          <th></th><th>Name</th><th>Address</th><th>Detected role</th><th>Notes</th>
+        </tr>
+      </thead>
+      <tbody><!-- tpl-discovered-firewall-row instances --></tbody>
+    </table>
+    <div class="cred-modal-actions">
+      <button type="button" id="discover-firewalls-import" disabled>Import selected</button>
+      <button type="button" id="discover-firewalls-cancel" class="secondary">Close</button>
+    </div>
+  </div>
+</div>
+
 <footer>
   <div class="footer-main">
   <a id="footer-repo" href="https://github.com/jburanen/chkp-cpuse-orch" target="_blank" rel="noopener">
@@ -739,6 +879,63 @@
       <span class="srv-checked"></span>
       <button type="button" class="link-btn srv-refresh-link">Refresh</button>
     </td>
+  </tr>
+</template>
+
+<!-- Firewall row: combines the CRUD columns (server-info row) and the patching
+     actions (server row) into one table, per the Firewalls panel's design. -->
+<template id="tpl-firewall-row">
+  <tr class="srv-row">
+    <td class="col-select"><input type="checkbox" class="fw-select" title="select as an import target"></td>
+    <td class="fw-name"></td>
+    <td class="fw-address mono"></td>
+    <td class="fw-role"></td>
+    <td class="fw-user mono"></td>
+    <td class="fw-port"></td>
+    <td class="fw-creds"></td>
+    <td class="fw-actions col-fill">
+      <div class="srv-actions-inner">
+        <select class="install-select"><option value="">— package —</option></select>
+        <label class="skip-verify-label" title="Skip `installer verify` and go straight to `installer install`">
+          <input type="checkbox" class="skip-verify"> skip verify
+        </label>
+        <button class="btn-install small success">Install</button>
+      </div>
+    </td>
+    <td class="row-actions">
+      <button class="btn-edit small" title="edit this firewall">Edit</button>
+      <button class="btn-remove small danger" title="remove from environment">Remove</button>
+    </td>
+  </tr>
+</template>
+
+<!-- Detected-state summary row — same idea as tpl-server-state-row, colspan
+     widened for the firewall table's extra CRUD columns. -->
+<template id="tpl-firewall-state-row">
+  <tr class="srv-state-row">
+    <td class="col-select"></td>
+    <td colspan="8" class="srv-agent muted">
+      <span class="srv-summary"></span>
+      <span class="srv-checked"></span>
+      <button type="button" class="link-btn srv-refresh-link">Refresh</button>
+    </td>
+  </tr>
+</template>
+
+<!-- One reviewable candidate in the Discover Firewalls modal — same shape as
+     tpl-discovered-row, role choices limited to the two firewall roles. -->
+<template id="tpl-discovered-firewall-row">
+  <tr>
+    <td><input type="checkbox" class="disc-pick"></td>
+    <td><input type="text" class="disc-name" required></td>
+    <td><input type="text" class="disc-address mono"></td>
+    <td>
+      <select class="disc-role">
+        <option value="gateway">Gateway</option>
+        <option value="cluster_member">Cluster Member</option>
+      </select>
+    </td>
+    <td class="disc-note muted"></td>
   </tr>
 </template>
 

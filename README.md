@@ -186,6 +186,7 @@ until v1.
 - Provisioning: Filter role picker based on whether environment is labeled as MDS or not
 - Provisioning: In the collapsed form, make the bootstrap panel have the same whitespace below the header 
   text as above. Treat the space above as correct.
+- Provisioning: Server edit - improve whitespace on edit modal
 - Packages: Investigate if we can extract and display meta data like compatible major version from the package file
 - Packages: When unchecking the keep box, set the retention timer to the configured duration beginning at time of action
 - Packages: Add ability to upload a stored package to the smartconsole packages repo using mgmt api ⏫
@@ -197,6 +198,7 @@ until v1.
 - CPUSE: Add deployment agent upgrade option ⏫
 - CPUSE: Indicate on each server if a job is currently running by replacing the check box with an icon, block new jobs until complete
 - CPUSE: Add muted explanatory text at top of firewalls panel to talk about how direct patching is mostly for management servers and small numbers of gateways. gateways can also be patched from SmartConsole and Web SmartConsole (generate a link). Large numbers of gateways can be patched with the CDT tab (future).
+- CPUSE: If the disk space is below threshold, offer the option to override unless disk space is less than actual pkg size. also provide links to disk space SKs
 - Jobs: Add syslog output configuration ⏫
 - Jobs: Add a download button for the install log
 

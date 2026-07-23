@@ -377,6 +377,79 @@ def test_add_gateway_role_server_rejected(client: TestClient) -> None:
     assert "not a management server role" in resp.json()["detail"]
 
 
+# -- firewalls (distinct from management servers; same CPUSE mechanics) -----------
+
+
+def test_add_list_remove_firewall(client: TestClient) -> None:
+    resp = client.post(
+        "/api/environments/default/firewalls",
+        json={"name": "fw-x", "address": "192.0.2.70", "role": "gateway"},
+    )
+    assert resp.status_code == 201, resp.text
+
+    editable = client.get("/api/environments/default/firewalls").json()
+    assert [f["name"] for f in editable] == ["fw-x"]
+    assert editable[0]["role"] == "gateway"
+
+    # Also visible on the patching-view listing, separate from servers.
+    action_view = client.get("/api/env/default/firewalls").json()
+    assert [f["name"] for f in action_view] == ["fw-x"]
+    assert [s["name"] for s in client.get("/api/env/default/servers").json()] == ["mgmt-01"]
+
+    assert client.delete("/api/environments/default/firewalls/fw-x").status_code == 200
+    assert client.get("/api/environments/default/firewalls").json() == []
+
+
+def test_add_firewall_name_collision_with_server_rejected(client: TestClient) -> None:
+    resp = client.post(
+        "/api/environments/default/firewalls",
+        json={"name": "mgmt-01", "address": "192.0.2.70", "role": "gateway"},
+    )
+    assert resp.status_code == 409, resp.text
+    assert "already used by a management server" in resp.json()["detail"]
+
+
+def test_add_server_name_collision_with_firewall_rejected(client: TestClient) -> None:
+    client.post(
+        "/api/environments/default/firewalls",
+        json={"name": "fw-y", "address": "192.0.2.71", "role": "gateway"},
+    )
+    resp = client.post(
+        "/api/environments/default/servers",
+        json={"name": "fw-y", "address": "192.0.2.72", "role": "management"},
+    )
+    assert resp.status_code == 409, resp.text
+    assert "already used by a firewall" in resp.json()["detail"]
+
+
+def test_add_management_role_firewall_rejected(client: TestClient) -> None:
+    resp = client.post(
+        "/api/environments/default/firewalls",
+        json={"name": "fw-z", "address": "192.0.2.73", "role": "management"},
+    )
+    assert resp.status_code == 400
+    assert "not a firewall role" in resp.json()["detail"]
+
+
+def test_firewall_new_gets_default_credential_and_can_be_patched(client: TestClient) -> None:
+    _put_set(client, name="primary")
+    client.post("/api/env/default/credentials/primary/default")
+    client.post(
+        "/api/environments/default/firewalls",
+        json={"name": "fw-x", "address": "192.0.2.70", "role": "gateway"},
+    )
+    firewalls = {
+        f["name"]: f.get("credential_set") for f in client.get("/api/env/default/firewalls").json()
+    }
+    assert firewalls["fw-x"] == "primary"
+
+    _upload_package(client)
+    resp = client.post("/api/env/default/firewalls/fw-x/import", json={"package": "jhf.tgz"})
+    assert resp.status_code == 202, resp.text
+    job = _wait_for_job(client, resp.json()["id"])
+    assert job["status"] == "succeeded", job["error"]
+
+
 def test_delete_environment_and_its_servers(client: TestClient) -> None:
     client.post("/api/environments", json={"name": "temp"})
     client.post(

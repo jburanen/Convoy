@@ -5,10 +5,13 @@ web UI can add/edit them at runtime (see .claude/memory/patching-web-design.md).
 On first startup they are **seeded once** from config.yaml + inventory files;
 after that the database is authoritative and the config files are ignored.
 
-Gateways are not stored here — CDT discovers them at deploy time. Credentials
-stay in their own per-environment namespace (credentials.py); deleting an
-environment also **purges its credentials** so a later same-named environment
-can't inherit the old secrets.
+CDT's bulk gateway fleet is not stored here — it discovers its own targets at
+deploy time. Firewalls patched directly via CPUSE live in their own table
+(firewalls.py's FirewallManager) but share this module's ``rebuild()`` so both
+kinds of host end up in the same per-environment Inventory/HostConnector.
+Credentials stay in their own per-environment namespace (credentials.py);
+deleting an environment also **purges its credentials** so a later same-named
+environment can't inherit the old secrets.
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ from ..credentials import CredentialStore
 from ..errors import InventoryError
 from ..inventory import MANAGEMENT_PLANE_ROLES, Host, Inventory, Role, Site
 from ..reporting import get_logger
-from ..store import EnvHostRow, Store
+from ..store import EnvHostRow, FirewallRow, Store
 from .common import ClientFactory, EnvironmentRegistry, HostConnector
 
 logger = get_logger(__name__)
@@ -92,10 +95,14 @@ class EnvironmentManager:
         logger.info("environments seeded from config")
 
     def rebuild(self) -> None:
-        """Rebuild the live registry from the database (call after any change)."""
+        """Rebuild the live registry from the database (call after any change).
+        Management servers and firewalls are merged into one host list per
+        environment — HostConnector gates which is which by role, so a single
+        Inventory/connector serves both (see services/common.py)."""
         connectors: dict[str, HostConnector] = {}
         for env in self._store.list_environments():
             hosts = [_host_from_row(r) for r in self._store.list_env_hosts(env.name)]
+            hosts += [_host_from_row(r) for r in self._store.list_firewalls(env.name)]
             inventory = Inventory(sites=[Site(name=env.name, hosts=hosts)])
             connectors[env.name] = HostConnector(
                 inventory,
@@ -238,6 +245,11 @@ class EnvironmentManager:
             name=name, address=address, role=parsed_role, ssh_port=ssh_port, ssh_user=ssh_user
         )
         is_new = self._store.get_env_host(environment, host.name) is None
+        if is_new and self._store.get_firewall(environment, host.name) is not None:
+            raise InventoryError(
+                f"name {host.name!r} already exists — it is already used by a firewall in "
+                f"environment {environment!r}; names must be unique across servers and firewalls"
+            )
         self._store.upsert_env_host(
             EnvHostRow(
                 environment=environment,
@@ -284,7 +296,7 @@ def _row_from_host(environment: str, host: Host) -> EnvHostRow:
     )
 
 
-def _host_from_row(row: EnvHostRow) -> Host:
+def _host_from_row(row: EnvHostRow | FirewallRow) -> Host:
     return Host(
         name=row.name,
         address=row.address,

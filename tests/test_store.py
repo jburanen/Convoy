@@ -10,6 +10,7 @@ from chkp_cpuse_orch.store import (
     _MIGRATIONS,
     CredentialSetRow,
     EnvHostRow,
+    FirewallRow,
     JobRecord,
     JobStatus,
     PackageRecord,
@@ -314,6 +315,63 @@ def test_environment_and_env_host_crud(store: Store) -> None:
     assert len(hosts) == 1
     assert hosts[0].address == "10.0.0.9"
     assert hosts[0].ssh_user == "svc"
+
+
+def test_firewall_crud(store: Store) -> None:
+    store.insert_environment("corp")
+    assert store.list_firewalls("corp") == []
+
+    store.upsert_firewall(
+        FirewallRow(environment="corp", name="fw-01", address="10.0.0.1", role="gateway")
+    )
+    # Upsert on (environment, name) updates in place.
+    store.upsert_firewall(
+        FirewallRow(
+            environment="corp",
+            name="fw-01",
+            address="10.0.0.9",
+            role="gateway",
+            ssh_user="svc",
+        )
+    )
+    firewalls = store.list_firewalls("corp")
+    assert len(firewalls) == 1
+    assert firewalls[0].address == "10.0.0.9"
+    assert firewalls[0].ssh_user == "svc"
+    assert store.get_firewall("corp", "fw-01") is not None
+    assert store.get_firewall("corp", "ghost") is None
+
+    assert store.delete_firewall("corp", "fw-01") is True
+    assert store.delete_firewall("corp", "fw-01") is False
+    assert store.list_firewalls("corp") == []
+
+
+def test_firewall_credential_assignment_and_fk_set_null(store: Store) -> None:
+    store.insert_environment("corp", credential_storage_enabled=True)
+    store.upsert_firewall(
+        FirewallRow(environment="corp", name="fw-01", address="10.0.0.1", role="gateway")
+    )
+    store.upsert_credential_set(
+        CredentialSetRow(environment="corp", name="primary", ssh_password_ct=b"ct")
+    )
+    set_id = store.get_credential_set_by_name("corp", "primary").id  # type: ignore[union-attr]
+
+    assert store.assign_firewall_credential_set("corp", "fw-01", set_id) is True
+    assert store.list_firewalls("corp")[0].credential_set_id == set_id
+    # Deleting the set auto-unassigns via ON DELETE SET NULL.
+    store.delete_credential_set("corp", "primary")
+    assert store.list_firewalls("corp")[0].credential_set_id is None
+    assert store.assign_firewall_credential_set("corp", "ghost", None) is False
+
+
+def test_deleting_environment_cascades_to_firewalls(store: Store) -> None:
+    store.insert_environment("corp")
+    store.upsert_firewall(
+        FirewallRow(environment="corp", name="fw-01", address="10.0.0.1", role="gateway")
+    )
+    store.delete_environment("corp")
+    store.insert_environment("corp")
+    assert store.list_firewalls("corp") == []  # cascade removed the row
 
 
 def test_environment_is_mds_defaults_false_and_toggles(store: Store) -> None:

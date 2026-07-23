@@ -142,6 +142,22 @@ class EnvHostRow(BaseModel):
     credential_set_id: str | None = None
 
 
+class FirewallRow(BaseModel):
+    """One firewall/gateway belonging to an environment, patched directly via
+    CPUSE (distinct from env_hosts, which holds management-plane servers)."""
+
+    id: str = Field(default_factory=new_id)
+    environment: str
+    name: str
+    address: str
+    role: str  # inventory Role value (gateway / cluster_member)
+    ssh_port: int = 22
+    ssh_user: str = "admin"
+    notes: str | None = None
+    # Assigned credential set (credential_sets.id), or None when unassigned.
+    credential_set_id: str | None = None
+
+
 class ServerStateRow(BaseModel):
     """Last-known detected CPUSE state for one management server, cached so the
     UI can always show something instead of nothing until refreshed."""
@@ -392,6 +408,25 @@ _MIGRATIONS: tuple[str, ...] = (
     # server (display only — CPUSE may since have rotated or deleted it).
     """
     ALTER TABLE jobs ADD COLUMN install_log_path TEXT;
+    """,
+    # v16: firewalls (gateways/cluster members), patched directly via CPUSE —
+    # a separate, first-class entity from env_hosts (management-plane servers).
+    # Same shape as env_hosts, including its own credential_set_id FK; cached
+    # CPUSE state reuses server_state as-is (keyed by host name, not an FK).
+    """
+    CREATE TABLE firewalls (
+        id                TEXT PRIMARY KEY,
+        environment       TEXT NOT NULL REFERENCES environments (name) ON DELETE CASCADE,
+        name              TEXT NOT NULL,
+        address           TEXT NOT NULL,
+        role              TEXT NOT NULL,
+        ssh_port          INTEGER NOT NULL DEFAULT 22,
+        ssh_user          TEXT NOT NULL DEFAULT 'admin',
+        notes             TEXT,
+        credential_set_id TEXT REFERENCES credential_sets (id) ON DELETE SET NULL,
+        UNIQUE (environment, name)
+    );
+    CREATE INDEX idx_firewalls_env ON firewalls (environment);
     """,
 )
 
@@ -709,6 +744,67 @@ class Store:
             # see the v11 migration note) — clean it up explicitly.
             conn.execute(
                 "DELETE FROM server_state WHERE environment = ? AND host = ?", (environment, name)
+            )
+        return cur.rowcount > 0
+
+    # -- firewalls (gateways/cluster members, patched directly via CPUSE) -------
+
+    def list_firewalls(self, environment: str) -> list[FirewallRow]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM firewalls WHERE environment = ? ORDER BY name", (environment,)
+            ).fetchall()
+        return [_firewall_from_row(r) for r in rows]
+
+    def get_firewall(self, environment: str, name: str) -> FirewallRow | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM firewalls WHERE environment = ? AND name = ?", (environment, name)
+            ).fetchone()
+        return None if row is None else _firewall_from_row(row)
+
+    def upsert_firewall(self, rec: FirewallRow) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO firewalls (id, environment, name, address, role, ssh_port,"
+                " ssh_user, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT (environment, name) DO UPDATE SET"
+                " address = excluded.address, role = excluded.role,"
+                " ssh_port = excluded.ssh_port, ssh_user = excluded.ssh_user,"
+                " notes = excluded.notes",
+                (
+                    rec.id,
+                    rec.environment,
+                    rec.name,
+                    rec.address,
+                    rec.role,
+                    rec.ssh_port,
+                    rec.ssh_user,
+                    rec.notes,
+                ),
+            )
+
+    def delete_firewall(self, environment: str, name: str) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM firewalls WHERE environment = ? AND name = ?", (environment, name)
+            )
+            # Not an FK cascade (server_state is keyed by name, not firewalls.id —
+            # same choice as env_hosts) — clean it up explicitly.
+            conn.execute(
+                "DELETE FROM server_state WHERE environment = ? AND host = ?", (environment, name)
+            )
+        return cur.rowcount > 0
+
+    def assign_firewall_credential_set(
+        self, environment: str, host_name: str, set_id: str | None
+    ) -> bool:
+        """Point a firewall at a credential set (or ``None`` to clear).
+        Returns False if the firewall doesn't exist in the environment."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE firewalls SET credential_set_id = ? WHERE environment = ? AND name = ?",
+                (set_id, environment, host_name),
             )
         return cur.rowcount > 0
 
@@ -1105,6 +1201,20 @@ def _session_from_row(row: sqlite3.Row) -> SessionRow:
 
 def _env_host_from_row(row: sqlite3.Row) -> EnvHostRow:
     return EnvHostRow(
+        id=row["id"],
+        environment=row["environment"],
+        name=row["name"],
+        address=row["address"],
+        role=row["role"],
+        ssh_port=row["ssh_port"],
+        ssh_user=row["ssh_user"],
+        notes=row["notes"],
+        credential_set_id=row["credential_set_id"],
+    )
+
+
+def _firewall_from_row(row: sqlite3.Row) -> FirewallRow:
+    return FirewallRow(
         id=row["id"],
         environment=row["environment"],
         name=row["name"],
