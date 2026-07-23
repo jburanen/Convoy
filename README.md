@@ -9,12 +9,34 @@ Management Servers and Security Gateways, through a web interface.
 > infrastructure you own. It *drives* Check Point's own CDT/CPUSE agents; it does not
 > replace them.
 
-## Why
+## Scope
 
-CDT and CPUSE are powerful but operate one plan / one host at a time and lack
-fleet-level orchestration. Staged rollouts, per-site batching,
-cluster-aware deployment, health checks, maintenance-window gating, and an auditable
-record are part of a responsible patching regime. This tool strives to be that orchestration layer, with a web UI for day-to-day work.
+CPUSE is powerful but operates one host at a time and lacks fleet-level orchestration. 
+CDT is integrated into SmartConsole for limited use cases including single gateways 
+and ClusterXL, but the more sophisticated operations lack a UI. Staged rollouts, 
+per-site batching, cluster-aware deployment, health checks, maintenance-window gating, 
+and an auditable record are part of a responsible patching regime. This tool strives 
+to provide that orchestration layer for specific scenarios.
+
+### Supported
+You can patch these management servers and gateway deployments:
+- On-Premise Smart Center (SMS)
+- On-Premise Multi-Domain Management (MDM/MDSM)
+- Gaia gateways and ClusterXL managed by above on-prem environments
+- Spark gateways and clusters managed by above on-prem environments
+
+### NOT Supported
+This tool does NOT support patching of these scenarios:
+- Smart-1 Cloud Management (this platform is patched by Check Point)
+- Spark Management Portal (this platform is patched by Check Point)
+- Gaia Standalone (self-managed) deployments
+- Gateways defined as dynamic IP (DAIP)
+
+This tool does not CURRENTLY support but may one day support:
+- Self-managed Spark
+- Self-managed Spark clusters
+- Maestro
+- ElasticXL
 
 ## What it does
 
@@ -40,20 +62,6 @@ Supporting features, all in the UI:
 - **Package store.** Upload CPUSE packages for temporary or permanent storage; upload once, distribute to many.
 - **Background jobs.** Every import/install/CDT action runs as a persisted job with a
   live progress log, cancellation, and restart recovery.
-
-## Status
-
-**Working, pre-production.** The web UI, service core, SSH transport, CPUSE and CDT
-wrappers, credential/package stores, environments, and the background job runner are
-implemented and unit-tested. Caveats:
-
-- CPUSE/CDT output parsers are built tolerant but **not yet validated against live
-  Gaia hardware** — expect to tune them on first real connection.
-- The web app has **no authentication yet** — run it only on a trusted network
-  (basic-auth + LDAP are planned).
-- The secondary **CLI** does inventory validation and dry-run planning; its
-  fleet-`--execute` path and the health-check gating (`checks.py`) are still typed
-  stubs.
 
 ## Run it (Docker)
 
@@ -96,19 +104,26 @@ ruff check . && ruff format .
 mypy src
 ```
 
-## Safety model
+### Safety model
 
-This tool has the capability to alter or negatively impact management servers and firewalls, therefore:
+This tool has the capability to alter or negatively impact your management servers 
+and firewalls, therefore there are project guidelines designed to limit your risk.
+These concepts are applied by both human and AI developers:
 
-- **Confirmation-gated mutations** — installs (which can reboot) and CDT fleet
+- **Confirmation-gates** — installs (which can reboot) and CDT fleet
   execute require an explicit operator confirmation.
 - **Cluster-aware ordering** — the CDT candidates order *is* the rollout order;
   standby-first sequencing and blast-radius control live there.
 - **Detected state, not assumed** — the UI reflects live `show installer packages`,
-  and uploads are checksum/size-verified before import.
-- **Auditable** — admin actions and job results are tracked on the Jobs tab.
+  uploads are checksum-verified, and free space is checked before import.
+- **Auditable** — tool actions and job results are tracked on the Jobs tab.
 - **No deletes** - the tool deliberately does not offer the ability to remove packages 
   from the CPUSE repository or the SmartConsole central repository and cannot delete credentials from firewalls or management servers. This stance may be revisited in future versions.
+
+### Future
+
+Prior to the v1 initial release a policy will be implemented to require
+code security review by an independent agentic analyst prior to release publication.
 
 Cluster/health pre-gating (`checks.py`) is the next safety layer to wire in. See
 [.claude/memory/safety-constraints.md](.claude/memory/safety-constraints.md).
@@ -119,30 +134,44 @@ This repo is **public**. Only `*.example.*` templates with placeholder values ar
 tracked. Real inventories, CDT plans, keys, `.env`, the `data/` volume, logs, and run
 reports are git-ignored (and `.claudeignore`d). Credentials are encrypted at rest and
 never echoed by the API. See
-[.claude/memory/security-hygiene.md](.claude/memory/security-hygiene.md). **Never
-commit real infrastructure detail or secrets.**
+[.claude/memory/security-hygiene.md](.claude/memory/security-hygiene.md).
 
-## Layout
+## Status and Milestones
 
-```
-src/chkp_cpuse_orch/
-  web/            FastAPI app + static, hand-editable UI (web/static/)
-  services/       service core: patching (CPUSE), cdt_ops (CDT), environments,
-                  provisioning, common (host connector + environment registry)
-  transport/      SSH (Paramiko) + Gaia/Management API clients
-  cpuse.py cdt.py thin wrappers over the installer / CentralDeploymentTool
-  store.py        SQLite: jobs, credential ciphertext, packages, environments
-  credentials.py packages.py jobs.py  encrypted store / package store / job runner
-  orchestrator.py checks.py  fleet planning + health gating (CLI path; partial)
-  cli.py config.py inventory.py reporting.py errors.py
-examples/         *.example.yaml templates (tracked)
-tests/            pytest suite (service logic via fakes; no live gear)
-Dockerfile docker-compose.yml scripts/deploy.sh
-.claude/memory/   project memory for Claude Code (start at MEMORY.md)
-CLAUDE.md         project instructions
-```
+**Working, pre-production.** The web UI, service core, SSH transport, CPUSE and CDT
+wrappers, credential/package stores, environments, and the background job runner are
+implemented and unit-tested. Caveats:
 
-## To-do List
+- CPUSE/CDT output parsers are built tolerant but **not yet validated against live
+  Gaia hardware** — expect to tune them on first real connection.
+- The web app has **no authentication yet** — run it only on a trusted network
+  (basic-auth + LDAP are planned).
+- The secondary **CLI** does inventory validation and dry-run planning; its
+  fleet-`--execute` path and the health-check gating (`checks.py`) are still typed
+  stubs.
+
+### Milestones to reach v1 / Initial Release
+These gates will define the major version releases - the milestones may change in the
+future but they will remain documented here. A milestone is not marked complete until 
+it is tested and confirmed by a human.
+
+- [x] Implement ldap authentication
+- [ ] Implement local TLS support
+- [ ] Test Nginx/NPM support
+- [ ] SMS/Smart Center environment discovery and patching
+- [x] MDS/Multi-Domain environment discovery and patching
+- [ ] Gaia/Force Gateway patching
+- [ ] Gaia/Force ClusterXL patching
+- [ ] Spark patching
+- [ ] Spark cluster patching
+- [ ] Packaged deployment release that doesn't require clone and --build
+
+### Milestones to reach v2
+
+- [ ] CDT deployment to Gaia/Force gateways
+- [ ] CDT deployment to Gaia/Force ClusterXL
+
+### Roadmap / Punch List
 
 - CPUSE: should multiple CPUSE jobs (with different tarets) be permitted to run concurrently?
 - CPUSE: Add concept of direct patching for gateways as well with a separate panel from mgmt servers
