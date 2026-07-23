@@ -2091,11 +2091,26 @@ async function loadJobFacets() {
       select.appendChild(opt);
     }
   }
+  updateJobsFilterCount();
+}
+
+// Shown next to "Filters" even while the section is collapsed, so an active
+// filter narrowing the Jobs list is never invisible (operator-reported,
+// 2026-07-23 — a stuck, unnoticed filter looked exactly like missing jobs).
+function updateJobsFilterCount() {
+  const n = JOBS_FILTER_FIELDS.reduce(
+    (total, field) => total + jobsFilterSelect(field).selectedOptions.length,
+    0,
+  );
+  document.getElementById("jobs-filters-count").textContent = n ? `(${n} active)` : "";
 }
 
 for (const field of JOBS_FILTER_FIELDS) {
   const select = jobsFilterSelect(field);
-  select.addEventListener("change", loadJobs);
+  select.addEventListener("change", () => {
+    updateJobsFilterCount();
+    loadJobs();
+  });
   // A plain click on a native <select multiple> option REPLACES the whole
   // selection (Ctrl/Cmd-click is required to add one) — not obvious, and an
   // easy way to accidentally filter the list down to almost nothing with a
@@ -2113,6 +2128,7 @@ document.getElementById("jobs-filter-clear").addEventListener("click", async () 
   for (const field of JOBS_FILTER_FIELDS) {
     for (const opt of jobsFilterSelect(field).options) opt.selected = false;
   }
+  updateJobsFilterCount();
   await loadJobs();
 });
 
@@ -2176,10 +2192,23 @@ async function loadJobs() {
 async function toggleJobLog(jobId, row) {
   if (openJobLogs.has(jobId)) {
     openJobLogs.delete(jobId);
-    row.nextElementSibling?.classList.contains("job-events-row") && row.nextElementSibling.remove();
+    // Find it by id, not by position — it was previously assumed to always
+    // be row's immediate next sibling, which broke (leaving it stuck open
+    // and duplicating on every click) once an install-log row could also
+    // occupy that slot (operator-reported, 2026-07-23).
+    document.querySelector(`#jobs-table tr.job-events-row[data-job-id="${jobId}"]`)?.remove();
   } else {
     openJobLogs.add(jobId);
-    row.after(buildJobLogRow(jobId));
+    // Insert after the install-log row too, when one is already present, so
+    // the fixed row order (job-row, install-log-row, events-row) holds —
+    // syncInstallLogRow() relies on the install-log row always being
+    // immediately after the job row to find/update/remove it, and inserting
+    // the events row there unconditionally displaced it, causing a new
+    // (duplicate) install-log row to be created on every subsequent poll.
+    const afterRow = row.nextElementSibling?.classList.contains("job-install-log-row")
+      ? row.nextElementSibling
+      : row;
+    afterRow.after(buildJobLogRow(jobId));
     await refreshJobLogRow(jobId);
   }
 }

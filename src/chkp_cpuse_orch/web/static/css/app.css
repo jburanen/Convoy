@@ -293,16 +293,20 @@ tr.job-install-log-row td { padding-top: 0; padding-bottom: 0.5rem; }
    .section-head-actions) rather than its own block above the table. */
 #jobs-limit-label { display: flex; align-items: center; gap: 0.4rem; }
 
-/* Jobs tab: per-column multiselect filters, above the table. Each label
-   stacks its column name over the <select> so four fit comfortably in a row;
-   the select itself scrolls internally (size="4") rather than growing the
-   row when a column has many options. */
+/* Jobs tab: per-column multiselect filters, above the table — collapsed by
+   default (see jobs-filters-count for the active-filter indicator shown
+   even while closed). Each label stacks its column name over the <select>
+   so four fit comfortably in a row; the select itself scrolls internally
+   (size="4") rather than growing the row when a column has many options. */
+.jobs-filters-details { margin: 0 0 0.75rem; }
+.jobs-filters-details summary { cursor: pointer; color: var(--muted); }
+#jobs-filters-count { margin-left: 0.35rem; }
 .jobs-filters {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
   gap: 0.75rem;
-  margin: 0 0 0.75rem;
+  margin: 0.6rem 0 0;
 }
 .jobs-filters label {
   display: flex;

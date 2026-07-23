@@ -259,7 +259,7 @@
         <div class="bulk-import-row">
           <label class="muted" for="bulk-import-package">Import a stored package:</label>
           <select id="bulk-import-package"><option value="">— package —</option></select>
-          <button type="button" id="bulk-import-btn" class="small">Import to selected</button>
+          <button type="button" id="bulk-import-btn" class="small">Upload and import to selected</button>
         </div>
         <div class="bulk-import-row">
           <label class="muted" for="bulk-import-cloud-id">Or import directly from Check Point's cloud:</label>
@@ -354,17 +354,21 @@
            displayed page) by loadJobFacets() in app.js. Click toggles one
            option at a time (app.js intercepts the native "click replaces the
            whole selection" behavior); empty selection = no filter on that
-           column. -->
-      <div class="jobs-filters">
-        <label>Kind<select id="jobs-filter-kind" class="jobs-filter" multiple size="4"></select></label>
-        <label>Target<select id="jobs-filter-target" class="jobs-filter" multiple size="4"></select></label>
-        <label>Env<select id="jobs-filter-environment" class="jobs-filter" multiple size="4"></select></label>
-        <label>Status<select id="jobs-filter-status" class="jobs-filter" multiple size="4"></select></label>
-        <div class="jobs-filters-actions">
-          <button type="button" id="jobs-filter-clear" class="small secondary">Clear filters</button>
-          <span class="hint">Click an option to toggle it on/off; an empty column matches everything.</span>
+           column. Collapsed by default; the summary shows how many are
+           active so a filter narrowing the list stays visible even closed. -->
+      <details class="jobs-filters-details">
+        <summary>Filters<span id="jobs-filters-count" class="muted"></span></summary>
+        <div class="jobs-filters">
+          <label>Kind<select id="jobs-filter-kind" class="jobs-filter" multiple size="4"></select></label>
+          <label>Target<select id="jobs-filter-target" class="jobs-filter" multiple size="4"></select></label>
+          <label>Env<select id="jobs-filter-environment" class="jobs-filter" multiple size="4"></select></label>
+          <label>Status<select id="jobs-filter-status" class="jobs-filter" multiple size="4"></select></label>
+          <div class="jobs-filters-actions">
+            <button type="button" id="jobs-filter-clear" class="small secondary">Clear filters</button>
+            <span class="hint">Click an option to toggle it on/off; an empty column matches everything.</span>
+          </div>
         </div>
-      </div>
+      </details>
       <table id="jobs-table">
         <thead>
           <tr>
