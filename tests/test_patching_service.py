@@ -657,6 +657,49 @@ def test_install_job_ignores_attempts_budget_once_percentage_progress_seen(
     assert any(m.startswith("install complete:") and "Installed" in m for m in messages)
 
 
+def test_install_job_does_not_repeat_an_unchanged_status_line(
+    store: Store, creds: CredentialStore, packages: PackageStore, inventory: Inventory
+) -> None:
+    # A long install sitting at the same percentage for many checks in a row
+    # (operator-reported, 2026-07-23) shouldn't print that same status line
+    # every 30s — only log it again once it actually changes.
+    transport = FakeTransport(
+        responses={
+            "show installer package ": [
+                "Status:           Installing 74%",
+                "Status:           Installing 74%",
+                "Status:           Installing 74%",
+                "Status:           Installing 90%",
+                "Status:           Installed",
+            ]
+        }
+    )
+    _assign(store, inventory, "mgmt-01")
+    registry = EnvironmentRegistry()
+    registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
+    service = PatchingService(
+        registry=registry,
+        packages=packages,
+        runner=JobRunner(store),
+        vault=JobCredentialVault(),
+        store=store,
+        install_verify_attempts=1,
+        install_verify_delay=0,
+        install_stall_seconds=0,
+    )
+
+    job = service.submit_install(
+        "default", "mgmt-01", "Check_Point_R81_20_T89", confirmed=True, verify_first=False
+    )
+    _run(service)
+
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.SUCCEEDED
+    messages = [e.message for e in store.events(job.id)]
+    assert messages.count("status: Installing 74%") == 1
+    assert messages.count("status: Installing 90%") == 1
+
+
 def test_install_job_fails_if_status_never_shows_installed(
     store: Store, creds: CredentialStore, packages: PackageStore, inventory: Inventory
 ) -> None:

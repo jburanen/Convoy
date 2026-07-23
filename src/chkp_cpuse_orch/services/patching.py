@@ -576,9 +576,13 @@ class PatchingService:
         log line — on each check; the full `show installer package <id>`
         block is only logged once, at the end, when Status finally shows
         Installed (or in the raised error if it never does), rather than
-        repeating it on every poll."""
+        repeating it on every poll. A status line is only logged when it
+        actually changed from the last one (operator-directed, 2026-07-23) —
+        otherwise a long install sitting at the same percentage for many
+        checks in a row would print that same line every 30s for no reason."""
         client: Transport | None = None
         last_detail = PackageState(package_id, "")
+        last_logged_status: str | None = None
         started = time.monotonic()
         uncapped = False
         attempt = 0
@@ -610,7 +614,9 @@ class PatchingService:
                     ctx.log(f"install complete:\n{detail.raw}")
                     return True, last_detail
 
-                ctx.log(f"status: {detail.status}")
+                if detail.status != last_logged_status:
+                    ctx.log(f"status: {detail.status}")
+                    last_logged_status = detail.status
                 if "%" in detail.status:
                     uncapped = True
 

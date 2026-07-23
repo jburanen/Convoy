@@ -144,6 +144,7 @@ CLAUDE.md         project instructions
 
 ## To-do List
 
+- CPUSE: should multiple CPUSE jobs (with different tarets) be permitted to run concurrently?
 - CPUSE: Add concept of direct patching for gateways as well with a separate panel from mgmt servers
 - CPUSE: Gateways to direct patch should be added by admin on the CPUSE tab with a similar UI to adding mgmt servers on the provisioning tab. Management servers should be inherited from Prov tab
 - CPUSE: Add ability to edit existing direct patching targets
@@ -157,6 +158,7 @@ CLAUDE.md         project instructions
 - Provisioning: treat credential management actions as jobs and track with prov prefix
 - Provisioning: treat server discovery and connection actions as jobs and track with prov prefix
 - Jobs: fix column width resizing
+- Jobs: add syslog output
 - Packages: only display SHA1 hash, sha256 is not needed
 - Packages: add ability to upload a stored package to the smartconsole packages repo using mgmt api
 

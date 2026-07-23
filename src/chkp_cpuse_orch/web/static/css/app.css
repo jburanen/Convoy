@@ -263,6 +263,7 @@ tr.job-row:hover td { background: var(--badge-bg); }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.job-output-ok { color: var(--ok); }
 /* Every other column always fits its header + content on one line — Error
    is the one column allowed to give up width for that (it already ellipses
    above), so the table never wraps Kind/Target/Env/Status/Started instead. */

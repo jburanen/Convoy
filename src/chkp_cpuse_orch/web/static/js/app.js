@@ -395,7 +395,8 @@ async function renderEnvManageList() {
     row.querySelector(".env-delete-btn").addEventListener("click", async () => {
       if (!confirm(
         `Delete environment "${env.name}"?\n\nIts management-server list AND all ` +
-        "stored credentials for it are permanently removed. This cannot be undone."
+        "stored credentials for it are permanently removed. This cannot be undone. " +
+        "Job logs are NOT deleted — they're kept for audit purposes."
       )) return;
       try {
         await api(`/api/environments/${encodeURIComponent(env.name)}`, { method: "DELETE" });
@@ -1987,8 +1988,15 @@ function renderJobRow(row, job) {
   badge.className = "badge " + jobStatusClass(job.status); // reset, not add — status can change
   row.querySelector(".job-started").textContent = fmtTime(job.started_at ?? job.created_at);
   const errorCell = row.querySelector(".job-error");
-  errorCell.textContent = job.error ?? "";
-  errorCell.title = job.error ?? ""; // full text on hover even while truncated/collapsed
+  if (job.status === "succeeded") {
+    errorCell.textContent = `Succeeded ${fmtTime(job.finished_at)}`;
+    errorCell.title = "";
+    errorCell.classList.add("job-output-ok");
+  } else {
+    errorCell.textContent = job.error ?? "";
+    errorCell.title = job.error ?? ""; // full text on hover even while truncated/collapsed
+    errorCell.classList.remove("job-output-ok");
+  }
   row.querySelector(".btn-cancel").classList.toggle(
     "hidden", !(job.status === "pending" || job.status === "running"),
   );
