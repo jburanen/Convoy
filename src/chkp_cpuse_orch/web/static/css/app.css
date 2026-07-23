@@ -550,12 +550,22 @@ tr.srv-state-row td { padding-top: 0; }
 /* Never shrink narrower than their content — including the header label
    itself — so these three columns don't wrap. The fill column (below) is
    what absorbs/gives up space instead. */
-.srv-name, .srv-address, .srv-role, .col-nowrap { white-space: nowrap; }
+.srv-name, .srv-address, .srv-role,
+.fw-name, .fw-address, .fw-role, .fw-creds,
+.col-nowrap { white-space: nowrap; }
 /* Address/SSH-user cells here carry the shared .mono class (monospace, smaller),
    but this table should read as one uniform font — match the Server column
    (.srv-name), which is unstyled body text. Scoped to this table only, so the
    .mono class itself (used elsewhere, e.g. the Credentials table) is untouched. */
 #servers-info-table .mono { font-family: inherit; font-size: inherit; }
+/* Same idea, scoped to the Firewalls panel table: its Address cell carries
+   the shared .mono class too, but should read as one uniform font matching
+   the Firewall column (.fw-name), which is unstyled body text. */
+#firewalls-table .mono { font-family: inherit; font-size: inherit; }
+/* The firewall name doubles as the row's Edit trigger (opens the edit modal) —
+   flush left like plain cell text, not indented like an inline "Refresh" link
+   that follows other text. */
+.fw-name-link { margin-left: 0; }
 /* A flex wrapper *inside* the cell, not the <td> itself — display: flex
    directly on a table-cell risks it dropping out of column-width
    calculations in some browsers. */

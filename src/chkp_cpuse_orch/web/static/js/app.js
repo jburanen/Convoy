@@ -1683,7 +1683,7 @@ async function loadFirewalls() {
   tbody.replaceChildren();
 
   if (!currentEnv) {
-    emptyRow(tbody, 9, "No environments. Use the Environment picker → New Environment…");
+    emptyRow(tbody, 6, "No environments. Use the Environment picker → New Environment…");
     return;
   }
 
@@ -1706,11 +1706,9 @@ async function loadFirewalls() {
     selectCb.dataset.firewall = fw.name; // read by the bulk-import buttons
     selectCb.addEventListener("change", updateFirewallSelectAllState);
     markRowIfJobActive(selectCb, fw.name);
-    row.querySelector(".fw-name").textContent = fw.name;
+    row.querySelector(".fw-name-link").textContent = fw.name;
     row.querySelector(".fw-address").textContent = fw.address;
     row.querySelector(".fw-role").textContent = roleLabel(fw.role);
-    row.querySelector(".fw-user").textContent = fw.ssh_user;
-    row.querySelector(".fw-port").textContent = fw.ssh_port;
     row.querySelector(".fw-creds").textContent =
       (state && state.credential_set) || "none — not assigned";
     renderInstallSelect(row, state?.installable ?? [], fw.name);
@@ -1723,25 +1721,17 @@ async function loadFirewalls() {
       .querySelector(".srv-refresh-link")
       .addEventListener("click", () => refreshFirewallState(fw.name, row, stateRow));
     row.querySelector(".btn-install").addEventListener("click", () => installFirewallPackage(fw.name, row));
-    row.querySelector(".btn-edit").addEventListener("click", () => {
+    // The name itself is the row's only Edit trigger now — Remove lives inside
+    // the modal it opens, rather than its own row button.
+    row.querySelector(".fw-name-link").addEventListener("click", () => {
       openEditFirewallModal(fw, state && state.credential_set);
-    });
-    row.querySelector(".btn-remove").addEventListener("click", async () => {
-      if (!confirm(`Remove firewall ${fw.name} from ${currentEnv}?`)) return;
-      try {
-        await api(
-          `/api/environments/${encodeURIComponent(currentEnv)}/firewalls/${encodeURIComponent(fw.name)}`,
-          { method: "DELETE" },
-        );
-        await loadFirewalls();
-      } catch (e) { toast("Remove failed: " + e.message); }
     });
     tbody.appendChild(row);
     tbody.appendChild(stateRow);
   }
 
   if (!editable.length) {
-    emptyRow(tbody, 9, "No firewalls yet — add one manually or discover from a primary.");
+    emptyRow(tbody, 6, "No firewalls yet — add one manually or discover from a primary.");
   }
   updateFirewallSelectAllState(); // rows were just rebuilt — reset to "none selected"
 }
@@ -1898,17 +1888,25 @@ async function addFirewall({ name, address, role, ssh_user, ssh_port }) {
   });
 }
 
+// Set while the modal is in edit mode — read by the modal's own Remove button,
+// which replaces the row-level Remove button (the row's only action now is
+// the name link, which opens straight into this modal).
+let editingFirewallName = null;
+
 async function openAddFirewallModal() {
   if (!currentEnv) { toast("Create an environment first (picker → New Environment…)."); return; }
+  editingFirewallName = null;
   document.getElementById("firewall-form").reset();
   document.getElementById("fm-name").disabled = false;
   document.getElementById("firewall-modal-title").textContent = "Add firewall";
   document.getElementById("firewall-modal-submit").textContent = "Add firewall";
+  document.getElementById("firewall-modal-remove").classList.add("hidden");
   await populateFirewallCredSelect();
   document.getElementById("firewall-modal").classList.remove("hidden");
   document.getElementById("fm-name").focus();
 }
 async function openEditFirewallModal(fw, assignedSetName) {
+  editingFirewallName = fw.name;
   document.getElementById("fm-name").value = fw.name;
   document.getElementById("fm-name").disabled = true;
   document.getElementById("fm-address").value = fw.address;
@@ -1917,6 +1915,7 @@ async function openEditFirewallModal(fw, assignedSetName) {
   document.getElementById("fm-port").value = fw.ssh_port;
   document.getElementById("firewall-modal-title").textContent = `Edit ${fw.name}`;
   document.getElementById("firewall-modal-submit").textContent = "Save changes";
+  document.getElementById("firewall-modal-remove").classList.remove("hidden");
   await populateFirewallCredSelect(assignedSetName);
   document.getElementById("firewall-modal").classList.remove("hidden");
   document.getElementById("fm-address").focus();
@@ -1953,6 +1952,19 @@ document.getElementById("firewall-form").addEventListener("submit", async (ev) =
     closeFirewallModal();
     await loadFirewalls();
   } catch (e) { toast("Save failed: " + e.message); }
+});
+document.getElementById("firewall-modal-remove").addEventListener("click", async () => {
+  const name = editingFirewallName;
+  if (!name || !currentEnv) return;
+  if (!confirm(`Remove firewall ${name} from ${currentEnv}?`)) return;
+  try {
+    await api(
+      `/api/environments/${encodeURIComponent(currentEnv)}/firewalls/${encodeURIComponent(name)}`,
+      { method: "DELETE" },
+    );
+    closeFirewallModal();
+    await loadFirewalls();
+  } catch (e) { toast("Remove failed: " + e.message); }
 });
 document.getElementById("firewall-modal-close").addEventListener("click", closeFirewallModal);
 document.getElementById("firewall-modal-cancel").addEventListener("click", closeFirewallModal);

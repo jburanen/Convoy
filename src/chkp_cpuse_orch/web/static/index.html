@@ -342,11 +342,8 @@
               <th class="col-nowrap">Firewall</th>
               <th class="col-nowrap">Address</th>
               <th class="col-nowrap">Role</th>
-              <th class="col-nowrap">SSH user</th>
-              <th class="col-nowrap">Port</th>
               <th class="col-nowrap">Credential set</th>
               <th class="col-fill">Packages imported and ready to install</th>
-              <th></th>
             </tr>
           </thead>
           <tbody><!-- tpl-firewall-row / tpl-firewall-state-row instances --></tbody>
@@ -745,6 +742,9 @@
       <div class="cred-modal-actions">
         <button type="submit" id="firewall-modal-submit">Add firewall</button>
         <button type="button" id="firewall-modal-cancel" class="secondary">Cancel</button>
+        <!-- Edit mode only (hidden when adding) — the row no longer has its own
+             Remove button; the firewall name link opens straight here instead. -->
+        <button type="button" id="firewall-modal-remove" class="danger hidden">Remove firewall</button>
       </div>
     </form>
   </div>
@@ -892,11 +892,9 @@
 <template id="tpl-firewall-row">
   <tr class="srv-row">
     <td class="col-select"><input type="checkbox" class="fw-select" title="select as an import target"></td>
-    <td class="fw-name"></td>
+    <td class="fw-name"><button type="button" class="link-btn fw-name-link" title="edit this firewall"></button></td>
     <td class="fw-address mono"></td>
     <td class="fw-role"></td>
-    <td class="fw-user mono"></td>
-    <td class="fw-port"></td>
     <td class="fw-creds"></td>
     <td class="fw-actions col-fill">
       <div class="srv-actions-inner">
@@ -907,10 +905,6 @@
         <button class="btn-install small success">Install</button>
       </div>
     </td>
-    <td class="row-actions">
-      <button class="btn-edit small" title="edit this firewall">Edit</button>
-      <button class="btn-remove small danger" title="remove from environment">Remove</button>
-    </td>
   </tr>
 </template>
 
@@ -919,7 +913,7 @@
 <template id="tpl-firewall-state-row">
   <tr class="srv-state-row">
     <td class="col-select"></td>
-    <td colspan="8" class="srv-agent muted">
+    <td colspan="5" class="srv-agent muted">
       <span class="srv-summary"></span>
       <span class="srv-checked"></span>
       <button type="button" class="link-btn srv-refresh-link">Refresh</button>
