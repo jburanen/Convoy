@@ -191,11 +191,13 @@ def submit_host_job(
     *,
     params: dict[str, object] | None = None,
     credentials: CredentialBundle | None = None,
+    triggered_by: str | None = None,
 ) -> JobRecord:
     """Validate credentials for a host job and enqueue it. For storage-disabled
     environments the credentials are stashed in the vault under the job id
     *before* the job is submitted (so the runner can't start it first), and
-    removed again if submission fails."""
+    removed again if submission fails. ``triggered_by`` is the logged-in
+    username, recorded on the job for the Jobs tab's User column/filter."""
     creds = connector.require_credentials(host, credentials)
     job_id = new_id()
     if creds is not None:
@@ -207,6 +209,7 @@ def submit_host_job(
             params=params or {},
             environment=connector.environment,
             job_id=job_id,
+            triggered_by=triggered_by,
         )
     except Exception:
         vault.discard(job_id)

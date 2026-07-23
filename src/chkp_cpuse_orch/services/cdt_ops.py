@@ -108,6 +108,7 @@ class CDTService:
         package_filename: str,
         *,
         credentials: CredentialBundle | None = None,
+        triggered_by: str | None = None,
     ) -> JobRecord:
         connector = self.registry.get(environment)
         host = connector.mgmt_host(host_name)
@@ -120,15 +121,27 @@ class CDTService:
             JOB_CDT_STAGE,
             params={"package": package_filename},
             credentials=credentials,
+            triggered_by=triggered_by,
         )
 
     def submit_generate(
-        self, environment: str, host_name: str, *, credentials: CredentialBundle | None = None
+        self,
+        environment: str,
+        host_name: str,
+        *,
+        credentials: CredentialBundle | None = None,
+        triggered_by: str | None = None,
     ) -> JobRecord:
         connector = self.registry.get(environment)
         host = connector.mgmt_host(host_name)
         return submit_host_job(
-            self.runner, self._vault, connector, host, JOB_CDT_GENERATE, credentials=credentials
+            self.runner,
+            self._vault,
+            connector,
+            host,
+            JOB_CDT_GENERATE,
+            credentials=credentials,
+            triggered_by=triggered_by,
         )
 
     def submit_prepare(
@@ -138,6 +151,7 @@ class CDTService:
         *,
         extended: bool = False,
         credentials: CredentialBundle | None = None,
+        triggered_by: str | None = None,
     ) -> JobRecord:
         connector = self.registry.get(environment)
         host = connector.mgmt_host(host_name)
@@ -149,6 +163,7 @@ class CDTService:
             JOB_CDT_PREPARE,
             params={"extended": extended},
             credentials=credentials,
+            triggered_by=triggered_by,
         )
 
     def submit_execute(
@@ -158,6 +173,7 @@ class CDTService:
         *,
         confirmed: bool,
         credentials: CredentialBundle | None = None,
+        triggered_by: str | None = None,
     ) -> JobRecord:
         """The real fleet deployment. ``confirmed`` must be True — this touches
         every gateway in the candidates list, in CSV order."""
@@ -169,7 +185,13 @@ class CDTService:
         connector = self.registry.get(environment)
         host = connector.mgmt_host(host_name)
         return submit_host_job(
-            self.runner, self._vault, connector, host, JOB_CDT_EXECUTE, credentials=credentials
+            self.runner,
+            self._vault,
+            connector,
+            host,
+            JOB_CDT_EXECUTE,
+            credentials=credentials,
+            triggered_by=triggered_by,
         )
 
     # -- job handlers ---------------------------------------------------------------

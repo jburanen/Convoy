@@ -459,6 +459,12 @@ def _service(request: Request) -> PatchingService:
     return service
 
 
+def _current_user(request: Request) -> str | None:
+    """The logged-in username, or None when auth is off — recorded on every
+    submitted job for the Jobs tab's User column/filter."""
+    return getattr(request.state, "user", None)
+
+
 def _build_credentials(
     items: list[JobCredentialIn], host_name: str, environment: str
 ) -> CredentialBundle:
@@ -942,7 +948,11 @@ def _register_routes(app: FastAPI) -> None:
     def server_import(env: str, name: str, body: ImportRequest, request: Request) -> JobRecord:
         try:
             return _service(request).submit_import(
-                env, name, body.package, credentials=_build_credentials(body.credentials, name, env)
+                env,
+                name,
+                body.package,
+                credentials=_build_credentials(body.credentials, name, env),
+                triggered_by=_current_user(request),
             )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
@@ -957,6 +967,7 @@ def _register_routes(app: FastAPI) -> None:
                 name,
                 body.package_id,
                 credentials=_build_credentials(body.credentials, name, env),
+                triggered_by=_current_user(request),
             )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
@@ -971,6 +982,7 @@ def _register_routes(app: FastAPI) -> None:
                 confirmed=body.confirmed,
                 verify_first=body.verify_first,
                 credentials=_build_credentials(body.credentials, name, env),
+                triggered_by=_current_user(request),
             )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
@@ -1044,7 +1056,11 @@ def _register_routes(app: FastAPI) -> None:
     def firewall_import(env: str, name: str, body: ImportRequest, request: Request) -> JobRecord:
         try:
             return _service(request).submit_import(
-                env, name, body.package, credentials=_build_credentials(body.credentials, name, env)
+                env,
+                name,
+                body.package,
+                credentials=_build_credentials(body.credentials, name, env),
+                triggered_by=_current_user(request),
             )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
@@ -1059,6 +1075,7 @@ def _register_routes(app: FastAPI) -> None:
                 name,
                 body.package_id,
                 credentials=_build_credentials(body.credentials, name, env),
+                triggered_by=_current_user(request),
             )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
@@ -1073,6 +1090,7 @@ def _register_routes(app: FastAPI) -> None:
                 confirmed=body.confirmed,
                 verify_first=body.verify_first,
                 credentials=_build_credentials(body.credentials, name, env),
+                triggered_by=_current_user(request),
             )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
@@ -1124,7 +1142,9 @@ def _register_routes(app: FastAPI) -> None:
 
         try:
             await asyncio.to_thread(_stage)
-            return _pkgs_jobs(request).submit_upload(file.filename, staged_path)
+            return _pkgs_jobs(request).submit_upload(
+                file.filename, staged_path, triggered_by=_current_user(request)
+            )
         except OrchestratorError as exc:
             staged_path.unlink(missing_ok=True)
             raise _map_error(exc) from exc
@@ -1137,14 +1157,16 @@ def _register_routes(app: FastAPI) -> None:
         """Pin a package to keep it indefinitely, or un-pin it so the retention
         window applies again — runs as a pkgs.keep/pkgs.notkeep job."""
         try:
-            return _pkgs_jobs(request).submit_retention(filename, body.pinned)
+            return _pkgs_jobs(request).submit_retention(
+                filename, body.pinned, triggered_by=_current_user(request)
+            )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
     @app.delete("/api/packages/{filename}", status_code=202)
     def delete_package(filename: str, request: Request) -> JobRecord:
         try:
-            return _pkgs_jobs(request).submit_delete(filename)
+            return _pkgs_jobs(request).submit_delete(filename, triggered_by=_current_user(request))
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
@@ -1268,7 +1290,11 @@ def _register_routes(app: FastAPI) -> None:
     def cdt_stage(env: str, name: str, body: StageRequest, request: Request) -> JobRecord:
         try:
             return _cdt(request).submit_stage(
-                env, name, body.package, credentials=_build_credentials(body.credentials, name, env)
+                env,
+                name,
+                body.package,
+                credentials=_build_credentials(body.credentials, name, env),
+                triggered_by=_current_user(request),
             )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
@@ -1278,7 +1304,12 @@ def _register_routes(app: FastAPI) -> None:
         env: str, name: str, request: Request, body: GenerateRequest | None = None
     ) -> JobRecord:
         try:
-            return _cdt(request).submit_generate(env, name, credentials=_op_creds(body, name, env))
+            return _cdt(request).submit_generate(
+                env,
+                name,
+                credentials=_op_creds(body, name, env),
+                triggered_by=_current_user(request),
+            )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
@@ -1290,6 +1321,7 @@ def _register_routes(app: FastAPI) -> None:
                 name,
                 extended=body.extended,
                 credentials=_build_credentials(body.credentials, name, env),
+                triggered_by=_current_user(request),
             )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
@@ -1302,6 +1334,7 @@ def _register_routes(app: FastAPI) -> None:
                 name,
                 confirmed=body.confirmed,
                 credentials=_build_credentials(body.credentials, name, env),
+                triggered_by=_current_user(request),
             )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
@@ -1316,9 +1349,10 @@ def _register_routes(app: FastAPI) -> None:
         target: Annotated[list[str] | None, Query()] = None,
         environment: Annotated[list[str] | None, Query()] = None,
         status: Annotated[list[str] | None, Query()] = None,
+        user: Annotated[list[str] | None, Query()] = None,
     ) -> list[JobRecord]:
         """``limit <= 0`` returns every job (the Jobs tab's "All" option).
-        kind/target/environment/status each accept repeated query params
+        kind/target/environment/status/user each accept repeated query params
         (``?status=failed&status=succeeded``) and filter as OR within a field,
         AND across fields — powers the Jobs tab's multiselect filters. Options
         come from ``/api/jobs/facets``, not this endpoint."""
@@ -1330,14 +1364,20 @@ def _register_routes(app: FastAPI) -> None:
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=f"invalid status: {exc}") from exc
         return store.list_jobs(
-            limit=limit, kinds=kind, targets=target, environments=environment, statuses=statuses
+            limit=limit,
+            kinds=kind,
+            targets=target,
+            environments=environment,
+            statuses=statuses,
+            usernames=user,
         )
 
     @app.get("/api/jobs/facets")
     def job_facets(request: Request) -> dict[str, list[str]]:
-        """Distinct kind/target/environment/status values across *every*
-        job, not just the currently displayed page — the Jobs tab's filter
-        dropdowns must offer every real option regardless of display limit."""
+        """Distinct kind/target/environment/status/username values across
+        *every* job, not just the currently displayed page — the Jobs tab's
+        filter dropdowns must offer every real option regardless of display
+        limit."""
         store: Store = request.app.state.store
         return store.list_job_facets()
 

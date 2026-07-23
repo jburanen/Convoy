@@ -125,9 +125,9 @@ def test_list_jobs_limit_zero_or_less_is_unlimited(store: Store) -> None:
 
 
 def test_list_jobs_multi_value_filters(store: Store) -> None:
-    a = JobRecord(kind="cpuse.install", target="mgmt-01", environment="corp")
-    b = JobRecord(kind="cpuse.import", target="mgmt-02", environment="corp")
-    c = JobRecord(kind="cpuse.install", target="mgmt-01", environment="dmz")
+    a = JobRecord(kind="cpuse.install", target="mgmt-01", environment="corp", username="alice")
+    b = JobRecord(kind="cpuse.import", target="mgmt-02", environment="corp", username="bob")
+    c = JobRecord(kind="cpuse.install", target="mgmt-01", environment="dmz", username="alice")
     for job in (a, b, c):
         store.insert_job(job)
     store.claim_next_pending()  # a -> RUNNING
@@ -136,15 +136,17 @@ def test_list_jobs_multi_value_filters(store: Store) -> None:
     # Each field is OR'd within itself...
     assert {j.id for j in store.list_jobs(kinds=["cpuse.install"])} == {a.id, c.id}
     assert {j.id for j in store.list_jobs(targets=["mgmt-01", "mgmt-02"])} == {a.id, b.id, c.id}
+    assert {j.id for j in store.list_jobs(usernames=["alice"])} == {a.id, c.id}
     # ...and AND'd across fields.
     assert {j.id for j in store.list_jobs(kinds=["cpuse.install"], environments=["dmz"])} == {c.id}
+    assert {j.id for j in store.list_jobs(usernames=["alice"], environments=["dmz"])} == {c.id}
     assert {j.id for j in store.list_jobs(statuses=[JobStatus.SUCCEEDED])} == {a.id}
     assert store.list_jobs(kinds=["nonexistent"]) == []
 
 
 def test_list_job_facets_reflects_every_job_not_just_the_display_limit(store: Store) -> None:
-    a = JobRecord(kind="cpuse.install", target="mgmt-01", environment="corp")
-    b = JobRecord(kind="cpuse.import", target=None, environment="dmz")  # no target
+    a = JobRecord(kind="cpuse.install", target="mgmt-01", environment="corp", username="alice")
+    b = JobRecord(kind="cpuse.import", target=None, environment="dmz")  # no target, no username
     store.insert_job(a)
     store.insert_job(b)
     store.claim_next_pending()  # a (oldest) -> RUNNING
@@ -155,6 +157,7 @@ def test_list_job_facets_reflects_every_job_not_just_the_display_limit(store: St
     assert facets["targets"] == ["mgmt-01"]  # null target excluded, not a selectable option
     assert facets["environments"] == ["corp", "dmz"]
     assert set(facets["statuses"]) == {"succeeded", "pending"}
+    assert facets["usernames"] == ["alice"]  # null username excluded
     # A limit=1 fetch would only surface one job's kind — facets must not be
     # derived from a limited/paginated query.
     assert len(store.list_jobs(limit=1)) == 1

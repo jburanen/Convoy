@@ -72,7 +72,7 @@
       <span class="tab-guide-chevron" aria-hidden="true">&rsaquo;</span>
       <p class="tab-guide-item" data-tab="management">Deploy patches to management servers and a few firewalls using CPUSE</p>
       <span class="tab-guide-chevron" aria-hidden="true">&rsaquo;</span>
-      <p class="tab-guide-item" data-tab="gateways">Perform bulk patching operations on firewalls using the Central Deployment Tool</p>
+      <p class="tab-guide-item" data-tab="gateways">Version 2.0 will add bulk patching on firewalls using the Central Deployment Tool</p>
       <span class="tab-guide-chevron" aria-hidden="true">&rsaquo;</span>
       <p class="tab-guide-item" data-tab="jobs">Monitor job status and results</p>
     </div>
@@ -433,6 +433,7 @@
           <label>Target<select id="jobs-filter-target" class="jobs-filter" multiple size="4"></select></label>
           <label>Env<select id="jobs-filter-environment" class="jobs-filter" multiple size="4"></select></label>
           <label>Status<select id="jobs-filter-status" class="jobs-filter" multiple size="4"></select></label>
+          <label>User<select id="jobs-filter-user" class="jobs-filter" multiple size="4"></select></label>
           <div class="jobs-filters-actions">
             <button type="button" id="jobs-filter-clear" class="small secondary">Clear filters</button>
             <span class="hint">Click an option to toggle it on/off; an empty column matches everything.</span>
@@ -445,6 +446,7 @@
             <th>Kind</th>
             <th>Target</th>
             <th>Env</th>
+            <th>User</th>
             <th>Status</th>
             <th>Started</th>
             <th>Output</th>
@@ -994,6 +996,7 @@
     <td class="job-kind"></td>
     <td class="job-target"></td>
     <td class="job-env muted"></td>
+    <td class="job-user muted"></td>
     <td class="job-status"><span class="badge"></span></td>
     <td class="job-started muted"></td>
     <td class="job-error"></td>
@@ -1008,7 +1011,7 @@
      when a job has none. -->
 <template id="tpl-job-install-log-row">
   <tr class="job-install-log-row">
-    <td colspan="7">
+    <td colspan="8">
       <details class="job-install-log-details">
         <summary class="job-install-log-summary muted"></summary>
         <pre class="job-install-log mono"></pre>
@@ -1054,7 +1057,7 @@
 <!-- expandable per-job progress log; inserted after the clicked job row -->
 <template id="tpl-job-events">
   <tr class="job-events-row">
-    <td colspan="7"><pre class="job-events mono"></pre></td>
+    <td colspan="8"><pre class="job-events mono"></pre></td>
   </tr>
 </template>
 

@@ -2543,22 +2543,28 @@ function jobStatusClass(status) {
 // so calling this repeatedly (every poll) is safe and cheap.
 function renderJobRow(row, job) {
   row.querySelector(".job-kind").textContent = job.kind;
-  row.querySelector(".job-target").textContent = job.target ?? "";
-  row.querySelector(".job-env").textContent = job.environment ?? "";
+  // pkgs.* jobs (upload/keep/unkeep/delete) aren't scoped to a management
+  // environment and don't have a host target — they act on a package file
+  // shared across every environment. Give them a synthetic "Packages" env
+  // label and move the filename (job.target) into the Output cell instead,
+  // rather than showing a meaningless "default"/filename-as-target pairing.
+  const isPkgs = job.kind.startsWith("pkgs.");
+  row.querySelector(".job-target").textContent = isPkgs ? "" : (job.target ?? "");
+  row.querySelector(".job-env").textContent = isPkgs ? "Packages" : (job.environment ?? "");
+  row.querySelector(".job-user").textContent = job.username ?? "";
   const badge = row.querySelector(".job-status .badge");
   badge.textContent = job.status;
   badge.className = "badge " + jobStatusClass(job.status); // reset, not add — status can change
   row.querySelector(".job-started").textContent = fmtTime(job.started_at ?? job.created_at);
   const errorCell = row.querySelector(".job-error");
-  if (job.status === "succeeded") {
-    errorCell.textContent = `Succeeded ${fmtTime(job.finished_at)}`;
-    errorCell.title = "";
-    errorCell.classList.add("job-output-ok");
+  const outcome = job.status === "succeeded" ? `Succeeded ${fmtTime(job.finished_at)}` : (job.error ?? "");
+  if (isPkgs && job.target) {
+    errorCell.textContent = outcome ? `${job.target} — ${outcome}` : job.target;
   } else {
-    errorCell.textContent = job.error ?? "";
-    errorCell.title = job.error ?? ""; // full text on hover even while truncated/collapsed
-    errorCell.classList.remove("job-output-ok");
+    errorCell.textContent = outcome;
   }
+  errorCell.title = job.status === "succeeded" ? "" : (job.error ?? ""); // full text on hover even while truncated/collapsed
+  errorCell.classList.toggle("job-output-ok", job.status === "succeeded");
   row.querySelector(".btn-cancel").classList.toggle(
     "hidden", !(job.status === "pending" || job.status === "running"),
   );
@@ -2637,12 +2643,13 @@ document.getElementById("jobs-limit").addEventListener("change", async () => {
 // aborted loadJobFacets() (and the loadJobs() call awaiting it) partway
 // through the field loop, after kind/target/environment had already
 // populated but before the table ever got rebuilt).
-const JOBS_FILTER_FIELDS = ["kind", "target", "environment", "status"];
+const JOBS_FILTER_FIELDS = ["kind", "target", "environment", "status", "user"];
 const JOBS_FACETS_KEY = {
   kind: "kinds",
   target: "targets",
   environment: "environments",
   status: "statuses",
+  user: "usernames",
 };
 
 function jobsFilterSelect(field) {

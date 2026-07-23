@@ -98,16 +98,23 @@ class JobRunner:
         params: dict[str, Any] | None = None,
         environment: str = "default",
         job_id: str | None = None,
+        triggered_by: str | None = None,
     ) -> JobRecord:
         """Persist a PENDING job and wake the runner. Returns immediately.
 
         ``job_id`` lets the caller pre-register per-job state (e.g. in-memory
         credentials) *before* the job becomes claimable, closing the race where
-        the runner would start it before that state exists."""
+        the runner would start it before that state exists. ``triggered_by`` is
+        the logged-in username (None when auth is off), recorded for the Jobs
+        tab's User column/filter."""
         if kind not in self._handlers:
             raise JobError(f"no handler registered for job kind {kind!r}")
         fields: dict[str, Any] = dict(
-            kind=kind, target=target, params=params or {}, environment=environment
+            kind=kind,
+            target=target,
+            params=params or {},
+            environment=environment,
+            username=triggered_by,
         )
         if job_id is not None:
             fields["id"] = job_id

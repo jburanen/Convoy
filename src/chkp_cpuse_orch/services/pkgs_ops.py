@@ -41,24 +41,33 @@ class PackageJobService:
 
     # -- submit -------------------------------------------------------------
 
-    def submit_upload(self, filename: str, staged_path: Path) -> JobRecord:
+    def submit_upload(
+        self, filename: str, staged_path: Path, *, triggered_by: str | None = None
+    ) -> JobRecord:
         """``staged_path`` is a file already fully received and safely stored
         outside the request's own lifetime — see the module docstring."""
         return self.runner.submit(
-            JOB_UPLOAD, target=filename, params={"staged_path": str(staged_path)}
+            JOB_UPLOAD,
+            target=filename,
+            params={"staged_path": str(staged_path)},
+            triggered_by=triggered_by,
         )
 
-    def submit_retention(self, filename: str, pinned: bool) -> JobRecord:
+    def submit_retention(
+        self, filename: str, pinned: bool, *, triggered_by: str | None = None
+    ) -> JobRecord:
         """Raises PackageError (404-mapped by the route) synchronously if the
         package doesn't exist, instead of deferring an obviously-doomed job
         to the runner — mirrors the old synchronous endpoint's immediate 404."""
         self._packages.get(filename)
         kind = JOB_KEEP if pinned else JOB_NOTKEEP
-        return self.runner.submit(kind, target=filename, params={"pinned": pinned})
+        return self.runner.submit(
+            kind, target=filename, params={"pinned": pinned}, triggered_by=triggered_by
+        )
 
-    def submit_delete(self, filename: str) -> JobRecord:
+    def submit_delete(self, filename: str, *, triggered_by: str | None = None) -> JobRecord:
         self._packages.get(filename)
-        return self.runner.submit(JOB_DELETE, target=filename)
+        return self.runner.submit(JOB_DELETE, target=filename, triggered_by=triggered_by)
 
     # -- handlers -------------------------------------------------------------
 

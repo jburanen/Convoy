@@ -181,7 +181,7 @@ until v1.
 - All: Figure out a catchy name for the project
 - All: In all instances where there is a table with a header above a dropdown selector or a pill, 
   left-align the header text with the content text in the table for visual purposes
-- Provisioning: Treat credential management actions as jobs and track with prov. prefix
+- Provisioning: Treat credential management actions as jobs and track with cred. prefix
 - Provisioning: Treat server discovery and connection actions as jobs and track with prov. prefix
 - Provisioning: Filter role picker based on whether environment is labeled as MDS or not
 - Provisioning: In the collapsed form, make the bootstrap panel have the same whitespace below the header 
@@ -201,6 +201,7 @@ until v1.
 - CPUSE: If the disk space is below threshold, offer the option to override unless disk space is less than actual pkg size. also provide links to disk space SKs
 - Jobs: Add syslog output configuration ⏫
 - Jobs: Add a download button for the install log
+- Jobs: Fix formatting of pkgs. job lines
 
 ## Disclaimer
 

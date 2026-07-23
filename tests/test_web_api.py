@@ -716,6 +716,7 @@ def test_jobs_facets_and_filters(client: TestClient) -> None:
     assert {"mgmt-01"} <= set(facets["targets"])
     assert facets["environments"] == ["default"]
     assert facets["statuses"] == ["succeeded"]
+    assert facets["usernames"] == [TEST_USER]  # every job here ran as the logged-in operator
 
     by_kind = client.get("/api/jobs", params={"kind": "cpuse.import"}).json()
     assert {j["id"] for j in by_kind} == {import_job["id"]}
@@ -728,6 +729,21 @@ def test_jobs_facets_and_filters(client: TestClient) -> None:
 
     bad_status = client.get("/api/jobs", params={"status": "not-a-real-status"})
     assert bad_status.status_code == 400
+
+
+def test_job_records_and_filters_by_triggering_user(client: TestClient) -> None:
+    _add_ssh_credential(client)
+    resp = client.post(
+        "/api/env/default/servers/mgmt-01/import-cloud",
+        json={"package_id": "Check_Point_R81.20_JHF_T99"},
+    )
+    job_id = resp.json()["id"]
+    job = _wait_for_job(client, job_id)
+    assert job["username"] == TEST_USER
+
+    matching = client.get(f"/api/jobs?user={TEST_USER}").json()
+    assert job_id in [j["id"] for j in matching]
+    assert client.get("/api/jobs?user=nobody").json() == []
 
 
 def test_install_requires_confirmation_flag(client: TestClient) -> None:

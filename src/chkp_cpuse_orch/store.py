@@ -55,6 +55,9 @@ class JobRecord(BaseModel):
     kind: str
     target: str | None = None  # inventory Host.name this job acts on
     environment: str = "default"  # which management environment it ran against
+    # Who triggered it — the logged-in username, or None when auth is off (no
+    # identity to record) or for jobs submitted outside a request (recovery).
+    username: str | None = None
     params: dict[str, Any] = Field(default_factory=dict)
     status: JobStatus = JobStatus.PENDING
     created_at: datetime = Field(default_factory=utcnow)
@@ -427,6 +430,12 @@ _MIGRATIONS: tuple[str, ...] = (
         UNIQUE (environment, name)
     );
     CREATE INDEX idx_firewalls_env ON firewalls (environment);
+    """,
+    # v17: who triggered each job (the logged-in username), for the Jobs tab's
+    # User column/filter. NULL for jobs submitted before this migration, and
+    # for any environment that doesn't run with authentication on.
+    """
+    ALTER TABLE jobs ADD COLUMN username TEXT;
     """,
 )
 
@@ -905,14 +914,15 @@ class Store:
     def insert_job(self, job: JobRecord) -> None:
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO jobs (id, kind, target, environment, params, status, created_at,"
-                " started_at, finished_at, error, cancel_requested, install_log)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO jobs (id, kind, target, environment, username, params, status,"
+                " created_at, started_at, finished_at, error, cancel_requested, install_log)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     job.id,
                     job.kind,
                     job.target,
                     job.environment,
+                    job.username,
                     json.dumps(job.params),
                     job.status.value,
                     job.created_at.isoformat(),
@@ -940,13 +950,14 @@ class Store:
         targets: list[str] | None = None,
         environments: list[str] | None = None,
         statuses: list[JobStatus] | None = None,
+        usernames: list[str] | None = None,
     ) -> list[JobRecord]:
         """Most recent jobs first. ``limit <= 0`` means unlimited (the Jobs
         tab's "All" option). ``status`` is a single-value convenience kept for
-        existing callers; ``kinds``/``targets``/``environments``/``statuses``
-        are the general multi-value form — each is OR'd within itself and
-        AND'd with the others, powering the Jobs tab's filter dropdowns. Both
-        ``status`` and ``statuses`` may be given together (AND)."""
+        existing callers; ``kinds``/``targets``/``environments``/``statuses``/
+        ``usernames`` are the general multi-value form — each is OR'd within
+        itself and AND'd with the others, powering the Jobs tab's filter
+        dropdowns. Both ``status`` and ``statuses`` may be given together (AND)."""
         query = "SELECT * FROM jobs"
         clauses: list[str] = []
         args: list[Any] = []
@@ -958,6 +969,7 @@ class Store:
             ("target", targets),
             ("environment", environments),
             ("status", [s.value for s in statuses] if statuses else None),
+            ("username", usernames),
         ):
             if values:
                 clauses.append(f"{column} IN ({','.join('?' for _ in values)})")
@@ -974,7 +986,7 @@ class Store:
         return [_job_from_row(r) for r in rows]
 
     def list_job_facets(self) -> dict[str, list[str]]:
-        """Distinct kind/target/environment/status values that exist
+        """Distinct kind/target/environment/status/username values that exist
         *anywhere* in the jobs table, not just the currently displayed page —
         powers the Jobs tab's filter dropdowns, which must offer every real
         option regardless of the "Show N jobs" display limit."""
@@ -987,11 +999,15 @@ class Store:
                 "SELECT DISTINCT environment FROM jobs ORDER BY environment"
             ).fetchall()
             statuses = conn.execute("SELECT DISTINCT status FROM jobs ORDER BY status").fetchall()
+            usernames = conn.execute(
+                "SELECT DISTINCT username FROM jobs WHERE username IS NOT NULL ORDER BY username"
+            ).fetchall()
         return {
             "kinds": [r["kind"] for r in kinds],
             "targets": [r["target"] for r in targets],
             "environments": [r["environment"] for r in environments],
             "statuses": [r["status"] for r in statuses],
+            "usernames": [r["username"] for r in usernames],
         }
 
     def list_archivable_jobs(self, cutoff: datetime) -> list[JobRecord]:
@@ -1167,6 +1183,7 @@ def _job_from_row(row: sqlite3.Row) -> JobRecord:
         kind=row["kind"],
         target=row["target"],
         environment=row["environment"],
+        username=row["username"],
         params=json.loads(row["params"]),
         status=JobStatus(row["status"]),
         created_at=datetime.fromisoformat(row["created_at"]),

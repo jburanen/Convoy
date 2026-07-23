@@ -242,6 +242,7 @@ class PatchingService:
         package_filename: str,
         *,
         credentials: CredentialBundle | None = None,
+        triggered_by: str | None = None,
     ) -> JobRecord:
         """Enqueue: SFTP the stored package to the host + `installer import local`."""
         connector = self.registry.get(environment)
@@ -255,6 +256,7 @@ class PatchingService:
             JOB_IMPORT,
             params={"package": package_filename},
             credentials=credentials,
+            triggered_by=triggered_by,
         )
 
     def submit_import_cloud(
@@ -264,6 +266,7 @@ class PatchingService:
         package_id: str,
         *,
         credentials: CredentialBundle | None = None,
+        triggered_by: str | None = None,
     ) -> JobRecord:
         """Enqueue: direct the host to fetch + `installer import` a package from
         Check Point's cloud repository by identifier. No local file or upload —
@@ -278,6 +281,7 @@ class PatchingService:
             JOB_IMPORT_CLOUD,
             params={"package_id": package_id},
             credentials=credentials,
+            triggered_by=triggered_by,
         )
 
     def submit_install(
@@ -289,6 +293,7 @@ class PatchingService:
         confirmed: bool,
         verify_first: bool = True,
         credentials: CredentialBundle | None = None,
+        triggered_by: str | None = None,
     ) -> JobRecord:
         """Enqueue verify+install of an imported package. ``confirmed`` must be
         True — installs can reboot a management server; the UI collects an
@@ -307,6 +312,7 @@ class PatchingService:
             JOB_INSTALL,
             params={"package_id": package_id, "verify_first": verify_first},
             credentials=credentials,
+            triggered_by=triggered_by,
         )
 
     # -- job handlers (async wrappers over blocking SSH work) ----------------------

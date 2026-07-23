@@ -89,6 +89,18 @@ def test_cancel_while_still_pending_never_runs(store: Store, runner: JobRunner) 
     assert store.get_job(job.id).status is JobStatus.CANCELLED
 
 
+def test_submit_records_triggered_by(store: Store, runner: JobRunner) -> None:
+    async def handler(ctx: JobContext) -> None: ...
+
+    runner.register("ok", handler)
+    job = runner.submit("ok", triggered_by="alice")
+    assert job.username == "alice"
+    assert store.get_job(job.id).username == "alice"
+
+    anon = runner.submit("ok")
+    assert anon.username is None
+
+
 def test_unknown_kind_rejected_at_submit(runner: JobRunner) -> None:
     with pytest.raises(JobError, match="no handler"):
         runner.submit("not.registered")

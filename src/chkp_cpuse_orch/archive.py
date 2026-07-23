@@ -66,6 +66,7 @@ def _archive_record(job: JobRecord, store: Store) -> dict[str, object]:
         "kind": job.kind,
         "target": job.target,
         "environment": job.environment,
+        "username": job.username,
         "params": job.params,
         "status": job.status.value,
         "created_at": job.created_at.isoformat(),
