@@ -178,9 +178,11 @@ All: ✨ Name the project
 All: ✨ Improve padding of collapsed section headers  
 
 Provisioning: 🤞 Filter role picker based on whether environment is labeled as MDS or not  
+Provisioning: CRUD for credentials should occur immediately. TRACK these changes in jobs, but don't make them RUN as jobs.  
 
 Packages: 🤞 Investigate if we can extract and display meta data like compatible major version from the package file  
 Packages: ⏫ Add ability to upload a stored package to the smartconsole packages repo using mgmt api  
+Packages: CRUD for packages should occur immediately. TRACK these changes in jobs, but don't make them RUN as jobs.  
 
 CPUSE: ⏫ Add deployment agent upgrade option  
 CPUSE: ✨ Make the firewalls import-from-cloud line identical to the servers line  
