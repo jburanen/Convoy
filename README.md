@@ -174,27 +174,27 @@ until v1.
 ### Roadmap / Punch List
 ⏫ Probably a major change, 🤞 Non-blocking nice-to-have, ✨ Cosmetic only
 
-- All: 🤞 Add .env var to hide the hint text under the tabs  
+- All: 🤞 Add .env var to hide the hint text under the tabs
 - All: Add logic to display a warning on mobile devices that the UI of this tool does not scale down
   well (by design) and you should use it on a larger display - also probably you shoudn't patch your
-  firewalls or management servers from your phone!  
-- All: Make a favicon  
-- All: Name the project  
-- All: Improve padding of collapsed section headers  
+  firewalls or management servers from your phone!
+- All: Make a favicon
+- All: Name the project
+- All: Improve padding of collapsed section headers
 
-- Provisioning: Filter role picker based on whether environment is labeled as MDS or not  
+- Provisioning: Filter role picker based on whether environment is labeled as MDS or not
 
-- Packages: 🤞 Investigate if we can extract and display meta data like compatible major version from the package file  
-- Packages: ⏫ Add ability to upload a stored package to the smartconsole packages repo using mgmt api   
+- Packages: 🤞 Investigate if we can extract and display meta data like compatible major version from the package file
+- Packages: ⏫ Add ability to upload a stored package to the smartconsole packages repo using mgmt api
 
-- CPUSE: ⏫ Add deployment agent upgrade option   
-- CPUSE: ✨ Make the firewalls import-from-cloud line identical to the servers line  
-- CPUSE: Add muted explanatory text at top of firewalls panel to talk about how direct patching is mostly for management servers and small numbers of gateways. gateways can also be patched from SmartConsole and Web SmartConsole (generate a link). Large numbers of gateways can be patched with the CDT tab (future).  
-- CPUSE: 🤞 If the disk space is below threshold, offer the option to override unless disk space is less than actual pkg size. also provide links to disk space SKs  
-- CPUSE: Consider adding the ability to populate and uninstall installed packages  
+- CPUSE: ⏫ Add deployment agent upgrade option
+- CPUSE: ✨ Make the firewalls import-from-cloud line identical to the servers line
+- CPUSE: Add muted explanatory text at top of firewalls panel to talk about how direct patching is mostly for management servers and small numbers of gateways. gateways can also be patched from SmartConsole and Web SmartConsole (generate a link). Large numbers of gateways can be patched with the CDT tab (future).
+- CPUSE: 🤞 If the disk space is below threshold, offer the option to override unless disk space is less than actual pkg size. also provide links to disk space SKs
+- CPUSE: Consider adding the ability to populate and uninstall installed packages
 
-- Jobs: ⏫ Add syslog output configuration  
-- Jobs: Add a download button for the install log  
+- Jobs: ⏫ Add syslog output configuration
+- Jobs: Add a download button for the install log
 
 ## Disclaimer
 
