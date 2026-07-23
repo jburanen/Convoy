@@ -190,28 +190,6 @@ class PatchingService:
         """Name of the credential set assigned to a server, or None if unassigned."""
         return self.registry.get(environment).assigned_credential(host_name)
 
-    def check_cluster_membership(
-        self,
-        environment: str,
-        host_name: str,
-        *,
-        credentials: CredentialBundle | None = None,
-    ) -> ClusterMemberState | None:
-        """Live `show cluster state` over SSH, standalone from a full
-        ``detect()`` — the fallback half of the Firewalls panel's "re-check
-        cluster membership" button, used when the Management API can't name
-        the cluster (no primary configured, no credentials, older management
-        version, or an MDS domain we don't track per-firewall). Blocking
-        (SSH) — call via ``asyncio.to_thread`` from async contexts."""
-        connector = self.registry.get(environment)
-        host = connector.patchable_host(host_name)
-        creds = connector.require_credentials(host, credentials)
-        client = connector.connect(host, creds)
-        try:
-            return CPUSE(client, shell=self._shell).cluster_state()
-        finally:
-            client.close()
-
     def detect(
         self,
         environment: str,

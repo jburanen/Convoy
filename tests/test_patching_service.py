@@ -169,27 +169,6 @@ def test_assigned_credential_summary(service: PatchingService) -> None:
     assert service.assigned_credential("default", "mgmt-02") is None
 
 
-def test_check_cluster_membership_parses_live_role_and_closes(
-    service: PatchingService, transport: FakeTransport
-) -> None:
-    transport.responses["show cluster state"] = (
-        "ID         Unique Address  Assigned Load   State          Name\n"
-        "1 (local)  11.22.33.245    100%            ACTIVE(!)      Member1\n"
-        "2          11.22.33.246    0%              DOWN           Member2\n"
-    )
-    state = service.check_cluster_membership("default", "mgmt-01")
-    assert state is not None
-    assert state.is_active
-    assert state.cluster_name == "Member1, Member2"
-    assert transport.closed is True
-
-
-def test_check_cluster_membership_none_when_not_clustered(service: PatchingService) -> None:
-    # The FakeTransport's default reply to an unscripted command is (0, "") —
-    # no recognizable member table, i.e. "not a cluster member".
-    assert service.check_cluster_membership("default", "mgmt-01") is None
-
-
 # -- submission validation --------------------------------------------------------
 
 

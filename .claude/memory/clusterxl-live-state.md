@@ -1,6 +1,6 @@
 ---
 name: clusterxl-live-state
-description: How ClusterXL role (live) and cluster name (static) are detected and shown on the Firewalls panel
+description: How ClusterXL role (live) and cluster name (static, Management-API-only) are detected and shown on the Firewalls panel
 metadata:
   type: project
 ---
@@ -10,7 +10,27 @@ The Firewalls panel's status line shows a ClusterXL prefix ("Active in
 cluster member. Role and name come from two different places and update on
 different triggers — this split was deliberate (operator-directed,
 2026-07-23, superseding an earlier same-day design where both were
-re-derived from `cphaprob` on every refresh):
+re-derived from `cphaprob` on every refresh).
+
+**Cluster *name* resolution is Management-API-only, never SSH** (operator
+correction, 2026-07-23, superseding the same-day cphaprob-fallback design
+below the fold): Check Point doesn't expose the SmartConsole cluster
+object's own name over the CLI on the member itself — `show cluster state`
+only lists member hostnames, not the configured cluster name — so no SSH
+command could ever answer this, and trying is a dead end, not a fallback.
+`PatchingService.check_cluster_membership` (the SSH/cphaprob path) was
+removed. The Firewalls panel's edit-modal "Re-check via Management API"
+button now only calls `DiscoveryService.find_cluster_name`; when that
+resolves nothing (no primary configured, no usable credentials, older
+management version, or an MDS domain not tracked per-firewall) it leaves
+the previously stored name untouched rather than clearing it — ambiguous
+"couldn't tell" and confirmed "not a cluster member" are indistinguishable
+from that call, so clearing on `None` would risk wiping a good name on a
+transient failure. The fallback is a manual text field in the same modal
+("Cluster name" + Save button, `POST .../firewalls/{name}/cluster-name`)
+that lets the operator type in the real object name by hand — this reuses
+`FirewallManager.set_cluster_name` (the same targeted-UPDATE method
+discovery/re-check already used), it's just a new caller.
 
 - **Role** (`ServerStateRow.cluster_role`, e.g. "ACTIVE(!)", "STANDBY") is
   *live* — refreshed every time the table's per-row Refresh runs (`detect()`
@@ -33,15 +53,18 @@ re-derived from `cphaprob` on every refresh):
     never sends this field, and the kind gate means even a caller mistake
     can't clobber a previously-detected name (see
     `test_cluster_name_is_never_applied_on_a_later_edit`).
-  - Via the **Firewalls panel's edit-modal "Re-check cluster membership"
-    button** (`POST .../firewalls/{name}/cluster-recheck`): prefers
-    `DiscoveryService.find_cluster_name()` (Management API, no SSH); falls
-    back to `PatchingService.check_cluster_membership()` (live
-    `cphaprob`/SSH — same mechanism as the role check, but standalone) only
-    if the API path finds nothing (no primary configured, no credentials,
-    older management version, or an MDS domain that isn't tracked
-    per-firewall today). Always persists what it finds, including clearing a
-    stale name back to `None` if the host is no longer clustered.
+  - Via the **Firewalls panel's edit-modal "Re-check via Management API"
+    button** (`POST .../firewalls/{name}/cluster-recheck`): calls
+    `DiscoveryService.find_cluster_name()` only. Persists the name only when
+    resolved (`resolved: true` in the response); when it can't resolve
+    anything, the previously stored name is left alone and `resolved: false`
+    tells the UI to prompt for manual entry instead.
+  - Via the **manual "Cluster name" field + Save button** in the same modal
+    (`POST .../firewalls/{name}/cluster-name`, body `{"cluster_name": ... |
+    null}`): the fallback for when the API can't resolve one. Calls
+    `FirewallManager.set_cluster_name` directly — a deliberate, separate
+    action from the generic firewall edit save, same reasoning as the
+    kind-gate above (ordinary edits must never touch this field).
 - `Store.set_firewall_cluster_name` is a **targeted UPDATE**, deliberately
   separate from `upsert_firewall` (mirrors `assign_firewall_credential_set`)
   — `upsert_firewall` must never touch this column, or every ordinary
@@ -52,8 +75,9 @@ re-derived from `cphaprob` on every refresh):
 - The Management API path can't resolve a cluster name for MDS environments
   during a post-hoc re-check (no Domain/CMA is tracked per-firewall) — it
   works at discovery time only, since discovery already has the operator-
-  picked Domain in scope. The re-check button silently skips straight to the
-  SSH fallback there.
+  picked Domain in scope. On an MDS, the re-check button will report
+  `resolved: false` every time; the manual field is the only way to set the
+  name there today.
 - Distinct from `checks.py`'s `HealthChecks.cluster_state` (still
   `NotImplementedError`) — that one is deployment-gating (pass/fail against
   an *expected* role), a different consumer with different requirements.

@@ -237,6 +237,10 @@ class QueryRequest(OperationCredentials):
     pass  # live-state query bodies carry only (optional) credentials
 
 
+class ClusterNameRequest(BaseModel):
+    cluster_name: str | None = None  # None clears a manually-set name
+
+
 class CandidatesIn(OperationCredentials):
     header: list[str]
     rows: list[list[str]]  # row order == deployment order
@@ -1151,37 +1155,45 @@ def _register_routes(app: FastAPI) -> None:
         }
 
     @app.post("/api/env/{env}/firewalls/{name}/cluster-recheck")
-    async def firewall_cluster_recheck(
-        env: str, name: str, request: Request, body: QueryRequest | None = None
-    ) -> dict[str, Any]:
-        """Re-resolve a firewall's real cluster object name — the Firewalls
-        panel's edit-modal "Re-check cluster membership" button, for
-        firewalls that weren't auto-resolved at discovery time (manually
-        added, or added before this shipped). Prefers the Management API
-        (the real SmartConsole cluster name, no SSH needed); only falls back
-        to a live `cphaprob`/SSH check (the same peer-hostname stand-in the
-        table's live role uses) when that finds nothing — no primary
-        configured, no usable credentials, or the gateway genuinely isn't
-        listed in any cluster the API can see. Persists whatever it finds,
-        including "not a cluster member" (None), so this never leaves a
-        stale name behind."""
+    async def firewall_cluster_recheck(env: str, name: str, request: Request) -> dict[str, Any]:
+        """Re-resolve a firewall's real cluster object name via the
+        Management API only — the Firewalls panel's edit-modal "Re-check
+        cluster membership" button, for firewalls that weren't auto-resolved
+        at discovery time (manually added, or added before this shipped).
+        Never falls back to SSH: Check Point doesn't expose the SmartConsole
+        cluster object's own name over the CLI on the member itself (see
+        clusterxl.py), so no live command can ever answer this. If the API
+        can't resolve one (no primary configured, no usable credentials,
+        older management version, or an MDS domain we don't track
+        per-firewall), the previously stored name is left untouched —
+        operators can set it by hand via the edit modal's manual field
+        instead."""
         discovery: DiscoveryService = request.app.state.discovery
         cluster_name = await asyncio.to_thread(discovery.find_cluster_name, env, name)
-        if cluster_name is None:
-            creds = _op_creds(body, name, env)
-            service = _service(request)
+        if cluster_name is not None:
             try:
-                cluster = await asyncio.to_thread(
-                    service.check_cluster_membership, env, name, credentials=creds
-                )
+                _fwmgr(request).set_cluster_name(env, name, cluster_name)
             except OrchestratorError as exc:
                 raise _map_error(exc) from exc
-            cluster_name = cluster.cluster_name if cluster else None
+            return {"cluster_name": cluster_name, "resolved": True}
+        store: Store = request.app.state.store
+        fw_row = store.get_firewall(env, name)
+        return {"cluster_name": fw_row.cluster_name if fw_row else None, "resolved": False}
+
+    @app.post("/api/env/{env}/firewalls/{name}/cluster-name")
+    def firewall_set_cluster_name(
+        env: str, name: str, body: ClusterNameRequest, request: Request
+    ) -> dict[str, Any]:
+        """Manually set (or clear, with ``null``) a firewall's cluster object
+        name — the fallback for when Management API re-check can't resolve
+        one. A deliberate, separate action from the generic firewall edit
+        save, matching "re-check": ordinary edits never touch this field
+        (see set_cluster_name)."""
         try:
-            _fwmgr(request).set_cluster_name(env, name, cluster_name)
+            _fwmgr(request).set_cluster_name(env, name, body.cluster_name)
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
-        return {"cluster_name": cluster_name}
+        return {"cluster_name": body.cluster_name}
 
     @app.post("/api/env/{env}/firewalls/{name}/import", status_code=202)
     def firewall_import(env: str, name: str, body: ImportRequest, request: Request) -> JobRecord:

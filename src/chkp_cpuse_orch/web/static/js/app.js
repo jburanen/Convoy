@@ -1962,33 +1962,54 @@ async function openEditFirewallModal(fw, assignedSetName, clusterName) {
 }
 
 function renderFirewallClusterInfo(clusterName) {
-  document.getElementById("fm-cluster-text").textContent = clusterName
-    ? `Cluster: ${clusterName}`
-    : "Cluster: unknown — not yet checked";
+  document.getElementById("fm-cluster-name").value = clusterName || "";
+  document.getElementById("fm-cluster-status").textContent = "";
 }
 
+// Management API only, no SSH — Check Point doesn't expose the SmartConsole
+// cluster object's own name over the CLI on the member itself, so no live
+// command could ever answer this (see clusterxl.py). No credentials needed.
 document.getElementById("fm-cluster-recheck").addEventListener("click", async () => {
   const name = editingFirewallName;
   if (!name) return;
   const btn = document.getElementById("fm-cluster-recheck");
-  // The Management API is tried first and usually needs no SSH at all; these
-  // credentials only feed the `cphaprob` fallback if that lookup finds
-  // nothing (see the cluster-recheck endpoint) — prompted up front anyway
-  // since we can't know in advance which path will run.
-  const extra = await operationCredentials(name, "re-check cluster membership");
-  if (extra === null) return; // credential prompt cancelled
   btn.disabled = true;
-  document.getElementById("fm-cluster-text").textContent = "checking…";
+  document.getElementById("fm-cluster-status").textContent = "checking…";
   try {
-    const result = await api(
-      envUrl(`/firewalls/${encodeURIComponent(name)}/cluster-recheck`),
-      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(extra) }
-    );
-    renderFirewallClusterInfo(result.cluster_name);
+    const result = await api(envUrl(`/firewalls/${encodeURIComponent(name)}/cluster-recheck`), {
+      method: "POST",
+    });
+    document.getElementById("fm-cluster-name").value = result.cluster_name || "";
+    document.getElementById("fm-cluster-status").textContent = result.resolved
+      ? "resolved via Management API"
+      : "Management API couldn't resolve this — enter it manually and click Save";
     await loadFirewalls(); // table's status line reflects the new name too
   } catch (e) {
-    cacheEvictCreds(name);
-    document.getElementById("fm-cluster-text").textContent = "check failed: " + e.message;
+    document.getElementById("fm-cluster-status").textContent = "check failed: " + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// Manual fallback for when the Management API can't resolve a name (no
+// primary configured, older management version, MDS domain not tracked
+// per-firewall) — operator types the real cluster object name in by hand.
+document.getElementById("fm-cluster-save").addEventListener("click", async () => {
+  const name = editingFirewallName;
+  if (!name) return;
+  const btn = document.getElementById("fm-cluster-save");
+  const value = document.getElementById("fm-cluster-name").value.trim();
+  btn.disabled = true;
+  try {
+    await api(envUrl(`/firewalls/${encodeURIComponent(name)}/cluster-name`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cluster_name: value || null }),
+    });
+    document.getElementById("fm-cluster-status").textContent = "saved";
+    await loadFirewalls();
+  } catch (e) {
+    document.getElementById("fm-cluster-status").textContent = "save failed: " + e.message;
   } finally {
     btn.disabled = false;
   }
