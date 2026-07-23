@@ -7,6 +7,7 @@ from chkp_cpuse_orch.errors import InventoryError, TransportError
 from chkp_cpuse_orch.inventory import FIREWALL_ROLES, Host, Inventory, Role, Site
 from chkp_cpuse_orch.services.discovery import (
     DiscoveryService,
+    find_cluster_for_gateway,
     map_gateways_and_servers,
     map_gateways_only,
     parse_mdsquerydb_mdss,
@@ -62,6 +63,34 @@ def test_map_gateways_and_servers_roles() -> None:
     assert all(s.source == "api" for s in servers)
 
 
+# ---- cluster name resolution (pure + service) ------------------------------------
+
+CLUSTERS = [
+    {
+        "name": "prod-cluster",
+        "members": [{"name": "cluster-01", "uid": "u1"}, {"name": "cluster-01-b"}],
+    },
+    {"name": "other-cluster", "members": ["member-x", "member-y"]},
+]
+
+
+def test_find_cluster_for_gateway_matches_dict_shaped_members() -> None:
+    assert find_cluster_for_gateway(CLUSTERS, "cluster-01") == "prod-cluster"
+
+
+def test_find_cluster_for_gateway_matches_string_shaped_members() -> None:
+    assert find_cluster_for_gateway(CLUSTERS, "member-x") == "other-cluster"
+
+
+def test_find_cluster_for_gateway_is_case_insensitive() -> None:
+    assert find_cluster_for_gateway(CLUSTERS, "CLUSTER-01") == "prod-cluster"
+
+
+def test_find_cluster_for_gateway_none_when_not_a_member() -> None:
+    assert find_cluster_for_gateway(CLUSTERS, "fw-01") is None
+    assert find_cluster_for_gateway(CLUSTERS, "") is None
+
+
 def test_map_gateways_only_roles() -> None:
     firewalls = map_gateways_only(GATEWAYS_AND_SERVERS)
     by_name = {s.name: s for s in firewalls}
@@ -113,10 +142,14 @@ class _FakeMgmtClient:
         self,
         objects: list[dict[str, object]],
         domains: list[dict[str, object]] | None = None,
+        clusters: list[dict[str, object]] | None = None,
+        clusters_error: Exception | None = None,
         **kwargs: object,
     ) -> None:
         self._objects = objects
         self._domains = domains or []
+        self._clusters = clusters or []
+        self._clusters_error = clusters_error
         self.kwargs = kwargs
 
     def __enter__(self) -> _FakeMgmtClient:
@@ -127,6 +160,11 @@ class _FakeMgmtClient:
 
     def show_gateways_and_servers(self, *, details_level: str = "full") -> list[dict[str, object]]:
         return self._objects
+
+    def show_simple_clusters(self, *, details_level: str = "full") -> list[dict[str, object]]:
+        if self._clusters_error is not None:
+            raise self._clusters_error
+        return self._clusters
 
     def show_domains(self) -> list[dict[str, object]]:
         return self._domains
@@ -294,6 +332,82 @@ def test_discover_firewalls_flags_existing_and_maps_roles() -> None:
     assert by_name["cluster-01"].already_in_inventory is False
     assert by_name["cluster-01"].detected_role is Role.CLUSTER_MEMBER
     assert not result.warnings
+
+
+def test_discover_firewalls_resolves_real_cluster_name_via_management_api() -> None:
+    inv = _inventory(Host(name="mgmt-01", address="192.0.2.10", role=Role.PRIMARY_SMS))
+    connector = _FakeConnector(inv, _api_bundle())
+    service = DiscoveryService(
+        _FakeRegistry(connector),  # type: ignore[arg-type]
+        mgmt_client_factory=lambda host, **kw: _FakeMgmtClient(
+            GATEWAYS_AND_SERVERS, clusters=CLUSTERS, **kw
+        ),
+    )
+
+    result = service.discover_firewalls("default")
+    by_name = {s.name: s for s in result.servers}
+
+    # cluster-01 is listed as a member of prod-cluster in the fake
+    # show-simple-clusters fixture — the real SmartConsole name, not the
+    # cphaprob-derived peer-hostname stand-in.
+    assert by_name["cluster-01"].cluster_name == "prod-cluster"
+    # A plain gateway with no cluster membership gets no name.
+    assert by_name["fw-01"].cluster_name is None
+    assert not result.warnings
+
+
+def test_discover_firewalls_cluster_lookup_failure_keeps_the_gateway_list() -> None:
+    inv = _inventory(Host(name="mgmt-01", address="192.0.2.10", role=Role.PRIMARY_SMS))
+    connector = _FakeConnector(inv, _api_bundle())
+    service = DiscoveryService(
+        _FakeRegistry(connector),  # type: ignore[arg-type]
+        mgmt_client_factory=lambda host, **kw: _FakeMgmtClient(
+            GATEWAYS_AND_SERVERS, clusters_error=TransportError("unsupported command"), **kw
+        ),
+    )
+
+    result = service.discover_firewalls("default")
+    by_name = {s.name: s for s in result.servers}
+
+    # The gateway/cluster-member list is unaffected — only cluster names are
+    # missing, with a warning explaining why.
+    assert set(by_name) == {"fw-01", "cluster-01"}
+    assert by_name["cluster-01"].cluster_name is None
+    assert any("cluster lookup failed" in w for w in result.warnings)
+
+
+def test_find_cluster_name_via_management_api() -> None:
+    inv = _inventory(Host(name="mgmt-01", address="192.0.2.10", role=Role.PRIMARY_SMS))
+    connector = _FakeConnector(inv, _api_bundle())
+    service = DiscoveryService(
+        _FakeRegistry(connector),  # type: ignore[arg-type]
+        mgmt_client_factory=lambda host, **kw: _FakeMgmtClient([], clusters=CLUSTERS, **kw),
+    )
+
+    assert service.find_cluster_name("default", "cluster-01") == "prod-cluster"
+    assert service.find_cluster_name("default", "not-a-member") is None
+
+
+def test_find_cluster_name_no_primary_configured_returns_none() -> None:
+    # No Primary SMS/MDS in the inventory at all — primary_mgmt_host() raises.
+    inv = _inventory(Host(name="fw-01", address="192.0.2.20", role=Role.GATEWAY))
+    connector = _FakeConnector(inv, _api_bundle())
+    service = DiscoveryService(
+        _FakeRegistry(connector),  # type: ignore[arg-type]
+        mgmt_client_factory=lambda host, **kw: _FakeMgmtClient([], clusters=CLUSTERS, **kw),
+    )
+    assert service.find_cluster_name("default", "cluster-01") is None
+
+
+def test_find_cluster_name_api_failure_returns_none() -> None:
+    inv = _inventory(Host(name="mgmt-01", address="192.0.2.10", role=Role.PRIMARY_SMS))
+    connector = _FakeConnector(inv, _api_bundle())
+
+    def boom(host: object, **kw: object) -> _FakeMgmtClient:
+        raise TransportError("connection refused")
+
+    service = DiscoveryService(_FakeRegistry(connector), mgmt_client_factory=boom)  # type: ignore[arg-type]
+    assert service.find_cluster_name("default", "cluster-01") is None
 
 
 def test_discover_firewalls_mds_without_domain_asks_operator_to_pick_one() -> None:

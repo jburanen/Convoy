@@ -159,6 +159,11 @@ class FirewallRow(BaseModel):
     notes: str | None = None
     # Assigned credential set (credential_sets.id), or None when unassigned.
     credential_set_id: str | None = None
+    # Real SmartConsole cluster object name, set at discovery time (via the
+    # Management API) or by the Firewalls panel's "re-check cluster
+    # membership" button — see clusterxl.py/services/discovery.py. None if
+    # not a cluster member, or never checked.
+    cluster_name: str | None = None
 
 
 class ServerStateRow(BaseModel):
@@ -174,11 +179,12 @@ class ServerStateRow(BaseModel):
     # Identifiers of packages that are imported but not yet installed — the
     # Management tab's Install picker options.
     installable: list[str] = Field(default_factory=list)
-    # Live ClusterXL role (e.g. "ACTIVE(!)", "STANDBY") and a stand-in cluster
-    # name built from peer hostnames — see clusterxl.py. Both None if the host
-    # isn't a cluster member, or hasn't been refreshed since this shipped.
+    # Live ClusterXL role (e.g. "ACTIVE(!)", "STANDBY"), refreshed on every
+    # check — see clusterxl.py. None if the host isn't a cluster member, or
+    # hasn't been refreshed since this shipped. The cluster's *name* isn't
+    # here: it doesn't change refresh-to-refresh, so it lives on FirewallRow
+    # instead (set at discovery time or via "re-check cluster membership").
     cluster_role: str | None = None
-    cluster_name: str | None = None
 
 
 class CredentialSetRow(BaseModel):
@@ -450,6 +456,17 @@ _MIGRATIONS: tuple[str, ...] = (
     """
     ALTER TABLE server_state ADD COLUMN cluster_role TEXT;
     ALTER TABLE server_state ADD COLUMN cluster_name TEXT;
+    """,
+    # v19: the parent cluster's *real* SmartConsole object name doesn't change
+    # host-to-host the way live role does, so it moves to the firewall record
+    # itself (set once, at discovery time via the Management API, or via the
+    # Firewalls panel's "re-check cluster membership" button) rather than
+    # being re-derived from `cphaprob` peer hostnames on every refresh.
+    # server_state.cluster_name (v18) is dropped — cluster_role (live,
+    # refreshed every check) stays there.
+    """
+    ALTER TABLE firewalls ADD COLUMN cluster_name TEXT;
+    ALTER TABLE server_state DROP COLUMN cluster_name;
     """,
 )
 
@@ -831,6 +848,23 @@ class Store:
             )
         return cur.rowcount > 0
 
+    def set_firewall_cluster_name(
+        self, environment: str, host_name: str, cluster_name: str | None
+    ) -> bool:
+        """Set (or clear, with ``None``) a firewall's real cluster object
+        name — from discovery-time Management API resolution, or the
+        Firewalls panel's "re-check cluster membership" button. Deliberately
+        its own targeted UPDATE, like ``assign_firewall_credential_set``, so
+        ``upsert_firewall`` (used by every ordinary add/edit) never touches
+        this field and can't clobber a previously-detected name. Returns
+        False if the firewall doesn't exist in the environment."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE firewalls SET cluster_name = ? WHERE environment = ? AND name = ?",
+                (cluster_name, environment, host_name),
+            )
+        return cur.rowcount > 0
+
     # -- cached CPUSE state (per management server, refreshed on demand) ---------
 
     def get_server_state(self, environment: str, host: str) -> ServerStateRow | None:
@@ -853,13 +887,12 @@ class Store:
         with self._connect() as conn:
             conn.execute(
                 "INSERT INTO server_state (environment, host, version, jhf, agent_build,"
-                " checked_at, installable, cluster_role, cluster_name)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                " checked_at, installable, cluster_role)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (environment, host) DO UPDATE SET"
                 " version = excluded.version, jhf = excluded.jhf,"
                 " agent_build = excluded.agent_build, checked_at = excluded.checked_at,"
-                " installable = excluded.installable, cluster_role = excluded.cluster_role,"
-                " cluster_name = excluded.cluster_name",
+                " installable = excluded.installable, cluster_role = excluded.cluster_role",
                 (
                     rec.environment,
                     rec.host,
@@ -869,7 +902,6 @@ class Store:
                     rec.checked_at.isoformat(),
                     json.dumps(rec.installable),
                     rec.cluster_role,
-                    rec.cluster_name,
                 ),
             )
 
@@ -1264,6 +1296,7 @@ def _firewall_from_row(row: sqlite3.Row) -> FirewallRow:
         ssh_user=row["ssh_user"],
         notes=row["notes"],
         credential_set_id=row["credential_set_id"],
+        cluster_name=row["cluster_name"],
     )
 
 
@@ -1277,7 +1310,6 @@ def _server_state_from_row(row: sqlite3.Row) -> ServerStateRow:
         checked_at=datetime.fromisoformat(row["checked_at"]),
         installable=json.loads(row["installable"]),
         cluster_role=row["cluster_role"],
-        cluster_name=row["cluster_name"],
     )
 
 

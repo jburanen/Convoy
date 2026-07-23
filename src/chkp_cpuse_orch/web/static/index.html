@@ -739,6 +739,16 @@
         <select id="fm-cred-select"><option value="">none — assign later</option></select>
       </label>
       <label>SSH port<input type="number" id="fm-port" value="22" min="1" max="65535"></label>
+      <!-- Edit mode only (hidden when adding — see openAddFirewallModal). Real
+           cluster object name: resolved via the Management API at discovery
+           time, or by clicking Re-check (falls back to a live SSH/cphaprob
+           check if the API can't name it). -->
+      <div id="fm-cluster-info" class="hidden">
+        <div class="cred-modal-actions">
+          <span id="fm-cluster-text" class="muted"></span>
+          <button type="button" id="fm-cluster-recheck" class="small secondary">Re-check cluster membership</button>
+        </div>
+      </div>
       <div class="cred-modal-actions">
         <button type="submit" id="firewall-modal-submit">Add firewall</button>
         <button type="button" id="firewall-modal-cancel" class="secondary">Cancel</button>

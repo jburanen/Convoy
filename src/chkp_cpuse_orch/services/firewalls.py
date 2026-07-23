@@ -101,6 +101,19 @@ class FirewallManager:
             raise InventoryError(f"firewall {host_name!r} not found in environment {environment!r}")
         self._env_manager.rebuild()
 
+    def set_cluster_name(self, environment: str, host_name: str, cluster_name: str | None) -> None:
+        """Set (or clear, with ``None``) a firewall's real cluster object
+        name. Called at discovery-import time (kind-gated in
+        services/prov_ops.py so an ordinary edit can never clobber it) and by
+        the Firewalls panel's "re-check cluster membership" button. Rebuilds
+        the registry so resolution sees it, matching every other mutation
+        here — cheap, and keeps this method's behavior uniform with
+        assign_credential rather than a special-cased exception."""
+        self._require_env(environment)
+        if not self._store.set_firewall_cluster_name(environment, host_name, cluster_name):
+            raise InventoryError(f"firewall {host_name!r} not found in environment {environment!r}")
+        self._env_manager.rebuild()
+
     def _require_env(self, environment: str) -> None:
         if not self._store.environment_exists(environment):
             raise InventoryError(f"unknown environment: {environment!r}")

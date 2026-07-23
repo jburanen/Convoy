@@ -146,6 +146,19 @@ def test_detect_parses_live_state_and_closes(
     assert transport.closed is True
 
 
+def test_detect_caches_live_cluster_role(
+    service: PatchingService, transport: FakeTransport, store: Store
+) -> None:
+    transport.responses["show cluster state"] = (
+        "ID         Unique Address  Assigned Load   State          Name\n"
+        "1 (local)  11.22.33.245    100%            ACTIVE(!)      Member1\n"
+    )
+    service.detect("default", "mgmt-01")
+    cached = store.get_server_state("default", "mgmt-01")
+    assert cached is not None
+    assert cached.cluster_role == "ACTIVE(!)"
+
+
 def test_detect_requires_credentials(service: PatchingService) -> None:
     with pytest.raises(CredentialError, match="no credential assigned"):
         service.detect("default", "mgmt-02")  # in inventory, but no set assigned
@@ -154,6 +167,27 @@ def test_detect_requires_credentials(service: PatchingService) -> None:
 def test_assigned_credential_summary(service: PatchingService) -> None:
     assert service.assigned_credential("default", "mgmt-01") == "primary"
     assert service.assigned_credential("default", "mgmt-02") is None
+
+
+def test_check_cluster_membership_parses_live_role_and_closes(
+    service: PatchingService, transport: FakeTransport
+) -> None:
+    transport.responses["show cluster state"] = (
+        "ID         Unique Address  Assigned Load   State          Name\n"
+        "1 (local)  11.22.33.245    100%            ACTIVE(!)      Member1\n"
+        "2          11.22.33.246    0%              DOWN           Member2\n"
+    )
+    state = service.check_cluster_membership("default", "mgmt-01")
+    assert state is not None
+    assert state.is_active
+    assert state.cluster_name == "Member1, Member2"
+    assert transport.closed is True
+
+
+def test_check_cluster_membership_none_when_not_clustered(service: PatchingService) -> None:
+    # The FakeTransport's default reply to an unscripted command is (0, "") —
+    # no recognizable member table, i.e. "not a cluster member".
+    assert service.check_cluster_membership("default", "mgmt-01") is None
 
 
 # -- submission validation --------------------------------------------------------

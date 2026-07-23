@@ -144,6 +144,27 @@ class ManagementAPIClient:
                 break
         return objects
 
+    def show_simple_clusters(self, *, details_level: str = "full") -> list[dict[str, Any]]:
+        """Return every ClusterXL/VRRP cluster object the management database
+        knows about, each with its ``members`` list — used to resolve a
+        gateway's real cluster object name (the SmartConsole name, unlike the
+        peer-hostname stand-in ``clusterxl.py`` builds from live `cphaprob`
+        output). Paged the same way as ``show_gateways_and_servers``."""
+        objects: list[dict[str, Any]] = []
+        offset = 0
+        while True:
+            data = self._post(
+                "show-simple-clusters",
+                {"details-level": details_level, "limit": _PAGE_LIMIT, "offset": offset},
+            )
+            batch = data.get("objects") or []
+            objects.extend(batch)
+            total = int(data.get("total", len(objects)))
+            offset += len(batch)
+            if not batch or offset >= total:
+                break
+        return objects
+
     def show_domains(self) -> list[dict[str, Any]]:
         """Return every Domain (CMA) a Multi-Domain Server knows about.
 

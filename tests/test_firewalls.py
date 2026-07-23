@@ -159,3 +159,37 @@ def test_new_firewall_inherits_the_default_credential_set(store: Store) -> None:
     fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.1", role="gateway", ssh_user="admin")
     default_id = store.get_default_credential_set("corp").id  # type: ignore[union-attr]
     assert store.get_firewall("corp", "fw-1").credential_set_id == default_id  # type: ignore[union-attr]
+
+
+def test_set_cluster_name(store: Store) -> None:
+    registry = EnvironmentRegistry()
+    env_mgr, fw_mgr = _managers(store, registry)
+    env_mgr.create_environment("corp")
+    fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.1", role="gateway", ssh_user="admin")
+
+    fw_mgr.set_cluster_name("corp", "fw-1", "prod-cluster")
+    assert store.get_firewall("corp", "fw-1").credential_set_id is None  # untouched
+    assert store.get_firewall("corp", "fw-1").cluster_name == "prod-cluster"  # type: ignore[union-attr]
+
+    fw_mgr.set_cluster_name("corp", "fw-1", None)  # clears it
+    assert store.get_firewall("corp", "fw-1").cluster_name is None  # type: ignore[union-attr]
+
+    with pytest.raises(InventoryError, match="firewall 'ghost' not found"):
+        fw_mgr.set_cluster_name("corp", "ghost", "prod-cluster")
+
+
+def test_editing_a_firewall_never_clobbers_a_previously_set_cluster_name(store: Store) -> None:
+    """upsert_firewall (every ordinary add/edit) must never touch
+    cluster_name — only set_cluster_name (a targeted UPDATE) does. Otherwise
+    an unrelated edit (e.g. changing the SSH port) would silently wipe out a
+    name resolved at discovery time or via "re-check cluster membership"."""
+    registry = EnvironmentRegistry()
+    env_mgr, fw_mgr = _managers(store, registry)
+    env_mgr.create_environment("corp")
+    fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.1", role="gateway", ssh_user="admin")
+    fw_mgr.set_cluster_name("corp", "fw-1", "prod-cluster")
+
+    # An ordinary edit (add_firewall is upsert-by-name) touching unrelated fields.
+    fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.1", role="gateway", ssh_user="other")
+    assert store.get_firewall("corp", "fw-1").ssh_user == "other"  # type: ignore[union-attr]
+    assert store.get_firewall("corp", "fw-1").cluster_name == "prod-cluster"  # type: ignore[union-attr]

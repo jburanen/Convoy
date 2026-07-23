@@ -314,6 +314,12 @@ class FirewallIn(BaseModel):
     notes: str | None = None
     # See EnvServerIn.credential_set — same reasoning, same fold-into-the-job.
     credential_set: str | None = None
+    # Real cluster object name, pre-filled by the discover-firewalls import
+    # flow (Management API resolved it at scan time — see
+    # DiscoveryService.find_cluster_for_gateway). Only ever applied on a
+    # genuine creation (services/prov_ops.py gates on JOB_ADD), so leaving
+    # this unset on an edit can never clobber a previously-detected name.
+    cluster_name: str | None = None
 
 
 # -- app factory -------------------------------------------------------------------
@@ -885,6 +891,7 @@ def _register_routes(app: FastAPI) -> None:
                 credential_set=(
                     body.credential_set if "credential_set" in body.model_fields_set else UNSET
                 ),
+                cluster_name=body.cluster_name,
                 triggered_by=_current_user(request),
             )
         except OrchestratorError as exc:
@@ -922,6 +929,7 @@ def _register_routes(app: FastAPI) -> None:
                     "already_in_inventory": s.already_in_inventory,
                     "needs_review": s.needs_review,
                     "note": s.note,
+                    "cluster_name": s.cluster_name,
                 }
                 for s in result.servers
             ],
@@ -979,7 +987,6 @@ def _register_routes(app: FastAPI) -> None:
                         "checked_at": cached.checked_at.isoformat() if cached else None,
                         "installable": cached.installable if cached else [],
                         "cluster_role": cached.cluster_role if cached else None,
-                        "cluster_name": cached.cluster_name if cached else None,
                     }
                 )
             return result
@@ -1013,7 +1020,6 @@ def _register_routes(app: FastAPI) -> None:
             "checked_at": cached.checked_at.isoformat(),
             "installable": cached.installable,
             "cluster_role": cached.cluster_role,
-            "cluster_name": cached.cluster_name,
             "packages": [
                 {
                     "identifier": p.identifier,
@@ -1084,6 +1090,11 @@ def _register_routes(app: FastAPI) -> None:
             result = []
             for h in service.firewalls(env):
                 cached = store.get_server_state(env, h.name)
+                # cluster_name is on the firewall record itself (real
+                # SmartConsole name, set at discovery time or via "re-check
+                # cluster membership"), not the live-refreshed state cache —
+                # see clusterxl-live-state / store schema v19.
+                fw_row = store.get_firewall(env, h.name)
                 result.append(
                     {
                         "name": h.name,
@@ -1097,7 +1108,7 @@ def _register_routes(app: FastAPI) -> None:
                         "checked_at": cached.checked_at.isoformat() if cached else None,
                         "installable": cached.installable if cached else [],
                         "cluster_role": cached.cluster_role if cached else None,
-                        "cluster_name": cached.cluster_name if cached else None,
+                        "cluster_name": fw_row.cluster_name if fw_row else None,
                     }
                 )
             return result
@@ -1117,6 +1128,7 @@ def _register_routes(app: FastAPI) -> None:
         store: Store = request.app.state.store
         cached = store.get_server_state(env, name)
         assert cached is not None  # detect() just persisted it
+        fw_row = store.get_firewall(env, name)
         return {
             "host": detected.host,
             "agent_build": detected.agent_build,
@@ -1125,7 +1137,7 @@ def _register_routes(app: FastAPI) -> None:
             "checked_at": cached.checked_at.isoformat(),
             "installable": cached.installable,
             "cluster_role": cached.cluster_role,
-            "cluster_name": cached.cluster_name,
+            "cluster_name": fw_row.cluster_name if fw_row else None,
             "packages": [
                 {
                     "identifier": p.identifier,
@@ -1137,6 +1149,39 @@ def _register_routes(app: FastAPI) -> None:
                 for p in detected.packages
             ],
         }
+
+    @app.post("/api/env/{env}/firewalls/{name}/cluster-recheck")
+    async def firewall_cluster_recheck(
+        env: str, name: str, request: Request, body: QueryRequest | None = None
+    ) -> dict[str, Any]:
+        """Re-resolve a firewall's real cluster object name — the Firewalls
+        panel's edit-modal "Re-check cluster membership" button, for
+        firewalls that weren't auto-resolved at discovery time (manually
+        added, or added before this shipped). Prefers the Management API
+        (the real SmartConsole cluster name, no SSH needed); only falls back
+        to a live `cphaprob`/SSH check (the same peer-hostname stand-in the
+        table's live role uses) when that finds nothing — no primary
+        configured, no usable credentials, or the gateway genuinely isn't
+        listed in any cluster the API can see. Persists whatever it finds,
+        including "not a cluster member" (None), so this never leaves a
+        stale name behind."""
+        discovery: DiscoveryService = request.app.state.discovery
+        cluster_name = await asyncio.to_thread(discovery.find_cluster_name, env, name)
+        if cluster_name is None:
+            creds = _op_creds(body, name, env)
+            service = _service(request)
+            try:
+                cluster = await asyncio.to_thread(
+                    service.check_cluster_membership, env, name, credentials=creds
+                )
+            except OrchestratorError as exc:
+                raise _map_error(exc) from exc
+            cluster_name = cluster.cluster_name if cluster else None
+        try:
+            _fwmgr(request).set_cluster_name(env, name, cluster_name)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        return {"cluster_name": cluster_name}
 
     @app.post("/api/env/{env}/firewalls/{name}/import", status_code=202)
     def firewall_import(env: str, name: str, body: ImportRequest, request: Request) -> JobRecord:

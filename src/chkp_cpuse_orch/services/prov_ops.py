@@ -128,16 +128,22 @@ class ProvisioningJobService:
         ssh_port: int,
         notes: str | None,
         credential_set: str | None | _Unset = UNSET,
+        cluster_name: str | None = None,
         triggered_by: str | None = None,
     ) -> JobRecord:
         kind = JOB_ADD if self._store.get_firewall(environment, name) is None else JOB_EDIT
+        params = _put_params("firewall", address, role, ssh_user, ssh_port, notes, credential_set)
+        # Only meaningful on a genuine creation — see _do_put, which applies it
+        # solely when kind is JOB_ADD. Riding along on every edit's params
+        # would be harmless in isolation, but gating in one place (there,
+        # not here) is what actually guarantees an edit can never overwrite a
+        # previously-detected cluster name back to None.
+        params["cluster_name"] = cluster_name
         return self.runner.submit(
             kind,
             target=name,
             environment=environment,
-            params=_put_params(
-                "firewall", address, role, ssh_user, ssh_port, notes, credential_set
-            ),
+            params=params,
             triggered_by=triggered_by,
         )
 
@@ -190,6 +196,13 @@ class ProvisioningJobService:
             )
             if credential_set is not UNSET:
                 self._firewall_manager.assign_credential(environment, name, credential_set)
+            cluster_name = p.get("cluster_name")
+            # Only on genuine creation — an edit's params always carry this
+            # key too (see submit_put_firewall), but applying it here only
+            # for JOB_ADD is what stops an unrelated edit (e.g. changing the
+            # SSH port) from wiping out a previously-detected cluster name.
+            if ctx.job.kind == JOB_ADD and cluster_name:
+                self._firewall_manager.set_cluster_name(environment, name, cluster_name)
             noun = "firewall"
         verb = "added" if ctx.job.kind == JOB_ADD else "updated"
         ctx.log(f"{verb} {noun} {name!r}")

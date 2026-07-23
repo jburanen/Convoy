@@ -49,7 +49,7 @@ from types import TracebackType
 from typing import Any, Protocol
 
 from ..credentials import CredentialKind
-from ..errors import CredentialError, TransportError
+from ..errors import CredentialError, OrchestratorError, TransportError
 from ..inventory import Host, Role
 from ..reporting import get_logger
 from ..transport.mgmt_api import ManagementAPIClient
@@ -69,6 +69,10 @@ class DiscoveredServer:
     already_in_inventory: bool = False
     needs_review: bool = False
     note: str | None = None
+    # Real SmartConsole cluster object name, resolved via the Management API
+    # (show-simple-clusters) at discovery time — see find_cluster_for_gateway.
+    # None when not a cluster member, or when the lookup wasn't possible.
+    cluster_name: str | None = None
 
 
 @dataclass
@@ -94,6 +98,7 @@ class MgmtClientContext(Protocol):
         tb: TracebackType | None,
     ) -> None: ...
     def show_gateways_and_servers(self, *, details_level: str = ...) -> list[dict[str, Any]]: ...
+    def show_simple_clusters(self, *, details_level: str = ...) -> list[dict[str, Any]]: ...
     def show_domains(self) -> list[dict[str, Any]]: ...
 
 
@@ -117,9 +122,7 @@ class DiscoveryService:
         self._registry = registry
         self._mgmt_client_factory = mgmt_client_factory or _default_mgmt_client_factory
 
-    def discover_firewalls(
-        self, environment: str, *, domain: str | None = None
-    ) -> DiscoveryResult:
+    def discover_firewalls(self, environment: str, *, domain: str | None = None) -> DiscoveryResult:
         """Scan the estate from the environment's primary management server for
         firewalls (gateways/cluster members) instead of management-plane
         servers — same Management API call, opposite half of the object list.
@@ -207,10 +210,56 @@ class DiscoveryService:
         try:
             with self._mgmt_client_factory(primary, **auth) as client:
                 objects = client.show_gateways_and_servers(details_level="full")
+                # Best-effort: cluster names are a nice-to-have on top of the
+                # gateway list, so a failure here (unsupported command on an
+                # older management version, etc.) warns rather than discarding
+                # the gateways just fetched.
+                try:
+                    clusters = client.show_simple_clusters(details_level="full")
+                except TransportError as exc:
+                    result.warnings.append(
+                        f"Management API cluster lookup failed (cluster names won't be "
+                        f"pre-filled): {exc}"
+                    )
+                    clusters = []
         except TransportError as exc:
             result.warnings.append(f"Management API discovery failed: {exc}")
             return
-        result.servers.extend(map_gateways_only(objects))
+        servers = map_gateways_only(objects)
+        for srv in servers:
+            srv.cluster_name = find_cluster_for_gateway(clusters, srv.name)
+        result.servers.extend(servers)
+
+    def find_cluster_name(
+        self, environment: str, gateway_name: str, *, domain: str | None = None
+    ) -> str | None:
+        """Best-effort live lookup of one gateway's real cluster object name
+        via the Management API — backs the Firewalls panel's "re-check
+        cluster membership" button for firewalls that weren't picked up
+        automatically at discovery time (manually added, or added before this
+        shipped). Never raises: no primary configured, no usable credentials,
+        an unreachable API, or the gateway genuinely not being a cluster
+        member all just resolve to None, same as "not a cluster member".
+
+        MDS environments need a Domain to log into to see any clusters at
+        all, and which Domain a given firewall lives in isn't tracked
+        per-firewall today — callers there should pass ``domain`` if they
+        know it; without one this always returns None rather than guessing."""
+        connector = self._registry.get(environment)
+        try:
+            primary = connector.primary_mgmt_host()
+            bundle = connector.host_credentials(primary)
+            auth = _api_auth(bundle)
+        except OrchestratorError:
+            return None
+        if domain is not None:
+            auth = {**auth, "domain": domain}
+        try:
+            with self._mgmt_client_factory(primary, **auth) as client:
+                clusters = client.show_simple_clusters(details_level="full")
+        except TransportError:
+            return None
+        return find_cluster_for_gateway(clusters, gateway_name)
 
     def discover(self, environment: str, primary_host_name: str) -> DiscoveryResult:
         connector = self._registry.get(environment)
@@ -426,6 +475,41 @@ def _truthy_any(blades: dict[str, Any], keys: tuple[str, ...]) -> bool:
     return any(bool(blades.get(k)) for k in keys)
 
 
+def _cluster_member_names(cluster: dict[str, Any]) -> list[str]:
+    """Names out of one `show-simple-clusters` object's ``members`` field.
+    The exact member shape isn't confirmed against live gear (Check Point's
+    own docs describe it only as a "typical" pattern), so this tolerates
+    both a bare list of name strings and a list of ``{"name": ...}`` objects
+    — same defensive approach as cpuse.py's output parsing."""
+    members = cluster.get("members")
+    if not isinstance(members, list):
+        return []
+    names: list[str] = []
+    for m in members:
+        if isinstance(m, dict):
+            name = m.get("name")
+            if name:
+                names.append(str(name))
+        elif isinstance(m, str) and m:
+            names.append(m)
+    return names
+
+
+def find_cluster_for_gateway(clusters: list[dict[str, Any]], gateway_name: str) -> str | None:
+    """Which cluster (by its real SmartConsole name) a gateway/cluster-member
+    belongs to, given `show-simple-clusters` objects. Matched case-
+    insensitively against each cluster's member names. None if no cluster
+    lists this gateway as a member."""
+    target = gateway_name.strip().lower()
+    if not target:
+        return None
+    for cluster in clusters:
+        if any(name.strip().lower() == target for name in _cluster_member_names(cluster)):
+            cname = cluster.get("name")
+            return str(cname).strip() or None if cname else None
+    return None
+
+
 # `mdsenv; mdsquerydb MDSs` returns each MDS as a name + IP pair (tab/space
 # delimited) — it does not report Primary/Secondary/MLM role, so we can only
 # infer the primary (it's the address we're already connected to) and flag
@@ -487,6 +571,7 @@ __all__ = [
     "DiscoveryResult",
     "DiscoveryService",
     "DomainsResult",
+    "find_cluster_for_gateway",
     "map_gateways_and_servers",
     "map_gateways_only",
     "parse_mdsquerydb_mdss",

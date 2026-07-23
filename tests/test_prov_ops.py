@@ -272,6 +272,74 @@ def test_existing_firewall_submits_as_edit(
     assert firewalls[0].role == "cluster_member"
 
 
+def test_cluster_name_is_applied_on_creation(
+    service: ProvisioningJobService, firewall_manager: FirewallManager
+) -> None:
+    """A discovery import passes cluster_name along with the initial create."""
+    service.submit_put_firewall(
+        ENV,
+        name="fw-01",
+        address="192.0.2.20",
+        role="cluster_member",
+        ssh_user="admin",
+        ssh_port=22,
+        notes=None,
+        cluster_name="prod-cluster",
+    )
+    _run(service)
+    assert firewall_manager.list_firewalls(ENV)[0].cluster_name == "prod-cluster"
+
+
+def test_cluster_name_is_never_applied_on_a_later_edit(
+    service: ProvisioningJobService, firewall_manager: FirewallManager
+) -> None:
+    """Regression guard: an ordinary edit (e.g. the Edit-firewall modal's Save
+    changes, which never sends cluster_name) must not wipe out a
+    previously-detected name — only genuine creation (JOB_ADD) applies it."""
+    service.submit_put_firewall(
+        ENV,
+        name="fw-01",
+        address="192.0.2.20",
+        role="cluster_member",
+        ssh_user="admin",
+        ssh_port=22,
+        notes=None,
+        cluster_name="prod-cluster",
+    )
+    _run(service)
+
+    # An edit that (correctly, per the frontend) omits cluster_name entirely.
+    job = service.submit_put_firewall(
+        ENV,
+        name="fw-01",
+        address="192.0.2.21",
+        role="cluster_member",
+        ssh_user="admin",
+        ssh_port=22,
+        notes=None,
+    )
+    assert job.kind == JOB_EDIT
+    _run(service)
+    assert firewall_manager.list_firewalls(ENV)[0].cluster_name == "prod-cluster"
+
+    # Even if a caller mistakenly passed a cluster_name on an edit, it's
+    # still ignored — the JOB_ADD gate in ProvisioningJobService._do_put is
+    # what protects this, not the caller remembering to omit the field.
+    job = service.submit_put_firewall(
+        ENV,
+        name="fw-01",
+        address="192.0.2.22",
+        role="cluster_member",
+        ssh_user="admin",
+        ssh_port=22,
+        notes=None,
+        cluster_name="some-other-cluster",
+    )
+    assert job.kind == JOB_EDIT
+    _run(service)
+    assert firewall_manager.list_firewalls(ENV)[0].cluster_name == "prod-cluster"
+
+
 def test_firewall_validation_error_surfaces_as_a_failed_job(
     service: ProvisioningJobService, store: Store
 ) -> None:

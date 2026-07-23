@@ -20,4 +20,4 @@ Load this at the start of each session; read a linked file when its hook looks r
 - [MDS discovery command](mds-discovery-command.md) — locate MDSDIR via `/opt/CPmds-R*` glob, don't trust any pre-set env var over SSH exec; SmartEvent on MDS confirmed via API login domain="Global"
 - [Environment kind (SMS vs MDS)](environment-kind.md) — `environments.is_mds` flag, set via UI checkbox, drives command selection (not host role)
 - [Firewall discovery domain picker](firewall-discovery-domain-picker.md) — no source-server picker (one primary/env); MDS picks a Domain via `show-domains` (unverified against live gear)
-- [ClusterXL live state](clusterxl-live-state.md) — Firewalls panel shows live Active/Standby role; "cluster name" is a stand-in (joined peer hostnames), not the SmartConsole cluster object name
+- [ClusterXL live state](clusterxl-live-state.md) — Firewalls panel: role is live (cphaprob, every refresh); cluster name is static (Mgmt API preferred at discovery/re-check, cphaprob fallback), stored on FirewallRow

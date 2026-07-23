@@ -475,6 +475,56 @@ def test_firewall_new_gets_default_credential_and_can_be_patched(client: TestCli
     assert job["status"] == "succeeded", job["error"]
 
 
+def test_firewall_cluster_recheck_falls_back_to_ssh_when_no_management_api(
+    client: TestClient, transport: FakeTransport
+) -> None:
+    """The "default" environment's only management-plane host is "mgmt-01"
+    with role "management" (legacy), not Primary SMS/MDS — so
+    DiscoveryService.find_cluster_name has no primary to log into and
+    returns None, and this falls back to a live cphaprob/SSH check."""
+    _put_set(client, name="primary")
+    client.post("/api/env/default/credentials/primary/default")
+    fw_job = _add_firewall(client, name="fw-x", address="192.0.2.70", role="cluster_member")
+    assert fw_job["status"] == "succeeded", fw_job["error"]
+
+    transport.responses["show cluster state"] = (
+        "ID         Unique Address  Assigned Load   State          Name\n"
+        "1 (local)  11.22.33.245    100%            ACTIVE(!)      Member1\n"
+        "2          11.22.33.246    0%              DOWN           Member2\n"
+    )
+    resp = client.post("/api/env/default/firewalls/fw-x/cluster-recheck", json={})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["cluster_name"] == "Member1, Member2"
+
+    # Persisted — visible on the firewalls list without another recheck.
+    firewalls = {f["name"]: f for f in client.get("/api/env/default/firewalls").json()}
+    assert firewalls["fw-x"]["cluster_name"] == "Member1, Member2"
+
+
+def test_firewall_cluster_recheck_clears_a_stale_name_when_no_longer_clustered(
+    client: TestClient, transport: FakeTransport
+) -> None:
+    _put_set(client, name="primary")
+    client.post("/api/env/default/credentials/primary/default")
+    _add_firewall(client, name="fw-x", address="192.0.2.70", role="gateway")
+    client.post("/api/env/default/firewalls/fw-x/cluster-recheck", json={})  # not clustered yet
+
+    transport.responses["show cluster state"] = (
+        "ID         Unique Address  Assigned Load   State          Name\n"
+        "1 (local)  11.22.33.245    100%            ACTIVE(!)      Member1\n"
+    )
+    resp = client.post("/api/env/default/firewalls/fw-x/cluster-recheck", json={})
+    assert resp.json()["cluster_name"] == "Member1"
+
+    # Now the host is no longer a cluster member (e.g. removed from ClusterXL)
+    # — re-checking clears the stale name rather than leaving it stuck.
+    del transport.responses["show cluster state"]
+    resp = client.post("/api/env/default/firewalls/fw-x/cluster-recheck", json={})
+    assert resp.json()["cluster_name"] is None
+    firewalls = {f["name"]: f for f in client.get("/api/env/default/firewalls").json()}
+    assert firewalls["fw-x"]["cluster_name"] is None
+
+
 def test_delete_environment_and_its_servers(client: TestClient) -> None:
     client.post("/api/environments", json={"name": "temp"})
     job = _add_server(client, "temp", name="m1", address="192.0.2.80", role="mds")

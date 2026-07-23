@@ -367,6 +367,28 @@ def test_firewall_credential_assignment_and_fk_set_null(store: Store) -> None:
     assert store.assign_firewall_credential_set("corp", "ghost", None) is False
 
 
+def test_set_firewall_cluster_name(store: Store) -> None:
+    store.insert_environment("corp")
+    store.upsert_firewall(
+        FirewallRow(environment="corp", name="fw-01", address="10.0.0.1", role="cluster_member")
+    )
+    assert store.get_firewall("corp", "fw-01").cluster_name is None  # type: ignore[union-attr]
+
+    assert store.set_firewall_cluster_name("corp", "fw-01", "prod-cluster") is True
+    assert store.get_firewall("corp", "fw-01").cluster_name == "prod-cluster"  # type: ignore[union-attr]
+
+    # upsert_firewall (an ordinary add/edit) never touches cluster_name —
+    # only this targeted UPDATE does (see store.py's upsert_firewall docstring).
+    store.upsert_firewall(
+        FirewallRow(environment="corp", name="fw-01", address="10.0.0.2", role="cluster_member")
+    )
+    assert store.get_firewall("corp", "fw-01").cluster_name == "prod-cluster"  # type: ignore[union-attr]
+
+    assert store.set_firewall_cluster_name("corp", "fw-01", None) is True  # clears it
+    assert store.get_firewall("corp", "fw-01").cluster_name is None  # type: ignore[union-attr]
+    assert store.set_firewall_cluster_name("corp", "ghost", "x") is False
+
+
 def test_deleting_environment_cascades_to_firewalls(store: Store) -> None:
     store.insert_environment("corp")
     store.upsert_firewall(

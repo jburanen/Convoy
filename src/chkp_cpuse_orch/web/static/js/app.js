@@ -1494,10 +1494,13 @@ function renderStateRow(stateRow, data) {
     checked.textContent = "";
     return;
   }
-  // ClusterXL role, when this host is a live cluster member (see
-  // clusterxl.py — cluster_name is a stand-in built from peer hostnames, not
-  // the SmartConsole cluster object name, which Check Point doesn't expose
-  // via CLI on the member itself). Prepended ahead of the CPUSE summary.
+  // ClusterXL role, when this host is a live cluster member. cluster_role is
+  // refreshed every check (live `cphaprob`); cluster_name is the firewall's
+  // stored real cluster object name (set at discovery time, or via the edit
+  // modal's "Re-check cluster membership") — see clusterxl-live-state memory.
+  // Only shown once both are known; a role with no stored name yet (e.g. a
+  // manually-added firewall never re-checked) shows no prefix at all rather
+  // than a misleading blank.
   if (data.cluster_role && data.cluster_name) {
     const role = data.cluster_role.toUpperCase();
     const label = role.startsWith("ACTIVE") ? "Active"
@@ -1507,7 +1510,7 @@ function renderStateRow(stateRow, data) {
     cluster.className = role.startsWith("ACTIVE") ? "cluster-active"
       : role.startsWith("STANDBY") ? "cluster-standby"
       : "cluster-other";
-    cluster.textContent = `${label} member of ${data.cluster_name}`;
+    cluster.textContent = `${label} in ${data.cluster_name}`;
     summary.appendChild(cluster);
     summary.appendChild(document.createTextNode(" | "));
   }
@@ -1754,7 +1757,7 @@ async function loadFirewalls() {
     // The name itself is the row's only Edit trigger now — Remove lives inside
     // the modal it opens, rather than its own row button.
     row.querySelector(".fw-name-link").addEventListener("click", () => {
-      openEditFirewallModal(fw, state && state.credential_set);
+      openEditFirewallModal(fw, state && state.credential_set, state && state.cluster_name);
     });
     tbody.appendChild(row);
     tbody.appendChild(stateRow);
@@ -1933,11 +1936,14 @@ async function openAddFirewallModal() {
   document.getElementById("firewall-modal-title").textContent = "Add firewall";
   document.getElementById("firewall-modal-submit").textContent = "Add firewall";
   document.getElementById("firewall-modal-remove").classList.add("hidden");
+  // Nothing to check yet — the host doesn't exist in the store until this
+  // form is submitted, and cluster-recheck needs an existing firewall.
+  document.getElementById("fm-cluster-info").classList.add("hidden");
   await populateFirewallCredSelect();
   document.getElementById("firewall-modal").classList.remove("hidden");
   document.getElementById("fm-name").focus();
 }
-async function openEditFirewallModal(fw, assignedSetName) {
+async function openEditFirewallModal(fw, assignedSetName, clusterName) {
   editingFirewallName = fw.name;
   document.getElementById("fm-name").value = fw.name;
   document.getElementById("fm-name").disabled = true;
@@ -1948,10 +1954,45 @@ async function openEditFirewallModal(fw, assignedSetName) {
   document.getElementById("firewall-modal-title").textContent = `Edit ${fw.name}`;
   document.getElementById("firewall-modal-submit").textContent = "Save changes";
   document.getElementById("firewall-modal-remove").classList.remove("hidden");
+  document.getElementById("fm-cluster-info").classList.remove("hidden");
+  renderFirewallClusterInfo(clusterName);
   await populateFirewallCredSelect(assignedSetName);
   document.getElementById("firewall-modal").classList.remove("hidden");
   document.getElementById("fm-address").focus();
 }
+
+function renderFirewallClusterInfo(clusterName) {
+  document.getElementById("fm-cluster-text").textContent = clusterName
+    ? `Cluster: ${clusterName}`
+    : "Cluster: unknown — not yet checked";
+}
+
+document.getElementById("fm-cluster-recheck").addEventListener("click", async () => {
+  const name = editingFirewallName;
+  if (!name) return;
+  const btn = document.getElementById("fm-cluster-recheck");
+  // The Management API is tried first and usually needs no SSH at all; these
+  // credentials only feed the `cphaprob` fallback if that lookup finds
+  // nothing (see the cluster-recheck endpoint) — prompted up front anyway
+  // since we can't know in advance which path will run.
+  const extra = await operationCredentials(name, "re-check cluster membership");
+  if (extra === null) return; // credential prompt cancelled
+  btn.disabled = true;
+  document.getElementById("fm-cluster-text").textContent = "checking…";
+  try {
+    const result = await api(
+      envUrl(`/firewalls/${encodeURIComponent(name)}/cluster-recheck`),
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(extra) }
+    );
+    renderFirewallClusterInfo(result.cluster_name);
+    await loadFirewalls(); // table's status line reflects the new name too
+  } catch (e) {
+    cacheEvictCreds(name);
+    document.getElementById("fm-cluster-text").textContent = "check failed: " + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
 function closeFirewallModal() {
   document.getElementById("firewall-modal").classList.add("hidden");
 }
@@ -2135,6 +2176,11 @@ function renderDiscoverFirewallsResults(result) {
     name.value = s.name;
     address.value = s.address;
     roleSel.value = s.role;
+    // Stashed for the Import-selected handler below — Management API-
+    // resolved at scan time (see DiscoveryService.find_cluster_for_gateway),
+    // so it rides straight into the add-firewall payload without a second
+    // round trip.
+    row.dataset.clusterName = s.cluster_name || "";
     let noteText = s.note || "";
     if (s.already_in_inventory) {
       noteText = "already in inventory";
@@ -2182,6 +2228,7 @@ document.getElementById("discover-firewalls-import").addEventListener("click", a
         body: JSON.stringify({
           name, address, role, ssh_user: discoverFwPrimarySshUser,
           credential_set: (storageEnabled() && discoverFwPrimaryCredSet) || undefined,
+          cluster_name: r.dataset.clusterName || undefined,
         }),
       });
       lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if it finishes fast
