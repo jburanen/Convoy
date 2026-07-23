@@ -160,9 +160,6 @@ until v1.
 ◻️ Test firewall discovery in SMS/Smart Center environment  
 ✅ Test firewall discovery in MDS/Multi-Domain environment  
 ✅ Test Gaia/Force Gateway patching via CPUSE  
-◻️ Test Gaia/Force ClusterXL patching via CPUSE  
-◻️ Test Spark patching via CPUSE  
-◻️ Test Spark cluster patching  
 ◻️ Packaged deployment release that doesn't require clone and --build  
 ◻️ Independent agentic code security review  
 
