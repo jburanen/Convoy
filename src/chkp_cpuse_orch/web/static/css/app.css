@@ -252,29 +252,53 @@ section h2 { margin: 0 0 0.75rem; font-size: 1.15rem; }
   display: flex;
   align-items: center;
   cursor: pointer;
-  margin-bottom: 0.75rem;
-  /* Drop the default left disclosure marker so the title lines up flush-left
-     with every other panel's section h2 (the triangle moves right, below). */
+  /* section's own left padding (1.25rem — see the plain `section` rule above)
+     reclaimed as a left "gutter" so the triangle (below) can sit inside it,
+     flush to the panel's actual visible border, instead of pushing the title
+     inward. The h2 that follows still lands back at the normal x=0 content
+     edge, so it stays aligned with every other panel's section h2. */
+  margin: 0 0 0.75rem -1.25rem;
+  /* Drop the default left disclosure marker — we render our own below. */
   list-style: none;
 }
 #provision-details > summary::-webkit-details-marker,
 #servers-details > summary::-webkit-details-marker { display: none; }
 #provision-details > summary h2,
 #servers-details > summary h2 { margin: 0; }
-/* Custom triangle: inline with the title, centred in the gap between the title
-   and the panel's right edge — flex:1 makes the pseudo-element fill that gap,
-   text-align centres the glyph within it. Right-pointing collapsed, down open. */
-#provision-details > summary::after,
-#servers-details > summary::after {
+/* Custom triangle: a fixed-width column exactly matching the gutter reclaimed
+   above, so text-align centers the glyph between the panel's left border and
+   the header text. Right-pointing collapsed, down open. */
+#provision-details > summary::before,
+#servers-details > summary::before {
   content: "▸";
-  flex: 1;
+  width: 1.25rem;
+  flex: none;
   text-align: center;
   color: var(--muted);
 }
-#provision-details[open] > summary::after,
-#servers-details[open] > summary::after { content: "▾"; }
-#provision .section-head-actions,
-#servers .section-head-actions { margin-bottom: 0.75rem; }
+#provision-details[open] > summary::before,
+#servers-details[open] > summary::before { content: "▾"; }
+
+/* Puts the panel's action button(s) back on the same visual row as the header
+   title. They can't live inside <summary> itself — HTML's content model
+   disallows interactive content there, and a click would also toggle the
+   panel — so instead this overlays the header row via absolute positioning.
+   #provision-details/#servers-details is the positioning context; the fixed
+   height matches section h2's rendered line height (1.15rem font-size × the
+   body's 1.5 line-height) so align-items: center lines the button up with the
+   title's vertical center. Still hidden when collapsed — untouched native
+   <details> behavior for any non-summary child, unaffected by this. */
+#provision-details, #servers-details { position: relative; }
+#provision-details > .section-head-actions,
+#servers-details > .section-head-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 1.725rem; /* 1.15rem (section h2 font-size) × 1.5 (body line-height) */
+  display: flex;
+  align-items: center;
+  margin: 0;
+}
 
 /* ---- tables ---- */
 table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
