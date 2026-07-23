@@ -23,6 +23,8 @@ chkp_cpuse_orch/
     patching.py     # CPUSE-local subsystem: detect/import/install jobs per mgmt server
     cdt_ops.py      # CDT subsystem: stage/generate/candidates-edit/prepare/execute jobs
     pkgs_ops.py     # Package-action jobs: upload/keep/notkeep/delete (pkgs.* kinds)
+    cred_ops.py     # Credential-set jobs: add/edit/delete (cred.* kinds)
+    prov_ops.py     # Server/firewall CRUD jobs: add/edit/delete (prov.* kinds, shared)
   config.py         # Pydantic settings (global tool config, defaults, paths)
   inventory.py      # Pydantic models: Site, ManagementServer, Gateway, Cluster; loader
   credentials.py    # Encrypted-at-rest credential store (key + password; see design)

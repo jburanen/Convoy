@@ -64,6 +64,7 @@ from ..services.environments import EnvironmentManager
 from ..services.firewalls import FirewallManager
 from ..services.patching import PatchingService
 from ..services.pkgs_ops import PackageJobService
+from ..services.prov_ops import UNSET, ProvisioningJobService
 from ..services.provisioning import (
     DEFAULT_UID,
     MGMT_API_NOTES,
@@ -283,6 +284,13 @@ class EnvServerIn(BaseModel):
     ssh_user: str = "admin"
     ssh_port: int = 22
     notes: str | None = None
+    # Explicit assignment (or clear, with null) made in the same Add/Edit modal
+    # submit — folded into the same prov.add/prov.edit job rather than a
+    # separate follow-up call, which could otherwise 404 if it reached the
+    # server before the add/edit job itself had run. Omit the field entirely
+    # to leave any existing assignment (or the environment-default-on-create
+    # logic in EnvironmentManager.add_server) alone — see services/prov_ops.py.
+    credential_set: str | None = None
 
 
 class DiscoverIn(BaseModel):
@@ -304,6 +312,8 @@ class FirewallIn(BaseModel):
     ssh_user: str = "admin"
     ssh_port: int = 22
     notes: str | None = None
+    # See EnvServerIn.credential_set — same reasoning, same fold-into-the-job.
+    credential_set: str | None = None
 
 
 # -- app factory -------------------------------------------------------------------
@@ -404,6 +414,11 @@ def create_app(
             if credentials is not None
             else None
         )
+        # No credential store dependency (no secrets involved), unlike cred_jobs —
+        # always constructed.
+        prov_jobs = ProvisioningJobService(
+            store=store, env_manager=env_manager, firewall_manager=firewall_manager, runner=runner
+        )
         discovery = DiscoveryService(registry=registry, mgmt_client_factory=mgmt_client_factory)
 
         app.state.store = store
@@ -419,6 +434,7 @@ def create_app(
         app.state.cdt = cdt_service
         app.state.pkgs_jobs = pkgs_jobs
         app.state.cred_jobs = cred_jobs
+        app.state.prov_jobs = prov_jobs
         app.state.discovery = discovery
 
         interrupted = runner.recover()
@@ -534,6 +550,11 @@ def _cred_jobs(request: Request) -> CredentialJobService:
     if service is None:
         reason = getattr(request.app.state, "credentials_error", "credential store is locked")
         raise HTTPException(status_code=503, detail=reason)
+    return service
+
+
+def _prov_jobs(request: Request) -> ProvisioningJobService:
+    service: ProvisioningJobService = request.app.state.prov_jobs
     return service
 
 
@@ -763,10 +784,15 @@ def _register_routes(app: FastAPI) -> None:
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
-    @app.post("/api/environments/{env}/servers", status_code=201)
-    def add_env_server(env: str, body: EnvServerIn, request: Request) -> dict[str, str]:
+    @app.post("/api/environments/{env}/servers", status_code=202)
+    def add_env_server(env: str, body: EnvServerIn, request: Request) -> JobRecord:
+        """Runs as a prov.add/prov.edit job (services/prov_ops.py) for Jobs-tab
+        visibility and audit history — same model as credentials/packages.
+        Validation errors (bad role, name collision with a firewall, ...)
+        surface as a failed job, not a synchronous 400/409."""
+        _require_env(request, env)
         try:
-            _envmgr(request).add_server(
+            return _prov_jobs(request).submit_put_server(
                 env,
                 name=body.name,
                 address=body.address,
@@ -774,18 +800,24 @@ def _register_routes(app: FastAPI) -> None:
                 ssh_user=body.ssh_user,
                 ssh_port=body.ssh_port,
                 notes=body.notes,
+                credential_set=(
+                    body.credential_set if "credential_set" in body.model_fields_set else UNSET
+                ),
+                triggered_by=_current_user(request),
             )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
-        return {"name": body.name}
 
-    @app.delete("/api/environments/{env}/servers/{name}")
-    def remove_env_server(env: str, name: str, request: Request) -> dict[str, bool]:
+    @app.delete("/api/environments/{env}/servers/{name}", status_code=202)
+    def remove_env_server(env: str, name: str, request: Request) -> JobRecord:
+        """Runs as a prov.delete job — see add_env_server above."""
+        _require_env(request, env)
         try:
-            _envmgr(request).remove_server(env, name)
+            return _prov_jobs(request).submit_delete_server(
+                env, name, triggered_by=_current_user(request)
+            )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
-        return {"deleted": True}
 
     @app.post("/api/environments/{env}/discover")
     def discover_servers(env: str, body: DiscoverIn, request: Request) -> dict[str, Any]:
@@ -837,10 +869,12 @@ def _register_routes(app: FastAPI) -> None:
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
-    @app.post("/api/environments/{env}/firewalls", status_code=201)
-    def add_firewall(env: str, body: FirewallIn, request: Request) -> dict[str, str]:
+    @app.post("/api/environments/{env}/firewalls", status_code=202)
+    def add_firewall(env: str, body: FirewallIn, request: Request) -> JobRecord:
+        """Runs as a prov.add/prov.edit job — see add_env_server above."""
+        _require_env(request, env)
         try:
-            _fwmgr(request).add_firewall(
+            return _prov_jobs(request).submit_put_firewall(
                 env,
                 name=body.name,
                 address=body.address,
@@ -848,18 +882,24 @@ def _register_routes(app: FastAPI) -> None:
                 ssh_user=body.ssh_user,
                 ssh_port=body.ssh_port,
                 notes=body.notes,
+                credential_set=(
+                    body.credential_set if "credential_set" in body.model_fields_set else UNSET
+                ),
+                triggered_by=_current_user(request),
             )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
-        return {"name": body.name}
 
-    @app.delete("/api/environments/{env}/firewalls/{name}")
-    def remove_firewall(env: str, name: str, request: Request) -> dict[str, bool]:
+    @app.delete("/api/environments/{env}/firewalls/{name}", status_code=202)
+    def remove_firewall(env: str, name: str, request: Request) -> JobRecord:
+        """Runs as a prov.delete job — see add_env_server above."""
+        _require_env(request, env)
         try:
-            _fwmgr(request).remove_firewall(env, name)
+            return _prov_jobs(request).submit_delete_firewall(
+                env, name, triggered_by=_current_user(request)
+            )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
-        return {"deleted": True}
 
     @app.post("/api/environments/{env}/discover-firewalls")
     def discover_firewalls(env: str, body: DiscoverFirewallsIn, request: Request) -> dict[str, Any]:

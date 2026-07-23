@@ -548,11 +548,17 @@ document.getElementById("env-add-form").addEventListener("submit", async (ev) =>
 
 // Shared add/update path for the Connect-to-Primary modal and the Add/Edit
 // server modal below.
-async function addServer({ name, address, role, ssh_user, ssh_port }) {
-  await api(`/api/environments/${encodeURIComponent(currentEnv)}/servers`, {
+// `credential_set` (string, null, or omitted/undefined) rides in the same
+// prov.add/prov.edit job the server (add or edit) itself now runs as — see
+// services/prov_ops.py. Undefined serializes to an absent JSON key (leave any
+// existing/default-on-create assignment alone); null explicitly clears it.
+// Returns the (pending) JobRecord — callers prime lastJobStatus with it so
+// pollJobs() reliably catches the job's own terminal transition (PROV_JOB_KINDS).
+async function addServer({ name, address, role, ssh_user, ssh_port, credential_set }) {
+  return await api(`/api/environments/${encodeURIComponent(currentEnv)}/servers`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, address, role, ssh_user, ssh_port }),
+    body: JSON.stringify({ name, address, role, ssh_user, ssh_port, credential_set }),
   });
 }
 
@@ -621,22 +627,22 @@ document.getElementById("server-form").addEventListener("submit", async (ev) => 
     ? credSelect.selectedOptions[0]?.dataset.sshUser || "admin"
     : document.getElementById("sm-user").value.trim() || "admin";
   try {
-    await addServer({
+    // Runs as a prov.add/prov.edit job (services/prov_ops.py) — "queued, not
+    // done" model, same as credentials/packages. PROV_JOB_KINDS in pollJobs()
+    // reloads once it actually finishes (near-instant in practice).
+    const job = await addServer({
       name,
       address: document.getElementById("sm-address").value.trim(),
       role: document.getElementById("sm-role").value,
       ssh_user: sshUser,
       ssh_port: Number(document.getElementById("sm-port").value) || 22,
+      // Storage-enabled: always explicit (clears to null if left at "none"),
+      // matching this modal's previous always-fires-the-assignment behavior.
+      credential_set: storageEnabled() ? (credSet || null) : undefined,
     });
-    if (storageEnabled()) {
-      await api(envUrl(`/servers/${encodeURIComponent(name)}/credential`), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ set: credSet || null }),
-      });
-    }
+    lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if it finishes fast
     closeServerModal();
-    await Promise.all([loadServers(), refreshStatus()]);
+    await Promise.all([loadJobs(), loadServers(), refreshStatus()]);
   } catch (e) { toast("Save failed: " + e.message); }
 });
 document.getElementById("server-modal-close").addEventListener("click", closeServerModal);
@@ -688,24 +694,26 @@ document.getElementById("primary-form").addEventListener("submit", async (ev) =>
     ? credSelect.selectedOptions[0]?.dataset.sshUser || "admin"
     : document.getElementById("pm-user").value.trim() || "admin";
   try {
-    await addServer({
+    // Runs as a prov.add job (services/prov_ops.py) — "queued, not done".
+    const job = await addServer({
       name,
       address: document.getElementById("pm-address").value.trim(),
       role: document.getElementById("pm-role").value,
       ssh_user: sshUser,
       ssh_port: Number(document.getElementById("pm-port").value) || 22,
+      // Only when actually picked — otherwise omitted, leaving the
+      // environment-default-on-create assignment alone (previous behavior).
+      credential_set: credSet || undefined,
     });
-    if (credSet) {
-      await api(envUrl(`/servers/${encodeURIComponent(name)}/credential`), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ set: credSet }),
-      });
-    }
+    lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if it finishes fast
     closePrimaryModal();
-    await Promise.all([loadServers(), refreshStatus()]);
-    // Offer discovery from the just-defined primary (operator can Close to keep
-    // adding manually — the Discover button stays available either way).
+    await Promise.all([loadJobs(), loadServers(), refreshStatus()]);
+    // Discovery reads the servers list straight from the DB (list_servers) —
+    // unlike the reloads above, a stale read here isn't just cosmetic, it's a
+    // wrong "no primary to discover from" toast for what is very often a
+    // brand-new environment's *first and only* server. Wait for the add job
+    // to actually land before opening it.
+    await waitForJobDone(job.id);
     openDiscoverModal(name);
   } catch (e) { toast("Save failed: " + e.message); }
 });
@@ -873,22 +881,22 @@ document.getElementById("discover-import").addEventListener("click", async () =>
     try {
       // Inherit the discover-from primary's SSH identity: same credential set
       // in a storage-enabled environment, same typed username otherwise.
-      await api(`/api/environments/${encodeURIComponent(currentEnv)}/servers`, {
+      // "ok" here means submitted, not confirmed successful — add is a
+      // prov.add job now (services/prov_ops.py); check the Jobs tab for the
+      // real outcome (e.g. a name collision fails the job, not this request).
+      const job = await api(`/api/environments/${encodeURIComponent(currentEnv)}/servers`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, address, role, ssh_user: discoverPrimarySshUser }),
+        body: JSON.stringify({
+          name, address, role, ssh_user: discoverPrimarySshUser,
+          credential_set: (storageEnabled() && discoverPrimaryCredSet) || undefined,
+        }),
       });
-      if (storageEnabled() && discoverPrimaryCredSet) {
-        await api(envUrl(`/servers/${encodeURIComponent(name)}/credential`), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ set: discoverPrimaryCredSet }),
-        });
-      }
+      lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if it finishes fast
       ok++;
     } catch (e) { failed.push(`${name}: ${e.message}`); }
   }
-  await Promise.all([loadServers(), refreshStatus()]);
+  await Promise.all([loadJobs(), loadServers(), refreshStatus()]);
   if (failed.length) {
     toast(`Imported ${ok}. Failed: ${failed.join("; ")}`);
     importBtn.disabled = false;
@@ -1406,11 +1414,14 @@ async function loadServers() {
     info.querySelector(".btn-remove").addEventListener("click", async () => {
       if (!confirm(`Remove server ${srv.name} from ${currentEnv}?`)) return;
       try {
-        await api(
+        // Runs as a prov.delete job (services/prov_ops.py) — see the server
+        // form submit handler above for the same "queued, not done" model.
+        const job = await api(
           `/api/environments/${encodeURIComponent(currentEnv)}/servers/${encodeURIComponent(srv.name)}`,
           { method: "DELETE" },
         );
-        await Promise.all([loadServers(), refreshStatus()]);
+        lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if it finishes fast
+        await Promise.all([loadJobs(), loadServers(), refreshStatus()]);
       } catch (e) { toast("Remove failed: " + e.message); }
     });
     infoTbody.appendChild(info);
@@ -1880,11 +1891,13 @@ async function populateFirewallCredSelect(assignedSetName) {
   select.value = assignedSetName || "";
 }
 
-async function addFirewall({ name, address, role, ssh_user, ssh_port }) {
-  await api(`/api/environments/${encodeURIComponent(currentEnv)}/firewalls`, {
+// `credential_set` (string, null, or omitted/undefined) rides in the same
+// prov.add/prov.edit job — see addServer above. Returns the JobRecord too.
+async function addFirewall({ name, address, role, ssh_user, ssh_port, credential_set }) {
+  return await api(`/api/environments/${encodeURIComponent(currentEnv)}/firewalls`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, address, role, ssh_user, ssh_port }),
+    body: JSON.stringify({ name, address, role, ssh_user, ssh_port, credential_set }),
   });
 }
 
@@ -1935,22 +1948,22 @@ document.getElementById("firewall-form").addEventListener("submit", async (ev) =
     ? credSelect.selectedOptions[0]?.dataset.sshUser || "admin"
     : document.getElementById("fm-user").value.trim() || "admin";
   try {
-    await addFirewall({
+    // Runs as a prov.add/prov.edit job (services/prov_ops.py) — "queued, not
+    // done" model, same as credentials/packages. PROV_JOB_KINDS in pollJobs()
+    // reloads once it actually finishes (near-instant in practice).
+    const job = await addFirewall({
       name,
       address: document.getElementById("fm-address").value.trim(),
       role: document.getElementById("fm-role").value,
       ssh_user: sshUser,
       ssh_port: Number(document.getElementById("fm-port").value) || 22,
+      // Storage-enabled: always explicit (clears to null if left at "none"),
+      // matching this modal's previous always-fires-the-assignment behavior.
+      credential_set: storageEnabled() ? (credSet || null) : undefined,
     });
-    if (storageEnabled()) {
-      await api(envUrl(`/firewalls/${encodeURIComponent(name)}/credential`), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ set: credSet || null }),
-      });
-    }
+    lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if it finishes fast
     closeFirewallModal();
-    await loadFirewalls();
+    await Promise.all([loadJobs(), loadFirewalls()]);
   } catch (e) { toast("Save failed: " + e.message); }
 });
 document.getElementById("firewall-modal-remove").addEventListener("click", async () => {
@@ -1958,12 +1971,14 @@ document.getElementById("firewall-modal-remove").addEventListener("click", async
   if (!name || !currentEnv) return;
   if (!confirm(`Remove firewall ${name} from ${currentEnv}?`)) return;
   try {
-    await api(
+    // Runs as a prov.delete job — see the firewall form submit handler above.
+    const job = await api(
       `/api/environments/${encodeURIComponent(currentEnv)}/firewalls/${encodeURIComponent(name)}`,
       { method: "DELETE" },
     );
+    lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if it finishes fast
     closeFirewallModal();
-    await loadFirewalls();
+    await Promise.all([loadJobs(), loadFirewalls()]);
   } catch (e) { toast("Remove failed: " + e.message); }
 });
 document.getElementById("firewall-modal-close").addEventListener("click", closeFirewallModal);
@@ -2139,22 +2154,22 @@ document.getElementById("discover-firewalls-import").addEventListener("click", a
     const role = r.querySelector(".disc-role").value;
     if (!name || !address) { failed.push(name || address || "(unnamed)"); continue; }
     try {
-      await api(`/api/environments/${encodeURIComponent(currentEnv)}/firewalls`, {
+      // "ok" here means submitted, not confirmed successful — add is a
+      // prov.add job now (services/prov_ops.py); check the Jobs tab for the
+      // real outcome (e.g. a name collision fails the job, not this request).
+      const job = await api(`/api/environments/${encodeURIComponent(currentEnv)}/firewalls`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, address, role, ssh_user: discoverFwPrimarySshUser }),
+        body: JSON.stringify({
+          name, address, role, ssh_user: discoverFwPrimarySshUser,
+          credential_set: (storageEnabled() && discoverFwPrimaryCredSet) || undefined,
+        }),
       });
-      if (storageEnabled() && discoverFwPrimaryCredSet) {
-        await api(envUrl(`/firewalls/${encodeURIComponent(name)}/credential`), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ set: discoverFwPrimaryCredSet }),
-        });
-      }
+      lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if it finishes fast
       ok++;
     } catch (e) { failed.push(`${name}: ${e.message}`); }
   }
-  await loadFirewalls();
+  await Promise.all([loadJobs(), loadFirewalls()]);
   if (failed.length) {
     toast(`Imported ${ok}. Failed: ${failed.join("; ")}`);
     importBtn.disabled = false;
@@ -2638,8 +2653,31 @@ const PKGS_JOB_KINDS = ["pkgs.upload", "pkgs.keep", "pkgs.notkeep", "pkgs.delete
 // Credentials table (and any server/firewall row showing an assigned set's
 // name) needs the same reload-on-finish treatment.
 const CRED_JOB_KINDS = ["cred.add", "cred.edit", "cred.delete"];
+// Management-server AND firewall add/edit/delete (services/prov_ops.py) share
+// one set of kinds — no server/firewall split in the Kind column (operator-
+// directed, 2026-07-23) — so a finished prov.* job just reloads both tables;
+// it's cheap and simpler than tracking which entity type each job touched.
+const PROV_JOB_KINDS = ["prov.add", "prov.edit", "prov.delete"];
 const lastJobStatus = new Map();
 const TERMINAL_JOB_STATUSES = ["succeeded", "failed", "cancelled", "interrupted"];
+
+// Polls a single job until it's terminal (or timeoutMs elapses). Used only
+// where the caller has a real, immediate correctness dependency on the job
+// having actually landed — e.g. discovery reads the servers list straight
+// from the DB right after adding the environment's first primary, and would
+// wrongly report "no primary" if it ran before that add job finished. NOT
+// used for the general add/edit/delete UI flow, which — like credentials/
+// packages — reloads optimistically and lets pollJobs() (PROV_JOB_KINDS)
+// catch the real outcome instead.
+async function waitForJobDone(jobId, { timeoutMs = 5000, intervalMs = 150 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const job = await api(`/api/jobs/${encodeURIComponent(jobId)}`);
+    if (TERMINAL_JOB_STATUSES.includes(job.status)) return job;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return null; // gave up — caller proceeds anyway rather than hanging forever
+}
 
 // Live count of not-yet-finished jobs, shown as a pill on the Jobs tab button.
 function updateJobsBadge(jobs) {
@@ -2665,14 +2703,13 @@ function renderJobRow(row, job) {
   // Give them a synthetic "Packages" env label; the Output column stays the
   // normal outcome text like every other job kind.
   const isPkgs = job.kind.startsWith("pkgs.");
-  // cred.* jobs (add/edit/delete) DO have a real target — the credential set
-  // name — so that stays in the Target column as-is; only the Env label is
-  // overridden, since credential sets are a distinct category rather than a
-  // deployment against that environment's hosts.
-  const isCred = job.kind.startsWith("cred.");
+  // Every other kind — including cred.* and prov.* — DOES act on a real
+  // environment (a credential set or server/firewall belonging to it), so
+  // the Env column always shows the actual environment name for them
+  // (previously cred.* showed a synthetic "Credentials" label here instead;
+  // operator-directed, 2026-07-23 — the real environment is more useful).
   row.querySelector(".job-target").textContent = isPkgs ? "" : (job.target ?? "");
-  row.querySelector(".job-env").textContent =
-    isPkgs ? "Packages" : isCred ? "Credentials" : (job.environment ?? "");
+  row.querySelector(".job-env").textContent = isPkgs ? "Packages" : (job.environment ?? "");
   row.querySelector(".job-user").textContent = job.username ?? "";
   const badge = row.querySelector(".job-status .badge");
   badge.textContent = job.status;
@@ -2962,6 +2999,7 @@ async function pollJobs() {
     let reloadServers = false;
     let reloadPackages = false;
     let reloadCredentials = false;
+    let reloadProv = false;
     for (const job of jobs) {
       const prev = lastJobStatus.get(job.id);
       const justFinished =
@@ -2969,6 +3007,7 @@ async function pollJobs() {
       if (justFinished && IMPORT_JOB_KINDS.includes(job.kind)) reloadServers = true;
       if (justFinished && PKGS_JOB_KINDS.includes(job.kind)) reloadPackages = true;
       if (justFinished && CRED_JOB_KINDS.includes(job.kind)) reloadCredentials = true;
+      if (justFinished && PROV_JOB_KINDS.includes(job.kind)) reloadProv = true;
       lastJobStatus.set(job.id, job.status);
     }
     const currentIds = new Set(jobs.map((j) => j.id));
@@ -2986,6 +3025,10 @@ async function pollJobs() {
     // firewalls tables too (assigned-set column), not just the Credentials
     // table itself.
     if (reloadCredentials) await Promise.all([loadCredentialSets(), loadServers()]);
+    // A prov.* job (add/edit/delete) could be either a server or a firewall —
+    // the kind alone doesn't say which (see PROV_JOB_KINDS) — so just reload
+    // both; cheap, and simpler than threading an entity hint through the poll.
+    if (reloadProv) await Promise.all([loadServers(), loadFirewalls()]);
   } catch { /* transient — next tick will retry */ }
   setTimeout(pollJobs, 2500);
 }

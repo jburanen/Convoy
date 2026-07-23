@@ -165,6 +165,43 @@ environment RBAC** — environments are DB rows partly for that reason.
     Delete) only react to *submit* failure now (revert/toast), same as every
     other job-backed action in the app (e.g. `installPackage` never waits for
     its own job either) — the job's actual outcome is Jobs-tab-only.
+  - **Server/firewall CRUD is jobs too** (`prov.add`/`prov.edit`/`prov.delete` —
+    `services/prov_ops.py`, `ProvisioningJobService`; operator-directed, 2026-07-23).
+    Add/edit/delete of management servers *and* CPUSE firewalls share these three
+    kinds — no per-entity split — with an internal `params["entity"]` ("server"|
+    "firewall") discriminator the single handler pair uses to call
+    `EnvironmentManager`/`FirewallManager`; invisible on the Jobs tab, which only
+    ever shows `prov.add`/`prov.edit`/`prov.delete`. Whether a `submit_put_*` is
+    an add or an edit is decided the same way `cred.add`/`cred.edit` is — a cheap
+    existence read before the kind is picked. **Validation now matches
+    credentials**: a bad role or a name colliding with the other entity's table
+    (servers and firewalls share one name space) surfaces as a **failed job**,
+    not a synchronous 400/409 — a deliberate operator choice, since the more
+    consistent alternative (client-side wait-for-job to preserve instant
+    feedback) was explicitly rejected in favor of matching `cred.*`. Only
+    environment existence (route-level `_require_env`) and, for delete, target
+    existence stay a synchronous pre-submit check (mirrors
+    `CredentialJobService.submit_delete`'s "don't defer an obviously-doomed
+    job"). **Credential-set assignment made in the same Add/Edit modal submit
+    rides in the same job** (`credential_set`, tri-state via the `UNSET`
+    sentinel — omitted/null/name) instead of the separate `POST .../credential`
+    call the frontend used to fire immediately after add/edit: that separate
+    call could 404 if it reached the server before the add/edit job itself had
+    run (`JobRunner.submit()` from a sync route only *wakes* the async runner;
+    the actual DB write can lag by up to the 1s poll interval). One frontend
+    call site (`primary-form`, the Connect-to-Primary bootstrap flow) has a
+    real, not just cosmetic, dependency on the add having landed — it reads the
+    servers list straight from the DB right after adding a brand-new
+    environment's first server, and would wrongly report "no primary to
+    discover from" if raced — so it alone uses a small `waitForJobDone(jobId)`
+    poll before opening the discover modal; every other add/edit/delete call
+    site reloads optimistically like `pkgs.*`/`cred.*`, and `PROV_JOB_KINDS` in
+    `pollJobs()` reloads both `loadServers()`/`loadFirewalls()` (kind alone
+    doesn't say which entity) on the job's real terminal transition. Same turn,
+    unrelated to prov.*: `cred.*` jobs' Jobs-tab Env column stopped showing a
+    synthetic "Credentials" label and now shows the real environment name, like
+    every non-`pkgs.*` kind always has (the Env *filter* dropdown already used
+    the real name via `list_job_facets()` — only the rendered column lagged).
 - **Cached CPUSE state per server** (`server_state` table, migration v11,
   2026-07-22). The Management tab no longer queries CPUSE state on page load —
   `GET /servers` returns whatever was last detected (version/JHF/agent build/

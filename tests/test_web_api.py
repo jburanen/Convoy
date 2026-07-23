@@ -162,6 +162,38 @@ def _wait_for_job(client: TestClient, job_id: str, timeout: float = 10.0) -> dic
     raise AssertionError(f"job {job_id} did not finish within {timeout}s")
 
 
+def _add_server(client: TestClient, env: str = "default", **body: object) -> dict:
+    """POST a server. Runs as a prov.add/prov.edit job now (see
+    services/prov_ops.py) rather than completing synchronously — waits for it
+    to finish and returns the finished job dict (callers assert its status;
+    validation errors like a bad role or a name collision surface as a
+    *failed* job, not a synchronous 400/409)."""
+    resp = client.post(f"/api/environments/{env}/servers", json=body)
+    assert resp.status_code == 202, resp.text
+    return _wait_for_job(client, resp.json()["id"])
+
+
+def _remove_server(client: TestClient, env: str, name: str) -> dict:
+    """DELETE a server. Runs as a prov.delete job — see _add_server above."""
+    resp = client.delete(f"/api/environments/{env}/servers/{name}")
+    assert resp.status_code == 202, resp.text
+    return _wait_for_job(client, resp.json()["id"])
+
+
+def _add_firewall(client: TestClient, env: str = "default", **body: object) -> dict:
+    """POST a firewall. Runs as a prov.add/prov.edit job — see _add_server."""
+    resp = client.post(f"/api/environments/{env}/firewalls", json=body)
+    assert resp.status_code == 202, resp.text
+    return _wait_for_job(client, resp.json()["id"])
+
+
+def _remove_firewall(client: TestClient, env: str, name: str) -> dict:
+    """DELETE a firewall. Runs as a prov.delete job — see _add_server."""
+    resp = client.delete(f"/api/environments/{env}/firewalls/{name}")
+    assert resp.status_code == 202, resp.text
+    return _wait_for_job(client, resp.json()["id"])
+
+
 # -- basics ----------------------------------------------------------------------
 
 
@@ -317,10 +349,8 @@ def test_set_default_endpoint_switches_the_default(client: TestClient) -> None:
 def test_new_server_gets_the_default_credential(client: TestClient) -> None:
     _put_set(client, name="primary")
     client.post("/api/env/default/credentials/primary/default")
-    client.post(
-        "/api/environments/default/servers",
-        json={"name": "m9", "address": "192.0.2.99", "role": "primary_sms"},
-    )
+    job = _add_server(client, name="m9", address="192.0.2.99", role="primary_sms")
+    assert job["status"] == "succeeded", job["error"]
     servers = {
         s["name"]: s.get("credential_set") for s in client.get("/api/env/default/servers").json()
     }
@@ -359,11 +389,8 @@ def test_create_environment_and_add_server(client: TestClient) -> None:
     # It now shows up in the environment list.
     assert "dmz" in [e["name"] for e in client.get("/api/environments").json()]
 
-    resp = client.post(
-        "/api/environments/dmz/servers",
-        json={"name": "mgmt-dmz", "address": "192.0.2.60", "role": "management"},
-    )
-    assert resp.status_code == 201, resp.text
+    job = _add_server(client, "dmz", name="mgmt-dmz", address="192.0.2.60", role="management")
+    assert job["status"] == "succeeded", job["error"]
     # The new environment is immediately usable operationally (registry rebuilt).
     servers = client.get("/api/env/dmz/servers").json()
     assert [s["name"] for s in servers] == ["mgmt-dmz"]
@@ -383,23 +410,19 @@ def test_invalid_environment_name_is_400(client: TestClient) -> None:
 
 
 def test_add_gateway_role_server_rejected(client: TestClient) -> None:
-    resp = client.post(
-        "/api/environments/default/servers",
-        json={"name": "fw-x", "address": "192.0.2.70", "role": "gateway"},
-    )
-    assert resp.status_code == 400
-    assert "not a management server role" in resp.json()["detail"]
+    # Validation now happens inside the prov.add job (services/prov_ops.py),
+    # so it surfaces as a failed job, not a synchronous 400 (matches cred.*).
+    job = _add_server(client, name="fw-x", address="192.0.2.70", role="gateway")
+    assert job["status"] == "failed"
+    assert "not a management server role" in job["error"]
 
 
 # -- firewalls (distinct from management servers; same CPUSE mechanics) -----------
 
 
 def test_add_list_remove_firewall(client: TestClient) -> None:
-    resp = client.post(
-        "/api/environments/default/firewalls",
-        json={"name": "fw-x", "address": "192.0.2.70", "role": "gateway"},
-    )
-    assert resp.status_code == 201, resp.text
+    job = _add_firewall(client, name="fw-x", address="192.0.2.70", role="gateway")
+    assert job["status"] == "succeeded", job["error"]
 
     editable = client.get("/api/environments/default/firewalls").json()
     assert [f["name"] for f in editable] == ["fw-x"]
@@ -410,48 +433,36 @@ def test_add_list_remove_firewall(client: TestClient) -> None:
     assert [f["name"] for f in action_view] == ["fw-x"]
     assert [s["name"] for s in client.get("/api/env/default/servers").json()] == ["mgmt-01"]
 
-    assert client.delete("/api/environments/default/firewalls/fw-x").status_code == 200
+    del_job = _remove_firewall(client, "default", "fw-x")
+    assert del_job["status"] == "succeeded", del_job["error"]
     assert client.get("/api/environments/default/firewalls").json() == []
 
 
 def test_add_firewall_name_collision_with_server_rejected(client: TestClient) -> None:
-    resp = client.post(
-        "/api/environments/default/firewalls",
-        json={"name": "mgmt-01", "address": "192.0.2.70", "role": "gateway"},
-    )
-    assert resp.status_code == 409, resp.text
-    assert "already used by a management server" in resp.json()["detail"]
+    job = _add_firewall(client, name="mgmt-01", address="192.0.2.70", role="gateway")
+    assert job["status"] == "failed"
+    assert "already used by a management server" in job["error"]
 
 
 def test_add_server_name_collision_with_firewall_rejected(client: TestClient) -> None:
-    client.post(
-        "/api/environments/default/firewalls",
-        json={"name": "fw-y", "address": "192.0.2.71", "role": "gateway"},
-    )
-    resp = client.post(
-        "/api/environments/default/servers",
-        json={"name": "fw-y", "address": "192.0.2.72", "role": "management"},
-    )
-    assert resp.status_code == 409, resp.text
-    assert "already used by a firewall" in resp.json()["detail"]
+    fw_job = _add_firewall(client, name="fw-y", address="192.0.2.71", role="gateway")
+    assert fw_job["status"] == "succeeded", fw_job["error"]
+    job = _add_server(client, name="fw-y", address="192.0.2.72", role="management")
+    assert job["status"] == "failed"
+    assert "already used by a firewall" in job["error"]
 
 
 def test_add_management_role_firewall_rejected(client: TestClient) -> None:
-    resp = client.post(
-        "/api/environments/default/firewalls",
-        json={"name": "fw-z", "address": "192.0.2.73", "role": "management"},
-    )
-    assert resp.status_code == 400
-    assert "not a firewall role" in resp.json()["detail"]
+    job = _add_firewall(client, name="fw-z", address="192.0.2.73", role="management")
+    assert job["status"] == "failed"
+    assert "not a firewall role" in job["error"]
 
 
 def test_firewall_new_gets_default_credential_and_can_be_patched(client: TestClient) -> None:
     _put_set(client, name="primary")
     client.post("/api/env/default/credentials/primary/default")
-    client.post(
-        "/api/environments/default/firewalls",
-        json={"name": "fw-x", "address": "192.0.2.70", "role": "gateway"},
-    )
+    fw_job = _add_firewall(client, name="fw-x", address="192.0.2.70", role="gateway")
+    assert fw_job["status"] == "succeeded", fw_job["error"]
     firewalls = {
         f["name"]: f.get("credential_set") for f in client.get("/api/env/default/firewalls").json()
     }
@@ -466,10 +477,8 @@ def test_firewall_new_gets_default_credential_and_can_be_patched(client: TestCli
 
 def test_delete_environment_and_its_servers(client: TestClient) -> None:
     client.post("/api/environments", json={"name": "temp"})
-    client.post(
-        "/api/environments/temp/servers",
-        json={"name": "m1", "address": "192.0.2.80", "role": "mds"},
-    )
+    job = _add_server(client, "temp", name="m1", address="192.0.2.80", role="mds")
+    assert job["status"] == "succeeded", job["error"]
     assert client.delete("/api/environments/temp").json() == {"deleted": True}
     assert "temp" not in [e["name"] for e in client.get("/api/environments").json()]
     # Env-scoped access to the deleted environment now 404s.
@@ -491,10 +500,8 @@ def test_delete_environment_purges_its_credentials(client: TestClient) -> None:
 def test_rename_environment_moves_servers_and_credentials(client: TestClient) -> None:
     client.post("/api/environments", json={"name": "old name"})
     _enable_storage(client, "old name")
-    client.post(
-        "/api/environments/old name/servers",
-        json={"name": "m1", "address": "192.0.2.85", "role": "management"},
-    )
+    job = _add_server(client, "old name", name="m1", address="192.0.2.85", role="management")
+    assert job["status"] == "succeeded", job["error"]
     _put_set(client, "old name")
 
     resp = client.post("/api/environments/old name/rename", json={"name": "New Name"})
@@ -518,12 +525,14 @@ def test_rename_environment_errors(client: TestClient) -> None:
 
 def test_remove_server(client: TestClient) -> None:
     client.post("/api/environments", json={"name": "e1"})
-    client.post(
-        "/api/environments/e1/servers",
-        json={"name": "m1", "address": "192.0.2.90", "role": "management"},
-    )
-    assert client.delete("/api/environments/e1/servers/m1").json() == {"deleted": True}
+    job = _add_server(client, "e1", name="m1", address="192.0.2.90", role="management")
+    assert job["status"] == "succeeded", job["error"]
+    del_job = _remove_server(client, "e1", "m1")
+    assert del_job["status"] == "succeeded", del_job["error"]
     assert client.get("/api/environments/e1/servers").json() == []
+    # Deleting an already-gone server is a synchronous 404 (pre-submit
+    # existence check in ProvisioningJobService.submit_delete_server) — no job
+    # row is created for an obviously-doomed delete, same as cred.delete.
     assert client.delete("/api/environments/e1/servers/m1").status_code == 404
 
 
@@ -860,11 +869,8 @@ def _disabled_env_with_server(
     client: TestClient, env: str = "dmz", server: str = "mgmt-01"
 ) -> None:
     assert client.post("/api/environments", json={"name": env}).status_code == 201
-    resp = client.post(
-        f"/api/environments/{env}/servers",
-        json={"name": server, "address": "192.0.2.10", "role": "management"},
-    )
-    assert resp.status_code == 201, resp.text
+    job = _add_server(client, env, name=server, address="192.0.2.10", role="management")
+    assert job["status"] == "succeeded", job["error"]
 
 
 def test_storage_disabled_job_requires_inline_credentials(client: TestClient) -> None:
@@ -906,10 +912,8 @@ def test_storage_disabled_env_works_without_master_key(
     with TestClient(app) as c:
         assert c.get("/api/status").json()["credentials_unlocked"] is False
         c.post("/api/environments", json={"name": "dmz"})
-        c.post(
-            "/api/environments/dmz/servers",
-            json={"name": "mgmt-01", "address": "192.0.2.10", "role": "management"},
-        )
+        job = _add_server(c, "dmz", name="mgmt-01", address="192.0.2.10", role="management")
+        assert job["status"] == "succeeded", job["error"]
         resp = c.post("/api/env/dmz/servers/mgmt-01/state", json={"credentials": _SSH_CREDS})
         assert resp.status_code == 200, resp.text
         assert resp.json()["agent_build"] == DA_BUILD

@@ -20,6 +20,19 @@ history over branch/PR overhead. Stated 2026-07-20 after merging `feat/ldap-auth
 - Deploying still means merging/pushing to `main` then running the deploy over SSH
   ([[test-host-deploy]]) — the host pulls `main`.
 
+## Explicit-ask means THIS batch, not "earlier in the session"
+Stated 2026-07-23 after committing+pushing a UI-only batch (firewalls-table column
+changes) without a fresh ask — the operator had said "commit push deploy" for the
+*previous* batch that same session, and I carried that as standing permission into
+the next one. Wrong: each batch needs its own explicit go-ahead. Doing finished work
+and then asking "commit push deploy?" is correct; inferring it from a prior request
+in the same conversation is not — even a few turns later, even in the same session.
+**How to apply:** finish the requested change, verify it, then stop and report —
+don't run `git commit`/`git push` until the operator's *current* message actually
+asks for it. Deploys are already separately gated as "only when asked"
+([[test-host-deploy]]); this tightens the commit/push half to match — one
+explicit ask, one batch, no carry-over.
+
 ## Bump the version every batch
 Keep `__version__` in `src/chkp_cpuse_orch/__init__.py` (the single source of truth —
 `pyproject` reads it dynamically) moving forward as we go. **Include the bump in the
