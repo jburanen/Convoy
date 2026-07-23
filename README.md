@@ -104,7 +104,7 @@ ruff check . && ruff format .
 mypy src
 ```
 
-### Safety model
+## Safety model
 
 This tool has the capability to alter or negatively impact your management servers 
 and firewalls, therefore there are project guidelines designed to limit your risk.
