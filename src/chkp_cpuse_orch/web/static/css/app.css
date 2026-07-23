@@ -363,6 +363,10 @@ tr.job-install-log-row td { padding-top: 0; padding-bottom: 0.5rem; }
   max-height: 16rem;
   overflow: auto;
   white-space: pre-wrap;
+  /* pre-wrap only breaks at whitespace — CPUSE's own log lines are full of
+     long, unbroken filesystem paths, which otherwise spill past the panel's
+     right edge instead of wrapping. */
+  overflow-wrap: anywhere;
 }
 
 /* Jobs tab: "Show N jobs" limit control, in the panel header row (see
@@ -743,6 +747,7 @@ tr.srv-state-row td { padding-top: 0; }
   max-height: 16rem;
   overflow: auto;
   white-space: pre-wrap;
+  overflow-wrap: anywhere; /* long unbroken paths in job messages — see .job-install-log */
 }
 
 /* ---- credential-set form (stacked login-set fields) ---- */

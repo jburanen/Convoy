@@ -196,7 +196,7 @@ until v1.
 - CPUSE: Indicate on each server if a job is currently running by replacing the check box with an icon, block new jobs until complete
 - CPUSE: Add muted explanatory text at top of firewalls panel to talk about how direct patching is mostly for management servers and small numbers of gateways. gateways can also be patched from SmartConsole and Web SmartConsole (generate a link). Large numbers of gateways can be patched with the CDT tab (future).
 - Jobs: Add syslog output configuration ⏫
-- Jobs: Fix overflow of install log display and add a download button
+- Jobs: Add a download button for the install log
 
 ## Disclaimer
 
