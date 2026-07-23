@@ -285,6 +285,7 @@ async function selectEnvironment(name) {
   renderCdtCandidates();
   document.getElementById("cdt-status").textContent = "";
   await Promise.all([loadServers(), loadPackages(), loadCredentialSets(), refreshStatus()]);
+  updateProvisionCollapse();
 }
 
 document.getElementById("env-picker").addEventListener("change", async (ev) => {
@@ -1870,6 +1871,19 @@ async function loadCredentialSets() {
   }
 }
 
+// Sets the Bootstrap panel's default open/closed state for the current
+// environment: collapsed once there's nothing left to set up (storage
+// disabled, or storage enabled with a default credential set already
+// picked), left open otherwise since bootstrapping is likely still needed.
+// Called once per environment load/switch — never on every credential-set
+// refresh, so it doesn't yank the panel shut/open out from under an
+// operator who's actively working in it.
+function updateProvisionCollapse() {
+  const hasDefault = credentialSets.some((s) => s.is_default);
+  const collapse = !storageEnabled() || hasDefault;
+  document.getElementById("provision-details").open = !collapse;
+}
+
 // Whether the credential modal is editing an existing set (vs. adding a new one).
 // In edit mode, blank secret fields keep the set's current value (backend merges).
 let credEditMode = false;
@@ -2289,6 +2303,7 @@ async function pollJobs() {
   const envs = await loadEnvironments(); // must resolve currentEnv before env-scoped loads
   await refreshStatus();
   await Promise.all([loadServers(), loadPackages(), loadCredentialSets(), loadJobs()]);
+  updateProvisionCollapse();
   pollJobs();
   await maybeShowWelcome(envs);
 })();

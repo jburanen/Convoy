@@ -161,6 +161,7 @@ CLAUDE.md         project instructions
 - Jobs: add syslog output
 - Packages: only display SHA1 hash, sha256 is not needed
 - Packages: add ability to upload a stored package to the smartconsole packages repo using mgmt api
+- Provisioning: filter role picker based on whether environment is labeled as MDS or not
 
 ## Disclaimer
 

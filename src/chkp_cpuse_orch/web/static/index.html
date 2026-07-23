@@ -85,59 +85,70 @@
   <div class="tab-panel" id="tab-provisioning">
 
     <section id="provision">
-      <div class="section-head">
-        <h2>Bootstrap initial management access</h2>
-        <button type="submit" form="provision-form" id="prov-generate" class="small">Generate commands</button>
-      </div>
-      <p class="hint">
-        Generates clish commands to provision this tool's service account on 
-        management servers. These credentials are saved to the <strong>Credentials</strong>
-        table below automatically; edit that entry to add the API key once you generate one.
-      </p>
-      <form id="provision-form">
-        <div class="field-grid">
-          <label for="prov-cred-name">Credential name</label>
-          <label for="prov-username">Username</label>
-          <label for="prov-password">Password</label>
-          <label for="prov-uid">UID</label>
-          <input type="text" id="prov-cred-name" placeholder="e.g. primary-admin">
-          <input type="text" id="prov-username" placeholder="e.g. svc-patch" required>
-          <input type="password" id="prov-password" placeholder="8+ characters" required>
-          <input type="number" id="prov-uid" value="0" min="0" max="65000" title="Defaults to 0, matching built-in adminRole accounts">
+      <!-- Collapsed by default once there's nothing left to set up: storage
+           disabled (no default set makes sense), or storage enabled AND a
+           default credential set already exists. Left open when storage is
+           enabled but there's no default yet, since bootstrapping is likely
+           still needed. Computed once per environment load/switch by
+           updateProvisionCollapse() in app.js, not re-forced on every
+           credential-set refresh, so it never overrides a manual toggle.
+           The Generate commands button lives inside the details body so it
+           hides along with everything else when collapsed. -->
+      <details id="provision-details">
+        <summary><h2>Bootstrap initial management access</h2></summary>
+        <div class="section-head-actions">
+          <button type="submit" form="provision-form" id="prov-generate" class="small">Generate commands</button>
         </div>
-        <label class="prov-api-toggle" title="Emit the expert-mode commands that grant Management API access — required for estate auto-discovery">
-          <input type="checkbox" id="prov-api" checked>
-          Also provision Management API access
-        </label>
-      </form>
-      <!-- Two blocks: each explanatory-notes block sits directly above the output
-           box it describes — clish (SSH/Gaia account) then expert (Management API). -->
-      <div id="prov-clish-notes" class="prov-notes hidden"></div>
-      <div id="prov-clish-wrap" class="output-pane hidden">
-        <div class="output-body">
-          <button type="button" class="copy-icon" data-copy="prov-clish-output" title="Copy to clipboard" aria-label="Copy to clipboard">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-            </svg>
-          </button>
-          <pre id="prov-clish-output" class="job-events mono"></pre>
+        <p class="hint">
+          Generates clish commands to provision this tool's service account on
+          management servers. These credentials are saved to the <strong>Credentials</strong>
+          table below automatically; edit that entry to add the API key once you generate one.
+        </p>
+        <form id="provision-form">
+          <div class="field-grid">
+            <label for="prov-cred-name">Credential name</label>
+            <label for="prov-username">Username</label>
+            <label for="prov-password">Password</label>
+            <label for="prov-uid">UID</label>
+            <input type="text" id="prov-cred-name" placeholder="e.g. primary-admin">
+            <input type="text" id="prov-username" placeholder="e.g. svc-patch" required>
+            <input type="password" id="prov-password" placeholder="8+ characters" required>
+            <input type="number" id="prov-uid" value="0" min="0" max="65000" title="Defaults to 0, matching built-in adminRole accounts">
+          </div>
+          <label class="prov-api-toggle" title="Emit the expert-mode commands that grant Management API access — required for estate auto-discovery">
+            <input type="checkbox" id="prov-api" checked>
+            Also provision Management API access
+          </label>
+        </form>
+        <!-- Two blocks: each explanatory-notes block sits directly above the output
+             box it describes — clish (SSH/Gaia account) then expert (Management API). -->
+        <div id="prov-clish-notes" class="prov-notes hidden"></div>
+        <div id="prov-clish-wrap" class="output-pane hidden">
+          <div class="output-body">
+            <button type="button" class="copy-icon" data-copy="prov-clish-output" title="Copy to clipboard" aria-label="Copy to clipboard">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+            </button>
+            <pre id="prov-clish-output" class="job-events mono"></pre>
+          </div>
         </div>
-      </div>
-      <div id="prov-expert-notes" class="prov-notes hidden"></div>
-      <div id="prov-expert-wrap" class="output-pane hidden">
-        <div class="output-body">
-          <button type="button" class="copy-icon" data-copy="prov-expert-output" title="Copy to clipboard" aria-label="Copy to clipboard">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-            </svg>
-          </button>
-          <pre id="prov-expert-output" class="job-events mono"></pre>
+        <div id="prov-expert-notes" class="prov-notes hidden"></div>
+        <div id="prov-expert-wrap" class="output-pane hidden">
+          <div class="output-body">
+            <button type="button" class="copy-icon" data-copy="prov-expert-output" title="Copy to clipboard" aria-label="Copy to clipboard">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+            </button>
+            <pre id="prov-expert-output" class="job-events mono"></pre>
+          </div>
         </div>
-      </div>
-      <!-- Saved-credential status: sits at the bottom, below both output boxes. -->
-      <div id="prov-cred-status" class="prov-notes hidden"></div>
+        <!-- Saved-credential status: sits at the bottom, below both output boxes. -->
+        <div id="prov-cred-status" class="prov-notes hidden"></div>
+      </details>
     </section>
 
     <section id="credentials">

@@ -240,6 +240,14 @@ section h2 { margin: 0 0 0.75rem; font-size: 1.15rem; }
    left to right) instead of spreading them out via the row's space-between. */
 .section-head-actions { display: flex; align-items: center; gap: 0.5rem; }
 
+/* Collapsible panel whose <summary> IS the section header (see #provision) —
+   same visual weight as a plain section h2, just clickable. Its own action
+   button/hint/form live in the details body, so they hide along with
+   everything else when collapsed. */
+#provision > summary { cursor: pointer; margin-bottom: 0.75rem; }
+#provision > summary h2 { display: inline; margin: 0; }
+#provision .section-head-actions { margin-bottom: 0.75rem; }
+
 /* ---- tables ---- */
 table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
 th, td {
