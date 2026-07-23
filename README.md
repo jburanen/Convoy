@@ -20,23 +20,23 @@ to provide that orchestration layer for specific scenarios.
 
 ### Supported
 You can patch these management servers and gateway deployments:
-- On-Premise Smart Center (SMS)
-- On-Premise Multi-Domain Management (MDM/MDSM)
-- Gaia gateways and ClusterXL managed by above on-prem environments
-- Spark gateways and clusters managed by above on-prem environments
+✅ On-Premise Smart Center (SMS) servers
+✅ On-Premise Multi-Domain Management (MDM/MDSM) servers
+✅ Gaia gateways and ClusterXL managed by above on-prem environments
+✅ Spark gateways and clusters managed by above on-prem environments
 
 ### NOT Supported
 This tool does NOT support patching of these scenarios:
-- Smart-1 Cloud Management (this platform is patched by Check Point)
-- Spark Management Portal (this platform is patched by Check Point)
-- Gaia Standalone (self-managed) deployments
-- Gateways defined as dynamic IP (DAIP)
+❌ Smart-1 Cloud Management (this platform is patched by Check Point)
+❌ Spark Management Portal (this platform is patched by Check Point)
+❌ Gaia Standalone (self-managed) deployments
+❌ Gateways defined as dynamic IP (DAIP)
 
 This tool does not CURRENTLY support but may one day support:
-- Self-managed Spark
-- Self-managed Spark clusters
-- Maestro
-- ElasticXL
+⏳ Self-managed Spark
+⏳ Self-managed Spark clusters
+⏳ Maestro
+⏳ ElasticXL
 
 ## What it does
 
@@ -128,7 +128,7 @@ code security review by an independent agentic analyst prior to release publicat
 Cluster/health pre-gating (`checks.py`) is the next safety layer to wire in. See
 [.claude/memory/safety-constraints.md](.claude/memory/safety-constraints.md).
 
-## Security & public-repo hygiene
+### Security & public-repo hygiene
 
 This repo is **public**. Only `*.example.*` templates with placeholder values are
 tracked. Real inventories, CDT plans, keys, `.env`, the `data/` volume, logs, and run
@@ -153,44 +153,45 @@ implemented and unit-tested. Caveats:
 ### Milestones to reach v1 / Initial Release
 These gates will define the major version releases - the milestones may change in the
 future but they will remain documented here. A milestone is not marked complete until 
-it is tested and confirmed by a human.
+it is tested and confirmed by a human. There will not be a packaged release until v1.
 
-- [x] Implement ldap authentication
-- [ ] Implement local TLS support
-- [ ] Test Nginx/NPM support
-- [ ] SMS/Smart Center environment discovery and patching
-- [x] MDS/Multi-Domain environment discovery and patching
-- [ ] Gaia/Force Gateway patching
-- [ ] Gaia/Force ClusterXL patching
-- [ ] Spark patching
-- [ ] Spark cluster patching
-- [ ] Packaged deployment release that doesn't require clone and --build
+✅ Implement ldap authentication
+◻️ Implement local TLS support
+◻️ Test Nginx/NPM support
+◻️ SMS/Smart Center environment discovery and patching
+✅ MDS/Multi-Domain environment discovery and patching
+◻️ Gaia/Force Gateway patching
+◻️ Gaia/Force ClusterXL patching
+◻️ Spark patching
+◻️ Spark cluster patching
+◻️ Packaged deployment release that doesn't require clone and --build
+◻️ Independent agentic code security review
 
 ### Milestones to reach v2
 
-- [ ] CDT deployment to Gaia/Force gateways
-- [ ] CDT deployment to Gaia/Force ClusterXL
+◻️ CDT deployment to Gaia/Force gateways
+◻️ CDT deployment to Gaia/Force ClusterXL
 
 ### Roadmap / Punch List
 
-- CPUSE: should multiple CPUSE jobs (with different tarets) be permitted to run concurrently?
-- CPUSE: Add concept of direct patching for gateways as well with a separate panel from mgmt servers
-- CPUSE: Gateways to direct patch should be added by admin on the CPUSE tab with a similar UI to adding mgmt servers on the provisioning tab. Management servers should be inherited from Prov tab
+- Provisioning: Treat credential management actions as jobs and track with prov. prefix
+- Provisioning: Treat server discovery and connection actions as jobs and track with prov. prefix
+- Provisioning: Filter role picker based on whether environment is labeled as MDS or not
+- Packages: Investigate if we can extract and display meta data like compatible major version from the package file
+- Packages: Treat uploads/deletions as a job and log them on the jobs tab with pkgs. prefix
+- Packages: When unchecking the keep box, set the retention timer to the configured duration beginning at time of action
+- Packages: Only display SHA1 hash, sha256 is not needed
+- Packages: Add ability to upload a stored package to the smartconsole packages repo using mgmt api [major]
+- CPUSE: Should multiple CPUSE jobs (with different tarets) be permitted to run concurrently?
+- CPUSE: Add concept of direct patching for gateways with a separate panel from mgmt servers [major]
+- CPUSE: Gateways to direct patch should be added by admin on the CPUSE tab with a similar UI to 
+  adding mgmt servers on the provisioning tab - management servers should be inherited from Provisioning tab
 - CPUSE: Add ability to edit existing direct patching targets
-- CPUSE: Add deployment agent upgrade option
-- CPUSE: check available disk space before copying file
-- CPUSE: indicate on each server if a job is currently running by replacing the check box with an icon, block new jobs until complete
-- CPUSE: add muted explanatory text at top of firewalls panel to talk about how direct patching is mostly for management servers and small numbers of gateways. gateways can also be patched from SmartConsole and Web SmartConsole (generate a link). Large numbers of gateways can be patched with the CDT tab (future).
-- Packages: can I extract and display meta data like compatible major version from the package file?
-- Packages: treat uploads/deletions as a job and log them on the jobs tab with pkgs prefix
-- Packages: if I uncheck the keep box, reset the retention timer to the configured duration beginning when I uncheck the box
-- Provisioning: treat credential management actions as jobs and track with prov prefix
-- Provisioning: treat server discovery and connection actions as jobs and track with prov prefix
-- Jobs: fix column width resizing
-- Jobs: add syslog output
-- Packages: only display SHA1 hash, sha256 is not needed
-- Packages: add ability to upload a stored package to the smartconsole packages repo using mgmt api
-- Provisioning: filter role picker based on whether environment is labeled as MDS or not
+- CPUSE: Add deployment agent upgrade option [major]
+ - CPUSE: Check available disk space before copying file
+- CPUSE: Indicate on each server if a job is currently running by replacing the check box with an icon, block new jobs until complete
+- CPUSE: Add muted explanatory text at top of firewalls panel to talk about how direct patching is mostly for management servers and small numbers of gateways. gateways can also be patched from SmartConsole and Web SmartConsole (generate a link). Large numbers of gateways can be patched with the CDT tab (future).
+- Jobs: Add syslog output configuration [major]
 
 ## Disclaimer
 
