@@ -154,24 +154,24 @@ future but they will remain documented here. A milestone is not marked complete 
 it is tested and confirmed working by a human. There will not be a packaged release 
 until v1.
 
-✅ Implement ldap authentication
-◻️ Implement local TLS support
-✅ Test Nginx/NPM support
-◻️ Test SMS/Smart Center environment discovery and patching
-✅ Test MDS/Multi-Domain environment discovery and patching
-◻️ Gaia/Force Gateway patching via CPUSE
-◻️ Gaia/Force ClusterXL patching via CPUSE
-◻️ Spark patching
-◻️ Spark cluster patching
-◻️ Packaged deployment release that doesn't require clone and --build
-◻️ Independent agentic code security review
+- ✅ Implement ldap authentication
+- ◻️ Implement local TLS support
+- ✅ Test Nginx/NPM support
+- ◻️ Test SMS/Smart Center environment discovery and patching
+- ✅ Test MDS/Multi-Domain environment discovery and patching
+- ◻️ Gaia/Force Gateway patching via CPUSE
+- ◻️ Gaia/Force ClusterXL patching via CPUSE
+- ◻️ Spark patching
+- ◻️ Spark cluster patching
+- ◻️ Packaged deployment release that doesn't require clone and --build
+- ◻️ Independent agentic code security review
 
 ### Milestones to reach v2
 
-◻️ CDT deployment to Gaia/Force gateways
-◻️ CDT deployment to Gaia/Force ClusterXL
+- ◻️ CDT deployment to Gaia/Force gateways
+- ◻️ CDT deployment to Gaia/Force ClusterXL
 
-### Roadmap / Punch List (major items labled as ⏫)
+### Roadmap / Punch List (major items labeled as ⏫)
 
 - All: Add .env var to hide the hint text under the tabs
 - All: Add logic to display a warning on mobile devices that the UI of this tool does not scale down
