@@ -26,7 +26,7 @@ You can patch these management servers and gateway deployments:
 ✅ Spark gateways and clusters managed by above on-prem environments  
 
 ### NOT Supported
-This tool does NOT support patching of these scenarios:  
+By design, this tool does NOT support patching of these scenarios:  
 ❌ Smart-1 Cloud Management (this platform is patched by Check Point)  
 ❌ Spark Management Portal (this platform is patched by Check Point)  
 ❌ Gaia Standalone (self-managed) deployments  
@@ -157,12 +157,12 @@ until v1.
 ✅ Implement ldap authentication  
 ◻️ Implement local TLS support  
 ✅ Test Nginx/NPM support  
-◻️ Test SMS/Smart Center environment discovery and patching  
-✅ Test MDS/Multi-Domain environment discovery and patching  
-◻️ Gaia/Force Gateway patching via CPUSE  
-◻️ Gaia/Force ClusterXL patching via CPUSE  
-◻️ Spark patching  
-◻️ Spark cluster patching  
+◻️ Test firewall discovery in SMS/Smart Center environment  
+✅ Test firewall discovery in MDS/Multi-Domain environment  
+✅ Test Gaia/Force Gateway patching via CPUSE  
+◻️ Test Gaia/Force ClusterXL patching via CPUSE  
+◻️ Test Spark patching via CPUSE  
+◻️ Test Spark cluster patching  
 ◻️ Packaged deployment release that doesn't require clone and --build  
 ◻️ Independent agentic code security review  
 
@@ -171,34 +171,30 @@ until v1.
 ◻️ CDT deployment to Gaia/Force gateways  
 ◻️ CDT deployment to Gaia/Force ClusterXL  
 
-### Roadmap / Punch List (major items labeled as ⏫)
+### Roadmap / Punch List
+⏫ Probably a major change, 🤞 Non-blocking nice-to-have, ✨ Cosmetic only
 
-- All: Add .env var to hide the hint text under the tabs
+- All: 🤞 Add .env var to hide the hint text under the tabs  
 - All: Add logic to display a warning on mobile devices that the UI of this tool does not scale down
   well (by design) and you should use it on a larger display - also probably you shoudn't patch your
-  firewalls or management servers from your phone!
-- All: Make a favicon
-- All: Figure out a catchy name for the project
-- All: In all instances where there is a table with a header above a dropdown selector or a pill, 
-  left-align the header text with the content text in the table for visual purposes
+  firewalls or management servers from your phone!  
+- All: Make a favicon  
+- All: Name the project  
+- All: Improve padding of collapsed section headers  
 
-- Provisioning: Treat credential management actions as jobs and track with cred. prefix
-- Provisioning: Treat server discovery and connection actions as jobs and track with prov. prefix
-- Provisioning: Filter role picker based on whether environment is labeled as MDS or not
-- Provisioning: In the collapsed form, make the bootstrap panel have the same whitespace below the header text as above. Treat the space above as correct.
-- Provisioning: Server edit - improve whitespace on edit modal
+- Provisioning: Filter role picker based on whether environment is labeled as MDS or not  
 
-- Packages: Investigate if we can extract and display meta data like compatible major version from the package file
-- Packages: Add ability to upload a stored package to the smartconsole packages repo using mgmt api ⏫
+- Packages: 🤞 Investigate if we can extract and display meta data like compatible major version from the package file  
+- Packages: ⏫ Add ability to upload a stored package to the smartconsole packages repo using mgmt api   
 
-- CPUSE: Add ability to edit existing direct patching firewall targets
-- CPUSE: Add deployment agent upgrade option ⏫
-- CPUSE: Indicate on each server if a job is currently running by replacing the check box with an icon, block new jobs until complete
-- CPUSE: Add muted explanatory text at top of firewalls panel to talk about how direct patching is mostly for management servers and small numbers of gateways. gateways can also be patched from SmartConsole and Web SmartConsole (generate a link). Large numbers of gateways can be patched with the CDT tab (future).
-- CPUSE: If the disk space is below threshold, offer the option to override unless disk space is less than actual pkg size. also provide links to disk space SKs
+- CPUSE: ⏫ Add deployment agent upgrade option   
+- CPUSE: ✨ Make the firewalls import-from-cloud line identical to the servers line  
+- CPUSE: Add muted explanatory text at top of firewalls panel to talk about how direct patching is mostly for management servers and small numbers of gateways. gateways can also be patched from SmartConsole and Web SmartConsole (generate a link). Large numbers of gateways can be patched with the CDT tab (future).  
+- CPUSE: 🤞 If the disk space is below threshold, offer the option to override unless disk space is less than actual pkg size. also provide links to disk space SKs  
+- CPUSE: Consider adding the ability to populate and uninstall installed packages  
 
-- Jobs: Add syslog output configuration ⏫
-- Jobs: Add a download button for the install log
+- Jobs: ⏫ Add syslog output configuration  
+- Jobs: Add a download button for the install log  
 
 ## Disclaimer
 
