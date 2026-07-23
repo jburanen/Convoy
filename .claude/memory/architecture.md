@@ -22,6 +22,7 @@ chkp_cpuse_orch/
     common.py       # HostConnector: inventory+credentials→connected Transport; ClientFactory
     patching.py     # CPUSE-local subsystem: detect/import/install jobs per mgmt server
     cdt_ops.py      # CDT subsystem: stage/generate/candidates-edit/prepare/execute jobs
+    pkgs_ops.py     # Package-action jobs: upload/keep/notkeep/delete (pkgs.* kinds)
   config.py         # Pydantic settings (global tool config, defaults, paths)
   inventory.py      # Pydantic models: Site, ManagementServer, Gateway, Cluster; loader
   credentials.py    # Encrypted-at-rest credential store (key + password; see design)

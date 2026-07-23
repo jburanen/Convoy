@@ -68,7 +68,7 @@
     <div id="tab-guide">
       <p class="tab-guide-item" data-tab="provisioning">Bootstrap initial access to primary management and discover other servers</p>
       <span class="tab-guide-chevron" aria-hidden="true">&rsaquo;</span>
-      <p class="tab-guide-item" data-tab="packages">Upload and manage packages for deployment</p>
+      <p class="tab-guide-item" data-tab="packages">Upload, stage, and manage packages for deployment</p>
       <span class="tab-guide-chevron" aria-hidden="true">&rsaquo;</span>
       <p class="tab-guide-item" data-tab="management">Deploy patches to management and firewalls using CPUSE</p>
       <span class="tab-guide-chevron" aria-hidden="true">&rsaquo;</span>
@@ -360,11 +360,11 @@
         </div>
       </div>
       <p class="hint">
-        Every import/install/CDT action runs as a background job and survives page
-        reloads. Click a row to see its progress log. Running jobs can be cancelled
-        at the next safe point. Jobs older than a year are removed from this list,
-        archived to <span id="job-archive-hint" class="mono">a flat file on the server</span>,
-        and stored there for three additional years.
+        Click a row to see its progress log or view installation logs for completed install
+        jobs. Running jobs can be cancelled at the next safe point. Jobs older than a year
+        are removed from this list, archived to
+        <span id="job-archive-hint" class="mono">a flat file on the server</span>, and stored
+        there for three additional years.
       </p>
       <!-- Multiselect filters, one per column — options are populated from
            /api/jobs/facets (every job that exists, not just the currently

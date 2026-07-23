@@ -136,8 +136,13 @@ _SSH_CREDS = [{"kind": "ssh_password", "username": "admin", "secret": "pw"}]
 
 
 def _upload_package(client: TestClient, name: str = "jhf.tgz", content: bytes = b"x" * 64) -> None:
+    """Upload and block until the pkgs.upload job succeeds, so callers can
+    assume the package exists the moment this returns — uploads run as a
+    background job (see services/pkgs_ops.py), not synchronously."""
     resp = client.post("/api/packages", files={"file": (name, content)})
-    assert resp.status_code == 201, resp.text
+    assert resp.status_code == 202, resp.text
+    job = _wait_for_job(client, resp.json()["id"])
+    assert job["status"] == "succeeded", job["error"]
 
 
 def _wait_for_job(client: TestClient, job_id: str, timeout: float = 10.0) -> dict:
@@ -532,15 +537,25 @@ def test_package_upload_list_delete(client: TestClient) -> None:
     assert listing[0]["filename"] == "jhf.tgz"
     assert listing[0]["size"] == len(b"payload-bytes")
     assert len(listing[0]["sha256"]) == 64
-    assert client.delete("/api/packages/jhf.tgz").json() == {"deleted": True}
+
+    resp = client.delete("/api/packages/jhf.tgz")
+    assert resp.status_code == 202, resp.text
+    job = _wait_for_job(client, resp.json()["id"])
+    assert job["status"] == "succeeded", job["error"]
     assert client.get("/api/packages").json() == []
 
 
 def test_package_conflict_rejected(client: TestClient) -> None:
     _upload_package(client, content=b"original")
+    # The name/content dedupe check only runs once the pkgs.upload job hashes
+    # the staged file, so the conflict surfaces as a failed job, not an
+    # immediate HTTP error (unlike retention/delete, which 404 synchronously
+    # since PackageStore.get() is cheap to check before creating the job).
     resp = client.post("/api/packages", files={"file": ("jhf.tgz", b"different")})
-    assert resp.status_code == 409  # conflict: same name, different content
-    assert "different content" in resp.json()["detail"]
+    assert resp.status_code == 202, resp.text
+    job = _wait_for_job(client, resp.json()["id"])
+    assert job["status"] == "failed"
+    assert "different content" in job["error"]
 
 
 def test_uploaded_package_gets_default_expiry(client: TestClient) -> None:
@@ -552,16 +567,24 @@ def test_uploaded_package_gets_default_expiry(client: TestClient) -> None:
 def test_package_retention_pin_and_unpin(client: TestClient) -> None:
     _upload_package(client)
 
-    pinned = client.post("/api/packages/jhf.tgz/retention", json={"pinned": True})
-    assert pinned.status_code == 200, pinned.text
-    assert pinned.json()["expires_at"] is None  # kept indefinitely
+    resp = client.post("/api/packages/jhf.tgz/retention", json={"pinned": True})
+    assert resp.status_code == 202, resp.text
+    job = _wait_for_job(client, resp.json()["id"])
+    assert job["status"] == "succeeded", job["error"]
+    assert job["kind"] == "pkgs.keep"
+    assert client.get("/api/packages").json()[0]["expires_at"] is None  # kept indefinitely
 
-    unpinned = client.post("/api/packages/jhf.tgz/retention", json={"pinned": False})
-    assert unpinned.status_code == 200, unpinned.text
-    assert unpinned.json()["expires_at"] is not None  # window reapplied
+    resp = client.post("/api/packages/jhf.tgz/retention", json={"pinned": False})
+    assert resp.status_code == 202, resp.text
+    job = _wait_for_job(client, resp.json()["id"])
+    assert job["status"] == "succeeded", job["error"]
+    assert job["kind"] == "pkgs.notkeep"
+    assert client.get("/api/packages").json()[0]["expires_at"] is not None  # window reapplied
 
 
 def test_package_retention_missing_is_404(client: TestClient) -> None:
+    # Still an immediate 404 — submit_retention() checks existence before
+    # creating a job, so an unknown filename never even reaches the runner.
     resp = client.post("/api/packages/ghost.tgz/retention", json={"pinned": True})
     assert resp.status_code == 404
 
@@ -613,9 +636,11 @@ def test_jobs_facets_and_filters(client: TestClient) -> None:
     _wait_for_job(client, cloud_job["id"])
 
     # Facets reflect every job, not just whatever a limited /api/jobs page shows.
+    # _upload_package() also runs a pkgs.upload job (target: the filename), so
+    # these check "at least" rather than an exact set/list.
     facets = client.get("/api/jobs/facets").json()
-    assert set(facets["kinds"]) == {"cpuse.import", "cpuse.import_cloud"}
-    assert facets["targets"] == ["mgmt-01"]
+    assert {"cpuse.import", "cpuse.import_cloud"} <= set(facets["kinds"])
+    assert {"mgmt-01"} <= set(facets["targets"])
     assert facets["environments"] == ["default"]
     assert facets["statuses"] == ["succeeded"]
 

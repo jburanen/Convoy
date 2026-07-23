@@ -144,8 +144,6 @@ implemented and unit-tested. Caveats:
 
 - CPUSE/CDT output parsers are built tolerant but **not yet validated against live
   Gaia hardware** — expect to tune them on first real connection.
-- The web app has **no authentication yet** — run it only on a trusted network
-  (basic-auth + LDAP are planned).
 - The secondary **CLI** does inventory validation and dry-run planning; its
   fleet-`--execute` path and the health-check gating (`checks.py`) are still typed
   stubs.
@@ -153,15 +151,16 @@ implemented and unit-tested. Caveats:
 ### Milestones to reach v1 / Initial Release
 These gates will define the major version releases - the milestones may change in the
 future but they will remain documented here. A milestone is not marked complete until 
-it is tested and confirmed by a human. There will not be a packaged release until v1.
+it is tested and confirmed working by a human. There will not be a packaged release 
+until v1.
 
 ✅ Implement ldap authentication
 ◻️ Implement local TLS support
 ✅ Test Nginx/NPM support
 ◻️ Test SMS/Smart Center environment discovery and patching
 ✅ Test MDS/Multi-Domain environment discovery and patching
-◻️ Gaia/Force Gateway patching
-◻️ Gaia/Force ClusterXL patching
+◻️ Gaia/Force Gateway patching via CPUSE
+◻️ Gaia/Force ClusterXL patching via CPUSE
 ◻️ Spark patching
 ◻️ Spark cluster patching
 ◻️ Packaged deployment release that doesn't require clone and --build
@@ -172,28 +171,27 @@ it is tested and confirmed by a human. There will not be a packaged release unti
 ◻️ CDT deployment to Gaia/Force gateways
 ◻️ CDT deployment to Gaia/Force ClusterXL
 
-### Roadmap / Punch List
+### Roadmap / Punch List (major items labled as ⏫)
 
 - All: Add .env var to hide the hint text under the tabs
 - All: Add logic to display a warning on mobile devices that the UI of this tool does not scale down
-  well (by design) and you should use it on a larger display.
+  well (by design) and you should use it on a larger display - also probably you shoudn't patch your
+  firewalls or management servers from your phone!
 - Provisioning: Treat credential management actions as jobs and track with prov. prefix
 - Provisioning: Treat server discovery and connection actions as jobs and track with prov. prefix
 - Provisioning: Filter role picker based on whether environment is labeled as MDS or not
 - Packages: Investigate if we can extract and display meta data like compatible major version from the package file
-- Packages: Treat uploads/deletions as a job and log them on the jobs tab with pkgs. prefix
 - Packages: When unchecking the keep box, set the retention timer to the configured duration beginning at time of action
-- Packages: Add ability to upload a stored package to the smartconsole packages repo using mgmt api [major]
+- Packages: Add ability to upload a stored package to the smartconsole packages repo using mgmt api ⏫
 - CPUSE: Should multiple CPUSE jobs (with different tarets) be permitted to run concurrently?
-- CPUSE: Add concept of direct patching for gateways with a separate panel from mgmt servers [major]
+- CPUSE: Add concept of direct patching for gateways with a separate panel from mgmt servers ⏫
 - CPUSE: Gateways to direct patch should be added by admin on the CPUSE tab with a similar UI to 
   adding mgmt servers on the provisioning tab - management servers should be inherited from Provisioning tab
 - CPUSE: Add ability to edit existing direct patching targets
-- CPUSE: Add deployment agent upgrade option [major]
- - CPUSE: Check available disk space before copying file
+- CPUSE: Add deployment agent upgrade option ⏫
 - CPUSE: Indicate on each server if a job is currently running by replacing the check box with an icon, block new jobs until complete
 - CPUSE: Add muted explanatory text at top of firewalls panel to talk about how direct patching is mostly for management servers and small numbers of gateways. gateways can also be patched from SmartConsole and Web SmartConsole (generate a link). Large numbers of gateways can be patched with the CDT tab (future).
-- Jobs: Add syslog output configuration [major]
+- Jobs: Add syslog output configuration ⏫
 - Jobs: Fix overflow of install log display and add a download button
 
 ## Disclaimer

@@ -8,14 +8,16 @@ Run: ``uvicorn chkp_cpuse_orch.web.app:app --host 0.0.0.0 --port 8080``.
 
 Startup wiring (lifespan): config → Store → PackageStore → CredentialStore
 (if the master key env is set — otherwise credential/patching endpoints return
-503 and everything else still works) → JobRunner + PatchingService → recover
-orphaned jobs → start the runner loop.
+503 and everything else still works) → JobRunner + PatchingService/CDTService/
+PackageJobService → recover orphaned jobs → start the runner loop.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import shutil
+import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Annotated, Any
@@ -59,6 +61,7 @@ from ..services.common import ClientFactory, EnvironmentRegistry
 from ..services.discovery import DiscoveryService, MgmtClientFactory
 from ..services.environments import EnvironmentManager
 from ..services.patching import PatchingService
+from ..services.pkgs_ops import PackageJobService
 from ..services.provisioning import (
     DEFAULT_UID,
     MGMT_API_NOTES,
@@ -371,6 +374,7 @@ def create_app(
             registry=registry, packages=packages, runner=runner, vault=vault, store=store
         )
         cdt_service = CDTService(registry=registry, packages=packages, runner=runner, vault=vault)
+        pkgs_jobs = PackageJobService(packages=packages, runner=runner)
         discovery = DiscoveryService(registry=registry, mgmt_client_factory=mgmt_client_factory)
 
         app.state.store = store
@@ -383,6 +387,7 @@ def create_app(
         app.state.runner = runner
         app.state.service = service
         app.state.cdt = cdt_service
+        app.state.pkgs_jobs = pkgs_jobs
         app.state.discovery = discovery
 
         interrupted = runner.recover()
@@ -884,40 +889,64 @@ def _register_routes(app: FastAPI) -> None:
             raise _map_error(exc) from exc
 
     # -- packages ------------------------------------------------------------
+    # Upload/keep/unkeep/delete all run as pkgs.* jobs (see services/pkgs_ops.py)
+    # for Jobs-tab visibility and audit history — each returns a JobRecord
+    # (202) rather than the mutated PackageRecord; the UI watches the Jobs tab
+    # (or /api/jobs/{id}) for the outcome instead of getting it synchronously.
+
+    def _pkgs_jobs(request: Request) -> PackageJobService:
+        service: PackageJobService = request.app.state.pkgs_jobs
+        return service
 
     @app.get("/api/packages")
     def list_packages(request: Request) -> list[PackageRecord]:
         packages: PackageStore = request.app.state.packages
         return packages.list()
 
-    @app.post("/api/packages", status_code=201)
-    async def upload_package(file: UploadFile, request: Request) -> PackageRecord:
+    @app.post("/api/packages", status_code=202)
+    async def upload_package(file: UploadFile, request: Request) -> JobRecord:
         packages: PackageStore = request.app.state.packages
         if not file.filename:
             raise HTTPException(status_code=400, detail="upload is missing a filename")
-        try:
-            # Streamed to disk while hashing — never buffered in memory.
-            return await asyncio.to_thread(packages.add_stream, file.filename, file.file)
-        except OrchestratorError as exc:
-            raise _map_error(exc) from exc
+        # Stage to a stable path inside the package directory first — the
+        # upload's bytes only exist for the lifetime of this request (Starlette
+        # tears down its spooled temp file once the response is sent), so the
+        # slow part (packages.add_stream: hash, dedupe, move into place) is
+        # deferred to the pkgs.upload job using this copy instead, which
+        # survives past the request. Cleaned up here if anything goes wrong
+        # before the job takes ownership of it; the job cleans it up itself
+        # once it does (see PackageJobService._do_upload).
+        staged_path = packages.directory / f".upload-{uuid.uuid4().hex}"
 
-    @app.post("/api/packages/{filename}/retention")
+        def _stage() -> None:
+            with staged_path.open("wb") as out:
+                shutil.copyfileobj(file.file, out)
+
+        try:
+            await asyncio.to_thread(_stage)
+            return _pkgs_jobs(request).submit_upload(file.filename, staged_path)
+        except OrchestratorError as exc:
+            staged_path.unlink(missing_ok=True)
+            raise _map_error(exc) from exc
+        except Exception:
+            staged_path.unlink(missing_ok=True)
+            raise
+
+    @app.post("/api/packages/{filename}/retention", status_code=202)
     def set_package_retention(
         filename: str, body: RetentionRequest, request: Request
-    ) -> PackageRecord:
+    ) -> JobRecord:
         """Pin a package to keep it indefinitely, or un-pin it so the retention
-        window applies again."""
-        packages: PackageStore = request.app.state.packages
+        window applies again — runs as a pkgs.keep/pkgs.notkeep job."""
         try:
-            return packages.set_pinned(filename, body.pinned)
+            return _pkgs_jobs(request).submit_retention(filename, body.pinned)
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
-    @app.delete("/api/packages/{filename}")
-    def delete_package(filename: str, request: Request) -> dict[str, bool]:
-        packages: PackageStore = request.app.state.packages
+    @app.delete("/api/packages/{filename}", status_code=202)
+    def delete_package(filename: str, request: Request) -> JobRecord:
         try:
-            return {"deleted": packages.delete(filename)}
+            return _pkgs_jobs(request).submit_delete(filename)
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 

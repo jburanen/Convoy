@@ -1738,29 +1738,39 @@ async function loadPackages() {
       expiry.classList.toggle("warn", soon);
     };
     renderRetention(pkg);
+    // Retention now runs as a pkgs.keep/pkgs.notkeep job (services/pkgs_ops.py)
+    // rather than completing synchronously, so this only reflects whether the
+    // job started — same model as every other job-backed action in this app
+    // (e.g. installPackage below never waits for the install job itself
+    // either). A submit failure reverts the optimistic toggle immediately;
+    // the job's own outcome shows up on the Jobs tab, and PKGS_JOB_KINDS in
+    // pollJobs() reloads this table once it finishes either way.
     pin.addEventListener("change", async () => {
       pin.disabled = true;
       try {
-        const updated = await api(`/api/packages/${encodeURIComponent(pkg.filename)}/retention`, {
+        const job = await api(`/api/packages/${encodeURIComponent(pkg.filename)}/retention`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ pinned: pin.checked }),
         });
-        renderRetention(updated);
+        lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if it finishes fast
+        await loadJobs();
       } catch (e) {
-        pin.checked = !pin.checked; // revert the optimistic toggle
-        toast("Could not update retention: " + e.message);
+        pin.checked = !pin.checked; // revert the optimistic toggle — the job never even started
+        toast("Could not start retention update: " + e.message);
       } finally {
         pin.disabled = false;
       }
     });
 
+    // Delete likewise now runs as a pkgs.delete job — see the comment above.
     row.querySelector(".btn-delete").addEventListener("click", async () => {
       if (!confirm(`Delete package ${pkg.filename}?`)) return;
       try {
-        await api(`/api/packages/${encodeURIComponent(pkg.filename)}`, { method: "DELETE" });
-        await Promise.all([loadPackages(), loadServers(), refreshStatus()]);
-      } catch (e) { toast("Delete failed: " + e.message); }
+        const job = await api(`/api/packages/${encodeURIComponent(pkg.filename)}`, { method: "DELETE" });
+        lastJobStatus.set(job.id, job.status);
+        await loadJobs();
+      } catch (e) { toast("Delete failed to start: " + e.message); }
     });
     tbody.appendChild(row);
     tbody.appendChild(sha1Row);
@@ -1768,7 +1778,12 @@ async function loadPackages() {
   await populateCdtSelectors(); // keep the CDT dropdowns in sync with packages/servers
 }
 
-// Shared upload path for the form and drag & drop.
+// Shared upload path for the form and drag & drop. The multipart body itself
+// is still sent synchronously (inherent to HTTP — the browser is actively
+// streaming it during this request), but the server only stages it here; the
+// slow part (hash, dedupe, store) runs as a pkgs.upload job, so "done" below
+// means "queued", not "stored" — see the retention/delete comment above and
+// services/pkgs_ops.py's module docstring for why upload needs the staging step.
 async function uploadPackageFile(file) {
   const progress = document.getElementById("upload-progress");
   const btn = document.getElementById("upload-btn");
@@ -1777,12 +1792,13 @@ async function uploadPackageFile(file) {
   btn.disabled = true;
   progress.textContent = `uploading ${file.name}… (large packages take a while)`;
   try {
-    await api("/api/packages", { method: "POST", body: form });
-    progress.textContent = `${file.name}: done`;
-    await Promise.all([loadPackages(), loadServers(), refreshStatus()]);
+    const job = await api("/api/packages", { method: "POST", body: form });
+    lastJobStatus.set(job.id, job.status);
+    progress.textContent = `${file.name}: queued — see the Jobs tab for progress`;
+    await loadJobs();
   } catch (e) {
     progress.textContent = "";
-    toast(`Upload of ${file.name} failed: ` + e.message);
+    toast(`Upload of ${file.name} failed to start: ` + e.message);
   } finally {
     btn.disabled = false;
   }
@@ -1983,6 +1999,12 @@ const openJobLogs = new Set(); // job ids whose progress log is expanded
 // show up after a manual reload/tab switch, since nothing else re-fetches
 // #servers-table on a timer.
 const IMPORT_JOB_KINDS = ["cpuse.import", "cpuse.import_cloud"];
+// Same idea for package actions (see services/pkgs_ops.py) — upload/keep/
+// unkeep/delete all run as jobs now, so the Packages tab needs the same
+// terminal-transition-triggers-a-reload treatment as the Management tab gets
+// for imports, otherwise a package's new retention/existence state only
+// shows up after a manual reload.
+const PKGS_JOB_KINDS = ["pkgs.upload", "pkgs.keep", "pkgs.notkeep", "pkgs.delete"];
 const lastJobStatus = new Map();
 const TERMINAL_JOB_STATUSES = ["succeeded", "failed", "cancelled", "interrupted"];
 
@@ -2289,17 +2311,16 @@ async function pollJobs() {
 
     // An import job's last step (services/patching.py) refreshes and caches
     // that server's detected state — reload the Management tab the moment
-    // one finishes so the operator sees it without a manual reload.
+    // one finishes so the operator sees it without a manual reload. Same idea
+    // for pkgs.* jobs and the Packages tab.
     let reloadServers = false;
+    let reloadPackages = false;
     for (const job of jobs) {
       const prev = lastJobStatus.get(job.id);
-      if (
-        IMPORT_JOB_KINDS.includes(job.kind) &&
-        (prev === "pending" || prev === "running") &&
-        TERMINAL_JOB_STATUSES.includes(job.status)
-      ) {
-        reloadServers = true;
-      }
+      const justFinished =
+        (prev === "pending" || prev === "running") && TERMINAL_JOB_STATUSES.includes(job.status);
+      if (justFinished && IMPORT_JOB_KINDS.includes(job.kind)) reloadServers = true;
+      if (justFinished && PKGS_JOB_KINDS.includes(job.kind)) reloadPackages = true;
       lastJobStatus.set(job.id, job.status);
     }
     const currentIds = new Set(jobs.map((j) => j.id));
@@ -2308,6 +2329,7 @@ async function pollJobs() {
     const active = jobs.some((j) => j.status === "pending" || j.status === "running");
     if (active || openJobLogs.size) await loadJobs();
     if (reloadServers) await loadServers();
+    if (reloadPackages) await loadPackages();
   } catch { /* transient — next tick will retry */ }
   setTimeout(pollJobs, 2500);
 }

@@ -141,6 +141,30 @@ environment RBAC** — environments are DB rows partly for that reason.
   web click enqueues a persisted **Job** with a state machine
   (staged → imported → installed → reboot → verified) and live status (SSE/WebSocket,
   poll fallback). Jobs survive page refresh and container restart.
+  - **Package actions are jobs too** (`pkgs.upload`/`pkgs.keep`/`pkgs.notkeep`/
+    `pkgs.delete` — `services/pkgs_ops.py`, `PackageJobService`; operator-directed,
+    2026-07-23). Unlike CPUSE/CDT jobs these are local disk+DB ops with no SSH
+    host/credentials, so they're submitted straight via `JobRunner.submit()`, not
+    `submit_host_job`; `target` is the package filename. Keep/unkeep get *separate*
+    kinds (not one `pkgs.retention` with a bool param) so the Jobs tab's Kind
+    filter distinguishes them. **Upload's wrinkle**: the file's bytes only exist
+    for the HTTP request's lifetime (Starlette tears down its spooled temp file
+    once the response is sent), so a background job can't consume the `UploadFile`
+    directly — the route first stages the upload to a stable path inside the
+    package directory (a cheap disk copy, no hashing, still synchronous — inherent
+    to HTTP, can't be deferred), *then* submits the job; the job handler does the
+    real work (hash, dedupe, move into place) via `PackageStore.add_stream` and
+    removes the staging file when done (success or failure). One consequence:
+    the "same name, different content" conflict, previously an immediate 409, is
+    now a **deferred job failure** (only detectable once the job hashes the
+    staged file) — matches how CPUSE errors already surface. Retention/delete
+    still 404 synchronously (`PackageStore.get()` is cheap to check before
+    creating a job). Frontend: `PKGS_JOB_KINDS` in `pollJobs()` (mirrors
+    `IMPORT_JOB_KINDS`) reloads the Packages tab on any pkgs.* job's terminal
+    transition; the three call sites (upload form/drag-drop, the Keep checkbox,
+    Delete) only react to *submit* failure now (revert/toast), same as every
+    other job-backed action in the app (e.g. `installPackage` never waits for
+    its own job either) — the job's actual outcome is Jobs-tab-only.
 - **Cached CPUSE state per server** (`server_state` table, migration v11,
   2026-07-22). The Management tab no longer queries CPUSE state on page load —
   `GET /servers` returns whatever was last detected (version/JHF/agent build/
@@ -166,8 +190,9 @@ environment RBAC** — environments are DB rows partly for that reason.
     progress log, and any captured install-log text — out of the DB as one
     JSON line per job appended to `cfg.paths.job_archive_path` (default
     `state/job_archive.log`, alongside the DB on `/data`), then deletes them
-    (events cascade). The archive file is kept under 50MB by dropping the
-    *oldest* lines once a sweep would push it over, so it never grows
+    (events cascade). The archive file keeps a **3-year retention window**
+    (age-based, by each entry's `created_at` — not a byte-size cap): every
+    append also prunes archive entries older than 3 years, so it never grows
     unbounded even across years of operation. Not browsable in the web UI —
     the Jobs tab hint just names the path (`GET /api/status` →
     `job_archive_path`) so an operator knows where to look.
