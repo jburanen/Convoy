@@ -3094,7 +3094,11 @@ async function pollJobs() {
     // A prov.* job (add/edit/delete) could be either a server or a firewall —
     // the kind alone doesn't say which (see PROV_JOB_KINDS) — so just reload
     // both; cheap, and simpler than threading an entity hint through the poll.
-    if (reloadProv) await Promise.all([loadServers(), loadFirewalls()]);
+    // loadServers() itself reloads firewalls at its end (see its last line) —
+    // calling loadFirewalls() again here in parallel raced it: both cleared
+    // the firewalls tbody and then both appended their own rows on top,
+    // doubling every row (operator-reported, 2026-07-23).
+    if (reloadProv) await loadServers();
   } catch { /* transient — next tick will retry */ }
   setTimeout(pollJobs, 2500);
 }
