@@ -62,6 +62,7 @@ import shlex
 import time
 from dataclasses import dataclass, field
 
+from ..clusterxl import ClusterMemberState
 from ..cpuse import (
     CPUSE,
     DEFAULT_STAGING_DIR,
@@ -131,6 +132,7 @@ class DetectedState:
     host: str
     agent_build: str = ""
     packages: list[PackageState] = field(default_factory=list)
+    cluster: ClusterMemberState | None = None
 
 
 class PatchingService:
@@ -207,13 +209,21 @@ class PatchingService:
             cpuse = CPUSE(client, shell=self._shell)
             agent_build = cpuse.agent_build()
             packages = cpuse.list_packages(PackageScope.ALL)
-            self._cache_state(environment, host.name, agent_build, packages)
-            return DetectedState(host=host.name, agent_build=agent_build, packages=packages)
+            cluster = cpuse.cluster_state()
+            self._cache_state(environment, host.name, agent_build, packages, cluster)
+            return DetectedState(
+                host=host.name, agent_build=agent_build, packages=packages, cluster=cluster
+            )
         finally:
             client.close()
 
     def _cache_state(
-        self, environment: str, host_name: str, agent_build: str, packages: list[PackageState]
+        self,
+        environment: str,
+        host_name: str,
+        agent_build: str,
+        packages: list[PackageState],
+        cluster: ClusterMemberState | None = None,
     ) -> None:
         """Derive the UI's summary (version/JHF, packages ready to install)
         from detected packages and persist it — shared by ``detect()`` (an
@@ -230,6 +240,8 @@ class PatchingService:
                 agent_build=agent_build,
                 checked_at=utcnow(),
                 installable=installable,
+                cluster_role=cluster.role if cluster else None,
+                cluster_name=cluster.cluster_name if cluster else None,
             )
         )
 
@@ -425,7 +437,8 @@ class PatchingService:
         try:
             agent_build = cpuse.agent_build()
             packages = cpuse.list_packages(PackageScope.ALL)
-            self._cache_state(ctx.job.environment, host_name, agent_build, packages)
+            cluster = cpuse.cluster_state()
+            self._cache_state(ctx.job.environment, host_name, agent_build, packages, cluster)
             ctx.log("detected state refreshed")
         except CPUSEError as exc:
             ctx.log(f"could not refresh detected state: {exc}", level="warning")

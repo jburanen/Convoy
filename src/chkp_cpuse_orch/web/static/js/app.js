@@ -1488,14 +1488,33 @@ function formatAgentBuild(raw) {
 function renderStateRow(stateRow, data) {
   const summary = stateRow.querySelector(".srv-summary");
   const checked = stateRow.querySelector(".srv-checked");
+  summary.replaceChildren();
   if (data == null) {
     summary.textContent = "Not yet checked.";
     checked.textContent = "";
     return;
   }
+  // ClusterXL role, when this host is a live cluster member (see
+  // clusterxl.py — cluster_name is a stand-in built from peer hostnames, not
+  // the SmartConsole cluster object name, which Check Point doesn't expose
+  // via CLI on the member itself). Prepended ahead of the CPUSE summary.
+  if (data.cluster_role && data.cluster_name) {
+    const role = data.cluster_role.toUpperCase();
+    const label = role.startsWith("ACTIVE") ? "Active"
+      : role.startsWith("STANDBY") ? "Standby"
+      : data.cluster_role;
+    const cluster = document.createElement("span");
+    cluster.className = role.startsWith("ACTIVE") ? "cluster-active"
+      : role.startsWith("STANDBY") ? "cluster-standby"
+      : "cluster-other";
+    cluster.textContent = `${label} member of ${data.cluster_name}`;
+    summary.appendChild(cluster);
+    summary.appendChild(document.createTextNode(" | "));
+  }
   const agentBuild = formatAgentBuild(data.agent_build);
-  summary.textContent =
-    `Running ${data.version ?? "—"} w/JHF ${data.jhf ?? "—"} | CPUSE Agent `;
+  summary.appendChild(document.createTextNode(
+    `Running ${data.version ?? "—"} w/JHF ${data.jhf ?? "—"} | CPUSE Agent `
+  ));
   // The DA build normally reports "(Agent build is up to date)". Any other
   // status — a newer build available, an error string — warrants the operator's
   // eye, so render that text in orange instead of the normal muted colour.

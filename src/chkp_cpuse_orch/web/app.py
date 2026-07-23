@@ -978,6 +978,8 @@ def _register_routes(app: FastAPI) -> None:
                         "agent_build": cached.agent_build if cached else None,
                         "checked_at": cached.checked_at.isoformat() if cached else None,
                         "installable": cached.installable if cached else [],
+                        "cluster_role": cached.cluster_role if cached else None,
+                        "cluster_name": cached.cluster_name if cached else None,
                     }
                 )
             return result
@@ -1010,6 +1012,8 @@ def _register_routes(app: FastAPI) -> None:
             "jhf": cached.jhf,
             "checked_at": cached.checked_at.isoformat(),
             "installable": cached.installable,
+            "cluster_role": cached.cluster_role,
+            "cluster_name": cached.cluster_name,
             "packages": [
                 {
                     "identifier": p.identifier,
@@ -1092,6 +1096,8 @@ def _register_routes(app: FastAPI) -> None:
                         "agent_build": cached.agent_build if cached else None,
                         "checked_at": cached.checked_at.isoformat() if cached else None,
                         "installable": cached.installable if cached else [],
+                        "cluster_role": cached.cluster_role if cached else None,
+                        "cluster_name": cached.cluster_name if cached else None,
                     }
                 )
             return result
@@ -1118,6 +1124,8 @@ def _register_routes(app: FastAPI) -> None:
             "jhf": cached.jhf,
             "checked_at": cached.checked_at.isoformat(),
             "installable": cached.installable,
+            "cluster_role": cached.cluster_role,
+            "cluster_name": cached.cluster_name,
             "packages": [
                 {
                     "identifier": p.identifier,

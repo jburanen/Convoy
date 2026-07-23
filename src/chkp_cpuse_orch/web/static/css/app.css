@@ -503,6 +503,11 @@ button.link-btn:disabled { opacity: 0.5; text-decoration: none; }
 /* Agent-build status that isn't "up to date" — surfaced in orange (the --warn
    amber) so an out-of-date/abnormal Deployment Agent stands out at a glance. */
 .agent-build-attention { color: var(--warn); font-weight: 600; }
+/* ClusterXL role prefix on a firewall's status line — Active in green (--ok),
+   Standby in orange (--warn), matching the badge/agent-build conventions
+   above; any other live state (DOWN, READY, ...) stays unstyled/muted. */
+.cluster-active { color: var(--ok); font-weight: 600; }
+.cluster-standby { color: var(--warn); font-weight: 600; }
 
 .mono { font-family: var(--mono); font-size: 0.86rem; }
 .muted { color: var(--muted); font-size: 0.85rem; }

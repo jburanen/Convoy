@@ -83,6 +83,25 @@ def test_import_cloud_rejects_suspicious_id() -> None:
         CPUSE(FakeRunner(), shell=GaiaShell.CLISH).import_cloud("id; rm -rf /")
 
 
+def test_cluster_state_parses_local_role() -> None:
+    stdout = (
+        "ID         Unique Address  Assigned Load   State          Name\n"
+        "1 (local)  11.22.33.245    100%            ACTIVE(!)      Member1\n"
+        "2          11.22.33.246    0%              DOWN           Member2\n"
+    )
+    runner = FakeRunner(stdout=stdout)
+    state = CPUSE(runner, shell=GaiaShell.CLISH).cluster_state()
+    assert runner.commands == ["lock database override", "show cluster state"]
+    assert state is not None
+    assert state.is_active
+    assert state.cluster_name == "Member1, Member2"
+
+
+def test_cluster_state_none_when_command_fails() -> None:
+    runner = FakeRunner(exit_status=1, stderr="not a cluster member")
+    assert CPUSE(runner, shell=GaiaShell.CLISH).cluster_state() is None
+
+
 def test_list_packages_uses_scope() -> None:
     runner = FakeRunner(stdout="There are no imported packages")
     CPUSE(runner, shell=GaiaShell.CLISH).list_packages(PackageScope.IMPORTED)

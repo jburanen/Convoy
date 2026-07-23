@@ -18,6 +18,7 @@ import shlex
 from dataclasses import dataclass
 from enum import StrEnum
 
+from .clusterxl import ClusterMemberState, parse_cluster_state
 from .errors import CPUSEError
 from .transport.ssh import CommandResult, CommandRunner
 
@@ -192,6 +193,19 @@ class CPUSE:
         if not result.ok:
             raise CPUSEError(f"failed to read DA build: {_failure_detail(result)}")
         return result.stdout.strip()
+
+    def cluster_state(self) -> ClusterMemberState | None:
+        """`show cluster state` → this member's live ClusterXL role plus a
+        stand-in cluster name (see clusterxl.py for why it isn't the real
+        SmartConsole cluster object name). Best-effort: a standalone gateway
+        either errors or prints no recognizable member table, either way
+        treated as "not a cluster member" rather than raised — this backs a
+        display-only status line, so it should never fail a refresh."""
+        self._override_lock()
+        result = self._clish("show cluster state")
+        if not result.ok:
+            return None
+        return parse_cluster_state(result.stdout)
 
     def _override_lock(self) -> None:
         """`lock database override` — force-release Gaia's config-database

@@ -174,6 +174,11 @@ class ServerStateRow(BaseModel):
     # Identifiers of packages that are imported but not yet installed — the
     # Management tab's Install picker options.
     installable: list[str] = Field(default_factory=list)
+    # Live ClusterXL role (e.g. "ACTIVE(!)", "STANDBY") and a stand-in cluster
+    # name built from peer hostnames — see clusterxl.py. Both None if the host
+    # isn't a cluster member, or hasn't been refreshed since this shipped.
+    cluster_role: str | None = None
+    cluster_name: str | None = None
 
 
 class CredentialSetRow(BaseModel):
@@ -436,6 +441,15 @@ _MIGRATIONS: tuple[str, ...] = (
     # for any environment that doesn't run with authentication on.
     """
     ALTER TABLE jobs ADD COLUMN username TEXT;
+    """,
+    # v18: cache each host's live ClusterXL role alongside its other detected
+    # state (see clusterxl.py) — cluster_name is a stand-in built from peer
+    # hostnames, not the SmartConsole cluster object name (Check Point doesn't
+    # expose that via CLI on the member itself). NULL for both on a host that
+    # isn't a cluster member, or hasn't been refreshed since this shipped.
+    """
+    ALTER TABLE server_state ADD COLUMN cluster_role TEXT;
+    ALTER TABLE server_state ADD COLUMN cluster_name TEXT;
     """,
 )
 
@@ -839,11 +853,13 @@ class Store:
         with self._connect() as conn:
             conn.execute(
                 "INSERT INTO server_state (environment, host, version, jhf, agent_build,"
-                " checked_at, installable) VALUES (?, ?, ?, ?, ?, ?, ?) "
+                " checked_at, installable, cluster_role, cluster_name)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (environment, host) DO UPDATE SET"
                 " version = excluded.version, jhf = excluded.jhf,"
                 " agent_build = excluded.agent_build, checked_at = excluded.checked_at,"
-                " installable = excluded.installable",
+                " installable = excluded.installable, cluster_role = excluded.cluster_role,"
+                " cluster_name = excluded.cluster_name",
                 (
                     rec.environment,
                     rec.host,
@@ -852,6 +868,8 @@ class Store:
                     rec.agent_build,
                     rec.checked_at.isoformat(),
                     json.dumps(rec.installable),
+                    rec.cluster_role,
+                    rec.cluster_name,
                 ),
             )
 
@@ -1258,6 +1276,8 @@ def _server_state_from_row(row: sqlite3.Row) -> ServerStateRow:
         agent_build=row["agent_build"],
         checked_at=datetime.fromisoformat(row["checked_at"]),
         installable=json.loads(row["installable"]),
+        cluster_role=row["cluster_role"],
+        cluster_name=row["cluster_name"],
     )
 
 
