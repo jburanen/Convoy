@@ -182,6 +182,8 @@ until v1.
 - Provisioning: Treat credential management actions as jobs and track with prov. prefix
 - Provisioning: Treat server discovery and connection actions as jobs and track with prov. prefix
 - Provisioning: Filter role picker based on whether environment is labeled as MDS or not
+- Provisioning: In the collapsed form, make the bootstrap panel have the same whitespace below the header 
+  text as above. Treat the space above as correct.
 - Packages: Investigate if we can extract and display meta data like compatible major version from the package file
 - Packages: When unchecking the keep box, set the retention timer to the configured duration beginning at time of action
 - Packages: Add ability to upload a stored package to the smartconsole packages repo using mgmt api ⏫
