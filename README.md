@@ -179,6 +179,8 @@ until v1.
   firewalls or management servers from your phone!
 - All: Make a favicon
 - All: Figure out a catchy name for the project
+- All: In all instances where there is a table with a header above a dropdown selector or a pill, 
+  left-align the header text with the content text in the table for visual purposes
 - Provisioning: Treat credential management actions as jobs and track with prov. prefix
 - Provisioning: Treat server discovery and connection actions as jobs and track with prov. prefix
 - Provisioning: Filter role picker based on whether environment is labeled as MDS or not
