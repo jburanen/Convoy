@@ -19,24 +19,24 @@ and an auditable record are part of a responsible patching regime. This tool str
 to provide that orchestration layer for specific scenarios.
 
 ### Supported
-You can patch these management servers and gateway deployments:
-✅ On-Premise Smart Center (SMS) servers
-✅ On-Premise Multi-Domain Management (MDM/MDSM) servers
-✅ Gaia gateways and ClusterXL managed by above on-prem environments
-✅ Spark gateways and clusters managed by above on-prem environments
+You can patch these management servers and gateway deployments:  
+✅ On-Premise Smart Center (SMS) servers  
+✅ On-Premise Multi-Domain Management (MDM/MDSM) servers  
+✅ Gaia gateways and ClusterXL managed by above on-prem environments  
+✅ Spark gateways and clusters managed by above on-prem environments  
 
 ### NOT Supported
-This tool does NOT support patching of these scenarios:
-❌ Smart-1 Cloud Management (this platform is patched by Check Point)
-❌ Spark Management Portal (this platform is patched by Check Point)
-❌ Gaia Standalone (self-managed) deployments
-❌ Gateways defined as dynamic IP (DAIP)
+This tool does NOT support patching of these scenarios:  
+❌ Smart-1 Cloud Management (this platform is patched by Check Point)  
+❌ Spark Management Portal (this platform is patched by Check Point)  
+❌ Gaia Standalone (self-managed) deployments  
+❌ Gateways defined as dynamic IP (DAIP)  
 
-This tool does not CURRENTLY support but may one day support:
-⏳ Self-managed Spark
-⏳ Self-managed Spark clusters
-⏳ Maestro
-⏳ ElasticXL
+This tool does not CURRENTLY support but may one day support:  
+⏳ Self-managed Spark  
+⏳ Self-managed Spark clusters  
+⏳ Maestro    
+⏳ ElasticXL  
 
 ## What it does
 
@@ -154,22 +154,22 @@ future but they will remain documented here. A milestone is not marked complete 
 it is tested and confirmed working by a human. There will not be a packaged release 
 until v1.
 
-- ✅ Implement ldap authentication
-- ◻️ Implement local TLS support
-- ✅ Test Nginx/NPM support
-- ◻️ Test SMS/Smart Center environment discovery and patching
-- ✅ Test MDS/Multi-Domain environment discovery and patching
-- ◻️ Gaia/Force Gateway patching via CPUSE
-- ◻️ Gaia/Force ClusterXL patching via CPUSE
-- ◻️ Spark patching
-- ◻️ Spark cluster patching
-- ◻️ Packaged deployment release that doesn't require clone and --build
-- ◻️ Independent agentic code security review
+✅ Implement ldap authentication  
+◻️ Implement local TLS support  
+✅ Test Nginx/NPM support  
+◻️ Test SMS/Smart Center environment discovery and patching  
+✅ Test MDS/Multi-Domain environment discovery and patching  
+◻️ Gaia/Force Gateway patching via CPUSE  
+◻️ Gaia/Force ClusterXL patching via CPUSE  
+◻️ Spark patching  
+◻️ Spark cluster patching  
+◻️ Packaged deployment release that doesn't require clone and --build  
+◻️ Independent agentic code security review  
 
 ### Milestones to reach v2
 
-- ◻️ CDT deployment to Gaia/Force gateways
-- ◻️ CDT deployment to Gaia/Force ClusterXL
+◻️ CDT deployment to Gaia/Force gateways  
+◻️ CDT deployment to Gaia/Force ClusterXL  
 
 ### Roadmap / Punch List (major items labeled as ⏫)
 
