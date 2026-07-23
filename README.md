@@ -177,6 +177,8 @@ until v1.
 - All: Add logic to display a warning on mobile devices that the UI of this tool does not scale down
   well (by design) and you should use it on a larger display - also probably you shoudn't patch your
   firewalls or management servers from your phone!
+- All: Make a favicon
+- All: Figure out a catchy name for the project
 - Provisioning: Treat credential management actions as jobs and track with prov. prefix
 - Provisioning: Treat server discovery and connection actions as jobs and track with prov. prefix
 - Provisioning: Filter role picker based on whether environment is labeled as MDS or not
