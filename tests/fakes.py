@@ -52,6 +52,15 @@ class FakeTransport:
                 else:
                     resp = scripted
                 return (0, resp) if isinstance(resp, str) else resp
+        if command.startswith("df -Pk"):
+            # Plenty of free space by default, so the pre-import disk check
+            # doesn't need scripting in every test that imports a package.
+            # Tests exercising that check script their own "df -Pk <path>".
+            return (
+                0,
+                "Filesystem     1024-blocks     Used  Available Capacity Mounted on\n"
+                "/dev/sda1        999999999     1000  999999999        1% /",
+            )
         return (0, "")
 
     def put(

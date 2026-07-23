@@ -2081,7 +2081,20 @@ async function loadJobFacets() {
 }
 
 for (const field of JOBS_FILTER_FIELDS) {
-  jobsFilterSelect(field).addEventListener("change", loadJobs);
+  const select = jobsFilterSelect(field);
+  select.addEventListener("change", loadJobs);
+  // A plain click on a native <select multiple> option REPLACES the whole
+  // selection (Ctrl/Cmd-click is required to add one) — not obvious, and an
+  // easy way to accidentally filter the list down to almost nothing with a
+  // single unmodified click (operator-reported, 2026-07-23). Intercept the
+  // click and toggle just that option instead, so every click behaves like a
+  // checkbox regardless of modifier keys.
+  select.addEventListener("mousedown", (ev) => {
+    if (ev.target.tagName !== "OPTION") return;
+    ev.preventDefault();
+    ev.target.selected = !ev.target.selected;
+    select.dispatchEvent(new Event("change"));
+  });
 }
 document.getElementById("jobs-filter-clear").addEventListener("click", async () => {
   for (const field of JOBS_FILTER_FIELDS) {

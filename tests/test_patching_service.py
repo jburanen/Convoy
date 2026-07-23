@@ -317,6 +317,68 @@ def test_import_job_matches_the_real_device_display_name_type_output(
     assert finished.status is JobStatus.SUCCEEDED, finished.error
 
 
+_PLENTY_DF = (
+    "Filesystem     1024-blocks     Used  Available Capacity Mounted on\n"
+    "/dev/sda1        999999999     1000  999999999        1% /"
+)
+
+
+def _low_df(mount: str) -> str:
+    return (
+        "Filesystem     1024-blocks     Used  Available Capacity Mounted on\n"
+        f"/dev/sda1               10        9          0       99% {mount}"
+    )
+
+
+def test_import_job_fails_if_var_log_has_insufficient_space(
+    service: PatchingService, store: Store, transport: FakeTransport
+) -> None:
+    # PKG_CONTENT is 23 bytes; /var/log needs 3x that (69 bytes) — the more
+    # specific key must be registered first, since "df -Pk /" is otherwise a
+    # substring match for "df -Pk /var/log" too (see FakeTransport).
+    transport.responses["df -Pk /var/log"] = _low_df("/var/log")
+    transport.responses["df -Pk /"] = _PLENTY_DF
+    job = service.submit_import("default", "mgmt-01", PKG)
+    _run(service)
+
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.FAILED
+    assert finished.error is not None
+    assert "PreCheckError" in finished.error
+    assert "not enough free space on /var/log" in finished.error
+    # Never got as far as uploading — this is a fail-fast pre-check.
+    assert transport.puts == []
+
+
+def test_import_job_fails_if_root_has_insufficient_space(
+    service: PatchingService, store: Store, transport: FakeTransport
+) -> None:
+    transport.responses["df -Pk /var/log"] = _PLENTY_DF
+    transport.responses["df -Pk /"] = _low_df("/")
+    job = service.submit_import("default", "mgmt-01", PKG)
+    _run(service)
+
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.FAILED
+    assert finished.error is not None
+    assert "PreCheckError" in finished.error
+    assert "not enough free space on /" in finished.error
+    assert transport.puts == []
+
+
+def test_import_job_logs_disk_space_ok_when_sufficient(
+    service: PatchingService, store: Store, transport: FakeTransport
+) -> None:
+    job = service.submit_import("default", "mgmt-01", PKG)
+    _run(service)
+
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.SUCCEEDED, finished.error
+    messages = " | ".join(e.message for e in store.events(job.id))
+    assert "disk space OK on /var/log" in messages
+    assert "disk space OK on /" in messages
+
+
 def test_import_job_fails_closed_on_size_mismatch(
     service: PatchingService, store: Store, transport: FakeTransport
 ) -> None:

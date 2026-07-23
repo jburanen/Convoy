@@ -4,7 +4,10 @@ Glues inventory + credential store + package store + CPUSE wrapper + job runner
 into the operations the web UI exposes per management server:
 
 - **detect**        — live `show installer packages` (source of truth for the UI)
-- **import**        — SFTP the package to a temp path on the host, verify its
+- **import**        — checks free disk space on `/var/log` (3x the package
+  size) and `/` (2x) before doing anything else — `df -Pk`, fails the job
+  closed with PreCheckError if either falls short (operator-specified,
+  2026-07-23) — then SFTPs the package to a temp path on the host, verifies its
   sha1 on the host itself (catches a corrupted/truncated transfer before
   `installer import` ever touches it), `installer import local`, then remove
   the temp copy. `installer import local` returns before CPUSE has actually
@@ -68,7 +71,7 @@ from ..cpuse import (
 from ..cpuse import extract_take as cpuse_extract_take
 from ..cpuse import extract_version as cpuse_extract_version
 from ..credentials import CredentialBundle, JobCredentialVault
-from ..errors import CPUSEError, JobError, OrchestratorError, TransportError
+from ..errors import CPUSEError, JobError, OrchestratorError, PreCheckError, TransportError
 from ..hfconfig import HfConfig, extract_hf_config
 from ..inventory import Host
 from ..jobs import JobContext, JobRunner
@@ -101,6 +104,22 @@ JOB_INSTALL = "cpuse.install"
 # Generous cap on captured install-log content — CPUSE logs are normally KBs,
 # this just bounds a pathological case from bloating the DB / archive file.
 _INSTALL_LOG_MAX_BYTES = 2 * 1024 * 1024
+
+# Pre-import disk space requirements, as a multiple of the package's own size
+# (operator-specified, 2026-07-23). /var/log is where the package stages and
+# CPUSE needs headroom there for its own extraction/processing; / needs
+# enough for CPUSE's bookkeeping during import.
+_DISK_CHECK_PATHS = (("/var/log", 3), ("/", 2))
+
+
+def _fmt_bytes(n: int) -> str:
+    """Human-readable byte count for pre-check error/log messages."""
+    size = float(n)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024:
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} TB"
 
 
 @dataclass
@@ -309,6 +328,8 @@ class PatchingService:
         creds = job_run_credentials(connector, self._vault, ctx.job)
         client = connector.connect(host, creds)
         try:
+            self._check_disk_space(client, local_size, ctx)
+
             ctx.log(f"uploading {package} ({local_size} bytes) to {host.name}:{remote_path}")
             reporter = ProgressReporter(ctx, local_size)
             remote_size = client.put(str(local_path), remote_path, progress=reporter)
@@ -373,6 +394,43 @@ class PatchingService:
             ctx.log("detected state refreshed")
         except CPUSEError as exc:
             ctx.log(f"could not refresh detected state: {exc}", level="warning")
+
+    def _check_disk_space(self, client: Transport, local_size: int, ctx: JobContext) -> None:
+        """Fail fast — before ever uploading — if the target doesn't have
+        enough free space to import this package. Raises PreCheckError
+        (never touches CPUSE state) if either requirement isn't met."""
+        for path, multiplier in _DISK_CHECK_PATHS:
+            available = self._free_bytes(client, path)
+            required = local_size * multiplier
+            if available < required:
+                raise PreCheckError(
+                    f"not enough free space on {path} to import this package: "
+                    f"{_fmt_bytes(available)} available, {_fmt_bytes(required)} required "
+                    f"({multiplier}x the {_fmt_bytes(local_size)} package size) — free up "
+                    f"space on {path} and try again"
+                )
+            ctx.log(
+                f"disk space OK on {path}: {_fmt_bytes(available)} available "
+                f"(need {_fmt_bytes(required)}, {multiplier}x the package size)"
+            )
+
+    def _free_bytes(self, client: Transport, path: str) -> int:
+        """Available space on ``path``, via `df -Pk` (POSIX output format —
+        one line per filesystem, immune to the line-wrapping long device
+        names can cause in `df`'s default format)."""
+        result = client.run(f"df -Pk {shlex.quote(path)}")
+        if not result.ok:
+            detail = result.stderr.strip() or result.stdout.strip()
+            raise TransportError(f"could not check disk space on {path}: {detail}")
+        lines = [line for line in result.stdout.splitlines() if line.strip()]
+        fields = lines[-1].split() if lines else []
+        if len(fields) < 4:
+            raise TransportError(f"unexpected `df` output for {path}: {result.stdout!r}")
+        try:
+            available_kb = int(fields[3])
+        except ValueError as exc:
+            raise TransportError(f"unexpected `df` output for {path}: {result.stdout!r}") from exc
+        return available_kb * 1024
 
     def _remote_sha1(self, client: Transport, remote_path: str) -> str:
         """sha1 of the just-uploaded file, computed on the host itself — catches

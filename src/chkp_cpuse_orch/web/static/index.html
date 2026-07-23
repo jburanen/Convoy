@@ -327,7 +327,21 @@
        background regardless of which tab is open. -->
   <div class="tab-panel" id="tab-jobs">
     <section id="jobs">
-      <h2>Jobs</h2>
+      <div class="section-head">
+        <h2>Jobs</h2>
+        <div class="section-head-actions">
+          <label id="jobs-limit-label" for="jobs-limit">
+            Show
+            <select id="jobs-limit">
+              <option value="10">10</option>
+              <option value="20">20</option>
+              <option value="50">50</option>
+              <option value="0">All</option>
+            </select>
+            jobs
+          </label>
+        </div>
+      </div>
       <p class="hint">
         Every import/install/CDT action runs as a background job and survives page
         reloads. Click a row to see its progress log. Running jobs can be cancelled
@@ -335,29 +349,21 @@
         <span id="job-archive-hint" class="mono">a flat file on the server</span> and
         removed from this list.
       </p>
-      <div class="jobs-controls">
-        <label for="jobs-limit">
-          Show
-          <select id="jobs-limit">
-            <option value="10">10</option>
-            <option value="20">20</option>
-            <option value="50">50</option>
-            <option value="0">All</option>
-          </select>
-          jobs
-        </label>
-      </div>
       <!-- Multiselect filters, one per column — options are populated from
            /api/jobs/facets (every job that exists, not just the currently
-           displayed page) by loadJobFacets() in app.js. Ctrl/Cmd-click or
-           shift-click to select multiple; empty selection = no filter on
-           that column. -->
+           displayed page) by loadJobFacets() in app.js. Click toggles one
+           option at a time (app.js intercepts the native "click replaces the
+           whole selection" behavior); empty selection = no filter on that
+           column. -->
       <div class="jobs-filters">
         <label>Kind<select id="jobs-filter-kind" class="jobs-filter" multiple size="4"></select></label>
         <label>Target<select id="jobs-filter-target" class="jobs-filter" multiple size="4"></select></label>
         <label>Env<select id="jobs-filter-environment" class="jobs-filter" multiple size="4"></select></label>
         <label>Status<select id="jobs-filter-status" class="jobs-filter" multiple size="4"></select></label>
-        <button type="button" id="jobs-filter-clear" class="small secondary">Clear filters</button>
+        <div class="jobs-filters-actions">
+          <button type="button" id="jobs-filter-clear" class="small secondary">Clear filters</button>
+          <span class="hint">Click an option to toggle it on/off; an empty column matches everything.</span>
+        </div>
       </div>
       <table id="jobs-table">
         <thead>
@@ -367,7 +373,7 @@
             <th>Env</th>
             <th>Status</th>
             <th>Started</th>
-            <th>Error</th>
+            <th>Output</th>
             <th></th>
           </tr>
         </thead>

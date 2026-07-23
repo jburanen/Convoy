@@ -18,6 +18,14 @@ UI is the primary interface (see [[architecture]]); the CLI is secondary.
   → verify). Code: `cpuse.py`. This is the manual flow the web UI exposes as
   per-server buttons that reflect *detected* state (`show installer packages` is the
   source of truth), each button idempotent.
+  - **Pre-import disk space check** (operator-specified, 2026-07-23):
+    `PatchingService._check_disk_space` runs `df -Pk` on `/var/log` and `/`
+    (raw shell command, same as `sha1sum` below) before anything else in the
+    local-upload import path — fails the job closed with `PreCheckError`,
+    before ever uploading, if free space is under 3x the package size on
+    `/var/log` (staging + CPUSE's own extraction headroom) or 2x on `/`
+    (CPUSE's import bookkeeping). Not applied to `import_cloud` (no local
+    file size to check against — CPUSE fetches it directly).
   - **Two import paths** (2026-07-22): bulk-import controls above the servers table,
     targeting one or more checkbox-selected servers, sequentially (not parallel —
     same pattern as "Refresh all"): (1) upload a package from the local store, SFTP
@@ -184,6 +192,14 @@ environment RBAC** — environments are DB rows partly for that reason.
     `target` (CDT/non-host jobs) is excluded from the target facet — not a
     selectable option. Facets refresh whenever the visible job set's shape
     changes in `loadJobs()`, preserving the operator's current selections.
+    **Native `<select multiple>` click gotcha** (operator-reported, 2026-07-23,
+    same day it shipped): a plain click on an `<option>` *replaces* the whole
+    selection — Ctrl/Cmd-click is needed to add to it — which isn't obvious
+    and made one unmodified click silently filter the Jobs tab down to almost
+    nothing, reported as "none of my job history is showing" (the jobs were
+    never gone; the DB was untouched). Fixed by intercepting `mousedown` on
+    each filter `<select>` and toggling `option.selected` manually, so every
+    click behaves like a checkbox regardless of modifier keys.
 
 ## Safety still applies to the "manual" mgmt-server flow
 Management servers are usually **HA pairs** and JHF installs often reboot. Even in

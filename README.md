@@ -98,16 +98,17 @@ mypy src
 
 ## Safety model
 
-This tool changes production firewalls. It is built to fail closed:
+This tool has the capability to alter or negatively impact management servers and firewalls, therefore:
 
 - **Confirmation-gated mutations** — installs (which can reboot) and CDT fleet
-  execute require an explicit operator confirmation, never a default.
+  execute require an explicit operator confirmation.
 - **Cluster-aware ordering** — the CDT candidates order *is* the rollout order;
   standby-first sequencing and blast-radius control live there.
 - **Detected state, not assumed** — the UI reflects live `show installer packages`,
   and uploads are checksum/size-verified before import.
-- **Auditable** — every action runs as a persisted job with a full event log
-  (structlog).
+- **Auditable** — admin actions and job results are tracked on the Jobs tab.
+- **No deletes** - the tool deliberately does not offer the ability to remove packages 
+  from the CPUSE repository or the SmartConsole central repository and cannot delete credentials from firewalls or management servers. This stance may be revisited in future versions.
 
 Cluster/health pre-gating (`checks.py`) is the next safety layer to wire in. See
 [.claude/memory/safety-constraints.md](.claude/memory/safety-constraints.md).
@@ -146,20 +147,23 @@ CLAUDE.md         project instructions
 - CPUSE: Add concept of direct patching for gateways as well with a separate panel from mgmt servers
 - CPUSE: Gateways to direct patch should be added by admin on the CPUSE tab with a similar UI to adding mgmt servers on the provisioning tab. Management servers should be inherited from Prov tab
 - CPUSE: Add ability to edit existing direct patching targets
-- Jobs: filters/search
 - CPUSE: Add deployment agent upgrade option
 - CPUSE: check available disk space before copying file
 - CPUSE: indicate on each server if a job is currently running by replacing the check box with an icon, block new jobs until complete
 - CPUSE: add muted explanatory text at top of firewalls panel to talk about how direct patching is mostly for management servers and small numbers of gateways. gateways can also be patched from SmartConsole and Web SmartConsole (generate a link). Large numbers of gateways can be patched with the CDT tab (future).
 - Packages: can I extract and display meta data like compatible major version from the package file?
 - Packages: treat uploads/deletions as a job and log them on the jobs tab with pkgs prefix
-- Packages: if I uncheck the keep box, reset the retention timer to the configured duration
-- Provisioning: treat credential management as jobs and track with prov prefix
-- Provisioning: treat server discovery and connection as jobs and track with prov prefix
+- Packages: if I uncheck the keep box, reset the retention timer to the configured duration beginning when I uncheck the box
+- Provisioning: treat credential management actions as jobs and track with prov prefix
+- Provisioning: treat server discovery and connection actions as jobs and track with prov prefix
 - Jobs: fix column width resizing
+- Packages: only display SHA1 hash, sha256 is not needed
+- Packages: add ability to upload a stored package to the smartconsole packages repo using mgmt api
 
 ## Disclaimer
 
 Not affiliated with or endorsed by Check Point Software Technologies. "Check Point",
 "CDT", and "CPUSE" refer to their products. Use only on infrastructure you are
-authorized to maintain.
+authorized to maintain. 
+
+Written by Claude under the direction of humans. Deploy, **test**, and use this tool with appropriate caution. No guarantees or assurance of safety is made by the developers.

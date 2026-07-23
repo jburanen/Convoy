@@ -263,6 +263,13 @@ tr.job-row:hover td { background: var(--badge-bg); }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Every other column always fits its header + content on one line — Error
+   is the one column allowed to give up width for that (it already ellipses
+   above), so the table never wraps Kind/Target/Env/Status/Started instead. */
+#jobs-table th,
+.job-kind, .job-target, .job-env, .job-status, .job-started {
+  white-space: nowrap;
+}
 
 /* A copy of CPUSE's own install log (install jobs only, once captured) —
    grouped under its job row the same way a package's hash lines are grouped
@@ -282,9 +289,9 @@ tr.job-install-log-row td { padding-top: 0; padding-bottom: 0.5rem; }
   white-space: pre-wrap;
 }
 
-/* Jobs tab: "Show N jobs" limit control, above the table. */
-.jobs-controls { margin: 0.5rem 0 0.75rem; }
-.jobs-controls label { display: flex; align-items: center; gap: 0.4rem; }
+/* Jobs tab: "Show N jobs" limit control, in the panel header row (see
+   .section-head-actions) rather than its own block above the table. */
+#jobs-limit-label { display: flex; align-items: center; gap: 0.4rem; }
 
 /* Jobs tab: per-column multiselect filters, above the table. Each label
    stacks its column name over the <select> so four fit comfortably in a row;
@@ -305,6 +312,12 @@ tr.job-install-log-row td { padding-top: 0; padding-bottom: 0.5rem; }
   color: var(--muted);
 }
 .jobs-filters select[multiple] { min-width: 9rem; }
+.jobs-filters-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  align-items: flex-start;
+}
 
 /* Packages table: filename/size, sha1(+retention hint), sha256 form one
    grouped three-line entry, so only the last (sha256) row carries the
