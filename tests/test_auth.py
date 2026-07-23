@@ -171,7 +171,7 @@ def test_credential_storage_allowed_with_auth(tmp_path: Path) -> None:
                 "/api/env/corp/credentials",
                 json={"name": "primary", "ssh_password": "x"},
             ).status_code
-            == 201
+            == 202
         )
 
 

@@ -1141,7 +1141,11 @@ async function saveBootstrapCredential(setName, username, password) {
     name = choice === "overwrite" ? existing.name : uniqueCredentialName(setName);
   }
   try {
-    await api(envUrl("/credentials"), {
+    // Runs as a cred.add/cred.edit job (services/cred_ops.py) rather than
+    // completing synchronously — same model as packages. "ok: true" here
+    // means "queued", not "stored"; CRED_JOB_KINDS in pollJobs() reloads the
+    // Credentials table once it actually finishes (near-instant in practice).
+    const job = await api(envUrl("/credentials"), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1151,7 +1155,8 @@ async function saveBootstrapCredential(setName, username, password) {
         default_if_none: true, // first credentials become the environment default
       }),
     });
-    await Promise.all([loadCredentialSets(), loadServers()]);
+    lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if it finishes fast
+    await Promise.all([loadJobs(), loadCredentialSets(), loadServers()]);
     return { ok: true, name };
   } catch (e) {
     return { ok: false, reason: e.message };
@@ -1294,6 +1299,60 @@ function updateServersInfoControls(hasServers) {
   document.getElementById("add-server-btn").classList.toggle("hidden", !hasServers);
 }
 
+// host name -> "pending" | "running", for hosts (management servers and
+// firewalls alike) with a job already in flight. The server also rejects a
+// new cpuse.import/import_cloud/install for a busy host (see
+// PatchingService._ensure_host_free) — this is the UI side: swap that row's
+// selection checkbox for a status glyph and disable its Install control so
+// the operator isn't invited to start a second job that would just fail.
+let activeJobTargets = new Map();
+// JSON fingerprint of the map above, so pollJobs() only pays for a table
+// reload when the active set actually changed, not on every 2.5s tick.
+let activeJobTargetsSnapshot = "";
+
+async function refreshActiveJobTargets() {
+  if (!currentEnv) { activeJobTargets = new Map(); return false; }
+  try {
+    const jobs = await api(
+      `/api/jobs?status=pending&status=running&environment=${encodeURIComponent(currentEnv)}&limit=0`,
+    );
+    const next = new Map();
+    for (const job of jobs) {
+      if (!job.target) continue; // pkgs.* jobs: target is a filename, not a host
+      if (job.status === "running" || !next.has(job.target)) next.set(job.target, job.status);
+    }
+    activeJobTargets = next;
+    const snapshot = JSON.stringify([...next.entries()].sort());
+    const changed = snapshot !== activeJobTargetsSnapshot;
+    activeJobTargetsSnapshot = snapshot;
+    return changed;
+  } catch {
+    return false; // transient — keep the previous snapshot, retry next call
+  }
+}
+
+const JOB_ACTIVE_GLYPH = { pending: "⏳", running: "⚙" };
+const JOB_ACTIVE_GLYPH_TITLE = {
+  pending: "A job is queued for this host — new jobs are blocked until it finishes",
+  running: "A job is running on this host — new jobs are blocked until it finishes",
+};
+
+// Called right after a freshly-built row's checkbox is wired up. Returns
+// whether the host is busy, so callers can skip other per-row wiring if
+// they want (none currently do — the row still renders normally otherwise).
+function markRowIfJobActive(selectCb, hostName) {
+  const status = activeJobTargets.get(hostName);
+  if (!status) return false;
+  selectCb.classList.add("hidden");
+  selectCb.disabled = true;
+  const glyph = document.createElement("span");
+  glyph.className = "job-active-glyph";
+  glyph.textContent = JOB_ACTIVE_GLYPH[status];
+  glyph.title = JOB_ACTIVE_GLYPH_TITLE[status];
+  selectCb.after(glyph);
+  return true;
+}
+
 async function loadServers() {
   const tbody = document.querySelector("#servers-table tbody");
   const infoTbody = document.querySelector("#servers-info-table tbody");
@@ -1311,12 +1370,14 @@ async function loadServers() {
   }
 
   // Patching view (assigned set per server) + editable inventory + the
-  // package catalog (for the bulk-import picker above the table).
+  // package catalog (for the bulk-import picker above the table) + which
+  // hosts already have a job in flight (blocks starting another).
   const [servers, editable, packages] = await Promise.all([
     api(envUrl("/servers")),
     api(`/api/environments/${encodeURIComponent(currentEnv)}/servers`),
     api("/api/packages"),
   ]);
+  await refreshActiveJobTargets();
   const assignedByName = new Map(servers.map((s) => [s.name, s.credential_set]));
 
   const bulkPackageSelect = document.getElementById("bulk-import-package");
@@ -1357,10 +1418,11 @@ async function loadServers() {
     const selectCb = row.querySelector(".srv-select");
     selectCb.dataset.server = srv.name; // read by the bulk-import buttons
     selectCb.addEventListener("change", updateSelectAllState);
+    markRowIfJobActive(selectCb, srv.name);
     row.querySelector(".srv-name").textContent = srv.name;
     row.querySelector(".srv-address").textContent = srv.address;
     row.querySelector(".srv-role").textContent = roleLabel(srv.role);
-    renderInstallSelect(row, srv.installable ?? []);
+    renderInstallSelect(row, srv.installable ?? [], srv.name);
     row.querySelector(".skip-verify").checked = !!envSkipVerifyDefault[currentEnv];
 
     const stateRow = el("tpl-server-state-row");
@@ -1438,14 +1500,15 @@ function renderStateRow(stateRow, data) {
 // (not exposed on this page; see the Provisioning tab's Edit modal for
 // credential assignment and .claude/memory/patching-web-design.md for why
 // Import isn't here).
-function renderInstallSelect(row, installable) {
+function renderInstallSelect(row, installable, hostName) {
   const select = row.querySelector(".install-select");
   const btn = row.querySelector(".btn-install");
   const ready = installable.length > 0;
+  const blocked = !!(hostName && activeJobTargets.has(hostName));
   select.replaceChildren(new Option(ready ? "— package —" : "— none ready —", ""));
   for (const id of installable) select.appendChild(new Option(id, id));
-  select.disabled = !ready;
-  btn.disabled = !ready;
+  select.disabled = !ready || blocked;
+  btn.disabled = !ready || blocked;
 }
 
 async function refreshState(name, row, stateRow) {
@@ -1463,7 +1526,7 @@ async function refreshState(name, row, stateRow) {
       body: JSON.stringify(extra),
     });
     renderStateRow(stateRow, state);
-    renderInstallSelect(row, state.installable ?? []);
+    renderInstallSelect(row, state.installable ?? [], name);
   } catch (e) {
     cacheEvictCreds(name); // a cached wrong/stale password re-prompts next time
     summary.textContent = "detect failed: " + e.message;
@@ -1526,9 +1589,11 @@ function selectedServerNames() {
 }
 
 // Keeps the header checkbox in sync with the per-row ones: checked when
-// every row is checked, indeterminate when only some are.
+// every row is checked, indeterminate when only some are. Rows with a job
+// already in flight are disabled (see markRowIfJobActive) and excluded —
+// "select all" only ever means "all available rows".
 function updateSelectAllState() {
-  const boxes = [...document.querySelectorAll("#servers-table .srv-select")];
+  const boxes = [...document.querySelectorAll("#servers-table .srv-select:not(:disabled)")];
   const selectAll = document.getElementById("srv-select-all");
   const checkedCount = boxes.filter((cb) => cb.checked).length;
   selectAll.checked = boxes.length > 0 && checkedCount === boxes.length;
@@ -1536,7 +1601,7 @@ function updateSelectAllState() {
 }
 
 document.getElementById("srv-select-all").addEventListener("change", (ev) => {
-  for (const cb of document.querySelectorAll("#servers-table .srv-select")) {
+  for (const cb of document.querySelectorAll("#servers-table .srv-select:not(:disabled)")) {
     cb.checked = ev.target.checked;
   }
   updateSelectAllState();
@@ -1622,6 +1687,7 @@ async function loadFirewalls() {
     api(`/api/environments/${encodeURIComponent(currentEnv)}/firewalls`),
     api("/api/packages"),
   ]);
+  await refreshActiveJobTargets();
   const stateByName = new Map(firewalls.map((f) => [f.name, f]));
 
   const bulkPackageSelect = document.getElementById("fw-bulk-import-package");
@@ -1634,6 +1700,7 @@ async function loadFirewalls() {
     const selectCb = row.querySelector(".fw-select");
     selectCb.dataset.firewall = fw.name; // read by the bulk-import buttons
     selectCb.addEventListener("change", updateFirewallSelectAllState);
+    markRowIfJobActive(selectCb, fw.name);
     row.querySelector(".fw-name").textContent = fw.name;
     row.querySelector(".fw-address").textContent = fw.address;
     row.querySelector(".fw-role").textContent = roleLabel(fw.role);
@@ -1641,7 +1708,7 @@ async function loadFirewalls() {
     row.querySelector(".fw-port").textContent = fw.ssh_port;
     row.querySelector(".fw-creds").textContent =
       (state && state.credential_set) || "none — not assigned";
-    renderInstallSelect(row, state?.installable ?? []);
+    renderInstallSelect(row, state?.installable ?? [], fw.name);
     row.querySelector(".skip-verify").checked = !!envSkipVerifyDefault[currentEnv];
 
     const stateRow = el("tpl-firewall-state-row");
@@ -1689,7 +1756,7 @@ async function refreshFirewallState(name, row, stateRow) {
       body: JSON.stringify(extra),
     });
     renderStateRow(stateRow, state);
-    renderInstallSelect(row, state.installable ?? []);
+    renderInstallSelect(row, state.installable ?? [], name);
   } catch (e) {
     cacheEvictCreds(name); // a cached wrong/stale password re-prompts next time
     summary.textContent = "detect failed: " + e.message;
@@ -1749,8 +1816,10 @@ function selectedFirewallNames() {
     .map((cb) => cb.dataset.firewall);
 }
 
+// Rows with a job already in flight are disabled (see markRowIfJobActive)
+// and excluded — "select all" only ever means "all available rows".
 function updateFirewallSelectAllState() {
-  const boxes = [...document.querySelectorAll("#firewalls-table .fw-select")];
+  const boxes = [...document.querySelectorAll("#firewalls-table .fw-select:not(:disabled)")];
   const selectAll = document.getElementById("fw-select-all");
   const checkedCount = boxes.filter((cb) => cb.checked).length;
   selectAll.checked = boxes.length > 0 && checkedCount === boxes.length;
@@ -1758,7 +1827,7 @@ function updateFirewallSelectAllState() {
 }
 
 document.getElementById("fw-select-all").addEventListener("change", (ev) => {
-  for (const cb of document.querySelectorAll("#firewalls-table .fw-select")) {
+  for (const cb of document.querySelectorAll("#firewalls-table .fw-select:not(:disabled)")) {
     cb.checked = ev.target.checked;
   }
   updateFirewallSelectAllState();
@@ -2402,12 +2471,15 @@ async function loadCredentialSets() {
     row.querySelector(".cs-expert").textContent = tick(set.has_expert);
     row.querySelector(".cs-api").textContent = tick(set.has_api);
     row.querySelector(".btn-edit").addEventListener("click", () => openCredEditModal(set));
+    // Runs as a cred.delete job (services/cred_ops.py) — see the credential-form
+    // submit handler below for the same "queued, not done" model.
     row.querySelector(".btn-delete").addEventListener("click", async () => {
       if (!confirm(`Delete credential set "${set.name}"? Servers using it lose access.`)) return;
       try {
-        await api(envUrl(`/credentials/${encodeURIComponent(set.name)}`), { method: "DELETE" });
-        await Promise.all([loadCredentialSets(), loadServers()]);
-      } catch (e) { toast("Delete failed: " + e.message); }
+        const job = await api(envUrl(`/credentials/${encodeURIComponent(set.name)}`), { method: "DELETE" });
+        lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if it finishes fast
+        await Promise.all([loadJobs(), loadCredentialSets(), loadServers()]);
+      } catch (e) { toast("Delete failed to start: " + e.message); }
     });
     tbody.appendChild(row);
   }
@@ -2443,7 +2515,11 @@ document.getElementById("credential-form").addEventListener("submit", async (ev)
   const expertInput = document.getElementById("cs-expert");
   const apiInput = document.getElementById("cs-api");
   try {
-    await api(envUrl("/credentials"), {
+    // Runs as a cred.add/cred.edit job (services/cred_ops.py) rather than
+    // completing synchronously — same "queued, not done" model as packages
+    // (see uploadPackageFile). CRED_JOB_KINDS in pollJobs() reloads the
+    // Credentials table once it actually finishes (near-instant in practice).
+    const job = await api(envUrl("/credentials"), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -2455,10 +2531,11 @@ document.getElementById("credential-form").addEventListener("submit", async (ev)
         api_key: apiInput.value || null,
       }),
     });
+    lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if it finishes fast
     closeCredAddModal(); // resets the form so no secrets linger in the DOM
-    await Promise.all([loadCredentialSets(), loadServers()]);
+    await Promise.all([loadJobs(), loadCredentialSets(), loadServers()]);
   } catch (e) {
-    toast("Save failed: " + e.message);
+    toast("Save failed to start: " + e.message);
   }
 });
 
@@ -2522,6 +2599,10 @@ const IMPORT_JOB_KINDS = ["cpuse.import", "cpuse.import_cloud"];
 // for imports, otherwise a package's new retention/existence state only
 // shows up after a manual reload.
 const PKGS_JOB_KINDS = ["pkgs.upload", "pkgs.keep", "pkgs.notkeep", "pkgs.delete"];
+// Same idea for credential-set actions (see services/cred_ops.py) — the
+// Credentials table (and any server/firewall row showing an assigned set's
+// name) needs the same reload-on-finish treatment.
+const CRED_JOB_KINDS = ["cred.add", "cred.edit", "cred.delete"];
 const lastJobStatus = new Map();
 const TERMINAL_JOB_STATUSES = ["succeeded", "failed", "cancelled", "interrupted"];
 
@@ -2545,26 +2626,27 @@ function renderJobRow(row, job) {
   row.querySelector(".job-kind").textContent = job.kind;
   // pkgs.* jobs (upload/keep/unkeep/delete) aren't scoped to a management
   // environment and don't have a host target — they act on a package file
-  // shared across every environment. Give them a synthetic "Packages" env
-  // label and move the filename (job.target) into the Output cell instead,
-  // rather than showing a meaningless "default"/filename-as-target pairing.
+  // shared across every environment (visible on the Packages tab itself).
+  // Give them a synthetic "Packages" env label; the Output column stays the
+  // normal outcome text like every other job kind.
   const isPkgs = job.kind.startsWith("pkgs.");
+  // cred.* jobs (add/edit/delete) DO have a real target — the credential set
+  // name — so that stays in the Target column as-is; only the Env label is
+  // overridden, since credential sets are a distinct category rather than a
+  // deployment against that environment's hosts.
+  const isCred = job.kind.startsWith("cred.");
   row.querySelector(".job-target").textContent = isPkgs ? "" : (job.target ?? "");
-  row.querySelector(".job-env").textContent = isPkgs ? "Packages" : (job.environment ?? "");
+  row.querySelector(".job-env").textContent =
+    isPkgs ? "Packages" : isCred ? "Credentials" : (job.environment ?? "");
   row.querySelector(".job-user").textContent = job.username ?? "";
   const badge = row.querySelector(".job-status .badge");
   badge.textContent = job.status;
   badge.className = "badge " + jobStatusClass(job.status); // reset, not add — status can change
   row.querySelector(".job-started").textContent = fmtTime(job.started_at ?? job.created_at);
   const errorCell = row.querySelector(".job-error");
-  const outcome = job.status === "succeeded" ? `Succeeded ${fmtTime(job.finished_at)}` : (job.error ?? "");
-  if (isPkgs && job.target) {
-    errorCell.textContent = outcome ? `${job.target} — ${outcome}` : job.target;
-  } else {
-    errorCell.textContent = outcome;
-  }
+  errorCell.textContent =
+    job.status === "succeeded" ? `Succeeded ${fmtTime(job.finished_at)}` : (job.error ?? "");
   errorCell.title = job.status === "succeeded" ? "" : (job.error ?? ""); // full text on hover even while truncated/collapsed
-  errorCell.classList.toggle("job-output-ok", job.status === "succeeded");
   row.querySelector(".btn-cancel").classList.toggle(
     "hidden", !(job.status === "pending" || job.status === "running"),
   );
@@ -2844,12 +2926,14 @@ async function pollJobs() {
     // for pkgs.* jobs and the Packages tab.
     let reloadServers = false;
     let reloadPackages = false;
+    let reloadCredentials = false;
     for (const job of jobs) {
       const prev = lastJobStatus.get(job.id);
       const justFinished =
         (prev === "pending" || prev === "running") && TERMINAL_JOB_STATUSES.includes(job.status);
       if (justFinished && IMPORT_JOB_KINDS.includes(job.kind)) reloadServers = true;
       if (justFinished && PKGS_JOB_KINDS.includes(job.kind)) reloadPackages = true;
+      if (justFinished && CRED_JOB_KINDS.includes(job.kind)) reloadCredentials = true;
       lastJobStatus.set(job.id, job.status);
     }
     const currentIds = new Set(jobs.map((j) => j.id));
@@ -2857,8 +2941,16 @@ async function pollJobs() {
 
     const active = jobs.some((j) => j.status === "pending" || j.status === "running");
     if (active || openJobLogs.size) await loadJobs();
-    if (reloadServers) await loadServers();
+    // Any job starting/finishing for a server or firewall can change which
+    // rows are blocked (see markRowIfJobActive) — not just import jobs — so
+    // this is checked independently of reloadServers above.
+    const targetsChanged = await refreshActiveJobTargets();
+    if (reloadServers || targetsChanged) await loadServers();
     if (reloadPackages) await loadPackages();
+    // A credential set's name/default status can show up on the servers/
+    // firewalls tables too (assigned-set column), not just the Credentials
+    // table itself.
+    if (reloadCredentials) await Promise.all([loadCredentialSets(), loadServers()]);
   } catch { /* transient — next tick will retry */ }
   setTimeout(pollJobs, 2500);
 }

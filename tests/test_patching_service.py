@@ -181,6 +181,36 @@ def test_submit_import_rejects_missing_package(service: PatchingService) -> None
         service.submit_import("default", "mgmt-01", "ghost.tgz")
 
 
+# -- host-busy blocking (a second job can't start while one is in flight) ---------
+
+
+def test_submit_rejects_a_second_job_for_a_busy_host(service: PatchingService) -> None:
+    service.submit_import("default", "mgmt-01", PKG)  # left PENDING — runner never run
+    with pytest.raises(JobError, match="already pending"):
+        service.submit_install("default", "mgmt-01", "Pkg", confirmed=True)
+    with pytest.raises(JobError, match="already pending"):
+        service.submit_import_cloud("default", "mgmt-01", "Pkg")
+
+
+def test_submit_allows_a_different_host_while_one_is_busy(
+    service: PatchingService, store: Store
+) -> None:
+    row = store.get_credential_set_by_name("default", "primary")
+    assert row is not None
+    service.registry.get("default").inventory.host("mgmt-02").credential_set_id = row.id
+
+    service.submit_import("default", "mgmt-01", PKG)  # left PENDING
+    job = service.submit_import("default", "mgmt-02", PKG)
+    assert job.target == "mgmt-02"
+
+
+def test_submit_allowed_again_once_the_previous_job_finishes(service: PatchingService) -> None:
+    service.submit_import("default", "mgmt-01", PKG)
+    _run(service)  # drains the queue — the job reaches a terminal state
+    job = service.submit_import("default", "mgmt-01", PKG)
+    assert job.status is JobStatus.PENDING
+
+
 def test_submit_install_requires_confirmation(service: PatchingService) -> None:
     with pytest.raises(JobError, match="explicit confirmation"):
         service.submit_install("default", "mgmt-01", "Pkg", confirmed=False)

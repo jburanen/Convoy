@@ -78,7 +78,7 @@ from ..hfconfig import HfConfig, extract_hf_config
 from ..inventory import Host
 from ..jobs import JobContext, JobRunner
 from ..packages import PackageStore
-from ..store import JobRecord, ServerStateRow, Store, utcnow
+from ..store import JobRecord, JobStatus, ServerStateRow, Store, utcnow
 from .common import (
     ClientFactory,
     EnvironmentRegistry,
@@ -235,6 +235,27 @@ class PatchingService:
 
     # -- job submission ------------------------------------------------------------
 
+    def _ensure_host_free(self, environment: str, host_name: str) -> None:
+        """Refuse to start a new job while one is already pending/running for
+        this host — two operations touching the same box's CPUSE/SSH state at
+        once is unsafe. Mirrors the Management/CPUSE tab's UI, which replaces
+        a busy host's selection checkbox with a status glyph for the same
+        reason (see app.js markRowIfJobActive) — this is the enforcement
+        behind that, since a stale page or a direct API call could otherwise
+        still race two jobs onto the same host. Scoped to the environment too
+        — host names are only unique within one, not globally."""
+        active = self._store.list_jobs(
+            targets=[host_name],
+            environments=[environment],
+            statuses=[JobStatus.PENDING, JobStatus.RUNNING],
+            limit=1,
+        )
+        if active:
+            raise JobError(
+                f"a job is already {active[0].status.value} for {host_name!r} — wait for it "
+                "to finish before starting another"
+            )
+
     def submit_import(
         self,
         environment: str,
@@ -247,6 +268,7 @@ class PatchingService:
         """Enqueue: SFTP the stored package to the host + `installer import local`."""
         connector = self.registry.get(environment)
         host = connector.patchable_host(host_name)
+        self._ensure_host_free(environment, host_name)
         self._packages.path_for(package_filename)  # validates record + content file
         return submit_host_job(
             self.runner,
@@ -273,6 +295,7 @@ class PatchingService:
         the host needs outbound internet access."""
         connector = self.registry.get(environment)
         host = connector.patchable_host(host_name)
+        self._ensure_host_free(environment, host_name)
         return submit_host_job(
             self.runner,
             self._vault,
@@ -304,6 +327,7 @@ class PatchingService:
             )
         connector = self.registry.get(environment)
         host = connector.patchable_host(host_name)
+        self._ensure_host_free(environment, host_name)
         return submit_host_job(
             self.runner,
             self._vault,

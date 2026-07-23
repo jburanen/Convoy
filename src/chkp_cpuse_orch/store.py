@@ -992,8 +992,13 @@ class Store:
         option regardless of the "Show N jobs" display limit."""
         with self._connect() as conn:
             kinds = conn.execute("SELECT DISTINCT kind FROM jobs ORDER BY kind").fetchall()
+            # pkgs.* jobs store the package filename in `target`, but it isn't a
+            # target in the usual (host) sense — it's shown in the Output column
+            # instead (see app.js renderJobRow) — so it must not appear as a
+            # selectable Target filter option.
             targets = conn.execute(
-                "SELECT DISTINCT target FROM jobs WHERE target IS NOT NULL ORDER BY target"
+                "SELECT DISTINCT target FROM jobs"
+                " WHERE target IS NOT NULL AND kind NOT LIKE 'pkgs.%' ORDER BY target"
             ).fetchall()
             environments = conn.execute(
                 "SELECT DISTINCT environment FROM jobs ORDER BY environment"

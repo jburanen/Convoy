@@ -193,6 +193,12 @@ class CredentialStore:
     def list_sets(self, environment: str) -> list[CredentialSetInfo]:
         return [self._info(r) for r in self._store.list_credential_sets(environment)]
 
+    def get_info(self, environment: str, name: str) -> CredentialSetInfo | None:
+        """Secret-free lookup by name, or None if it doesn't exist — used to
+        decide add vs edit before submitting a cred.add/cred.edit job."""
+        row = self._store.get_credential_set_by_name(environment, name)
+        return None if row is None else self._info(row)
+
     def set_name(self, set_id: str) -> str | None:
         """Name of a set by id (secret-free), or None if it no longer exists."""
         row = self._store.get_credential_set(set_id)

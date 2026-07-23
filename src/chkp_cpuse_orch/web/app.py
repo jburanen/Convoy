@@ -58,6 +58,7 @@ from ..packages import PackageStore
 from ..reporting import configure_logging, get_logger
 from ..services.cdt_ops import CDTService
 from ..services.common import ClientFactory, EnvironmentRegistry
+from ..services.cred_ops import CredentialJobService
 from ..services.discovery import DiscoveryService, MgmtClientFactory
 from ..services.environments import EnvironmentManager
 from ..services.firewalls import FirewallManager
@@ -387,6 +388,15 @@ def create_app(
         )
         cdt_service = CDTService(registry=registry, packages=packages, runner=runner, vault=vault)
         pkgs_jobs = PackageJobService(packages=packages, runner=runner)
+        # Only when the store is actually unlocked — a locked store already
+        # returns 503 for every credential-dependent endpoint (see
+        # _credentials_or_503), and that check happens before this is ever
+        # reached, but there's no valid CredentialStore to hand it otherwise.
+        cred_jobs = (
+            CredentialJobService(credentials=credentials, runner=runner, vault=vault)
+            if credentials is not None
+            else None
+        )
         discovery = DiscoveryService(registry=registry, mgmt_client_factory=mgmt_client_factory)
 
         app.state.store = store
@@ -401,6 +411,7 @@ def create_app(
         app.state.service = service
         app.state.cdt = cdt_service
         app.state.pkgs_jobs = pkgs_jobs
+        app.state.cred_jobs = cred_jobs
         app.state.discovery = discovery
 
         interrupted = runner.recover()
@@ -509,6 +520,14 @@ def _credentials_or_503(request: Request) -> CredentialStore:
         reason = getattr(request.app.state, "credentials_error", "credential store is locked")
         raise HTTPException(status_code=503, detail=reason)
     return credentials
+
+
+def _cred_jobs(request: Request) -> CredentialJobService:
+    service: CredentialJobService | None = request.app.state.cred_jobs
+    if service is None:
+        reason = getattr(request.app.state, "credentials_error", "credential store is locked")
+        raise HTTPException(status_code=503, detail=reason)
+    return service
 
 
 def _map_error(exc: OrchestratorError) -> HTTPException:
@@ -1177,8 +1196,12 @@ def _register_routes(app: FastAPI) -> None:
         _require_env(request, env)
         return _credentials_or_503(request).list_sets(env)
 
-    @app.put("/api/env/{env}/credentials", status_code=201)
-    def put_credential_set(env: str, body: CredentialSetIn, request: Request) -> CredentialSetInfo:
+    @app.put("/api/env/{env}/credentials", status_code=202)
+    def put_credential_set(env: str, body: CredentialSetIn, request: Request) -> JobRecord:
+        """Runs as a cred.add/cred.edit job (services/cred_ops.py) for Jobs-tab
+        visibility and audit history — same model as packages. The plaintext
+        secrets ride the in-memory job-credential vault, never JobRecord.params
+        (persisted as plain JSON)."""
         _require_env(request, env)
         if request.app.state.auth is None:
             raise HTTPException(
@@ -1192,42 +1215,43 @@ def _register_routes(app: FastAPI) -> None:
                 detail=f"credential storage is disabled for environment {env!r} — "
                 "enable it first, or supply credentials per operation",
             )
-        store = _credentials_or_503(request)
 
         def _reveal(value: SecretStr | None) -> str | None:
             return value.get_secret_value() if value is not None else None
 
         try:
-            info = store.put_set(
+            return _cred_jobs(request).submit_put(
                 env,
-                body.name,
+                name=body.name,
                 ssh_username=body.ssh_username,
                 ssh_password=_reveal(body.ssh_password),
                 ssh_private_key=_reveal(body.ssh_private_key),
                 expert_password=_reveal(body.expert_password),
                 api_key=_reveal(body.api_key),
+                default_if_none=body.default_if_none,
+                triggered_by=_current_user(request),
             )
-            # First credentials in an environment become its default automatically.
-            if body.default_if_none and store.default_set_name(env) is None:
-                store.set_default(env, body.name)
-                info = info.model_copy(update={"is_default": True})
-            return info
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
     @app.post("/api/env/{env}/credentials/{name}/default")
     def set_default_credential_set(env: str, name: str, request: Request) -> dict[str, str | None]:
-        """Make a credential set the environment's default (assigned to new servers)."""
+        """Make a credential set the environment's default (assigned to new servers).
+        Not job-tracked — a lightweight pointer flip, not an add/edit/delete."""
         _require_env(request, env)
         store = _credentials_or_503(request)
         if not store.set_default(env, name):
             raise HTTPException(status_code=404, detail=f"credential set {name!r} not found")
         return {"default": name}
 
-    @app.delete("/api/env/{env}/credentials/{name}")
-    def delete_credential_set(env: str, name: str, request: Request) -> dict[str, bool]:
+    @app.delete("/api/env/{env}/credentials/{name}", status_code=202)
+    def delete_credential_set(env: str, name: str, request: Request) -> JobRecord:
+        """Runs as a cred.delete job — see put_credential_set above."""
         _require_env(request, env)
-        return {"deleted": _credentials_or_503(request).delete_set(env, name)}
+        try:
+            return _cred_jobs(request).submit_delete(env, name, triggered_by=_current_user(request))
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
 
     @app.post("/api/env/{env}/servers/{name}/credential")
     def assign_credential(

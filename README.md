@@ -181,27 +181,24 @@ until v1.
 - All: Figure out a catchy name for the project
 - All: In all instances where there is a table with a header above a dropdown selector or a pill, 
   left-align the header text with the content text in the table for visual purposes
+
 - Provisioning: Treat credential management actions as jobs and track with cred. prefix
 - Provisioning: Treat server discovery and connection actions as jobs and track with prov. prefix
 - Provisioning: Filter role picker based on whether environment is labeled as MDS or not
-- Provisioning: In the collapsed form, make the bootstrap panel have the same whitespace below the header 
-  text as above. Treat the space above as correct.
+- Provisioning: In the collapsed form, make the bootstrap panel have the same whitespace below the header text as above. Treat the space above as correct.
 - Provisioning: Server edit - improve whitespace on edit modal
+
 - Packages: Investigate if we can extract and display meta data like compatible major version from the package file
-- Packages: When unchecking the keep box, set the retention timer to the configured duration beginning at time of action
 - Packages: Add ability to upload a stored package to the smartconsole packages repo using mgmt api ⏫
-- CPUSE: Should multiple CPUSE jobs (with different tarets) be permitted to run concurrently?
-- CPUSE: Add concept of direct patching for gateways with a separate panel from mgmt servers ⏫
-- CPUSE: Gateways to direct patch should be added by admin on the CPUSE tab with a similar UI to 
-  adding mgmt servers on the provisioning tab - management servers should be inherited from Provisioning tab
-- CPUSE: Add ability to edit existing direct patching targets
+
+- CPUSE: Add ability to edit existing direct patching firewall targets
 - CPUSE: Add deployment agent upgrade option ⏫
 - CPUSE: Indicate on each server if a job is currently running by replacing the check box with an icon, block new jobs until complete
 - CPUSE: Add muted explanatory text at top of firewalls panel to talk about how direct patching is mostly for management servers and small numbers of gateways. gateways can also be patched from SmartConsole and Web SmartConsole (generate a link). Large numbers of gateways can be patched with the CDT tab (future).
 - CPUSE: If the disk space is below threshold, offer the option to override unless disk space is less than actual pkg size. also provide links to disk space SKs
+
 - Jobs: Add syslog output configuration ⏫
 - Jobs: Add a download button for the install log
-- Jobs: Fix formatting of pkgs. job lines
 
 ## Disclaimer
 
