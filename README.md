@@ -176,7 +176,7 @@ it is tested and confirmed by a human. There will not be a packaged release unti
 
 - All: Add .env var to hide the hint text under the tabs
 - All: Add logic to display a warning on mobile devices that the UI of this tool does not scale down
-  well and you should use it on a larger display.
+  well (by design) and you should use it on a larger display.
 - Provisioning: Treat credential management actions as jobs and track with prov. prefix
 - Provisioning: Treat server discovery and connection actions as jobs and track with prov. prefix
 - Provisioning: Filter role picker based on whether environment is labeled as MDS or not
