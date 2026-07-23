@@ -164,6 +164,14 @@ class FirewallRow(BaseModel):
     # membership" button — see clusterxl.py/services/discovery.py. None if
     # not a cluster member, or never checked.
     cluster_name: str | None = None
+    # MDS Domain/CMA this firewall lives in, set at discovery-import time (the
+    # operator-picked Domain that scan ran against — see
+    # services/discovery.py's discover_firewalls) or edited by hand from the
+    # Firewalls panel's edit modal. None on SMS environments, and on MDS
+    # firewalls added before this shipped or added manually without setting it.
+    # Management API calls scoped to one Domain (e.g. cluster-name re-check)
+    # need this to log in correctly on a Multi-Domain server.
+    mds_domain: str | None = None
 
 
 class ServerStateRow(BaseModel):
@@ -467,6 +475,16 @@ _MIGRATIONS: tuple[str, ...] = (
     """
     ALTER TABLE firewalls ADD COLUMN cluster_name TEXT;
     ALTER TABLE server_state DROP COLUMN cluster_name;
+    """,
+    # v20: which MDS Domain/CMA a firewall lives in, so Management API calls
+    # scoped to one Domain (e.g. cluster-name re-check) can log in correctly
+    # on a Multi-Domain server instead of failing for lack of a domain. Set at
+    # discovery-import time (the operator-picked Domain the scan ran against)
+    # or edited by hand from the Firewalls panel's edit modal — same targeted-
+    # UPDATE pattern as cluster_name (v19), never touched by an ordinary
+    # upsert_firewall add/edit.
+    """
+    ALTER TABLE firewalls ADD COLUMN mds_domain TEXT;
     """,
 )
 
@@ -862,6 +880,21 @@ class Store:
             cur = conn.execute(
                 "UPDATE firewalls SET cluster_name = ? WHERE environment = ? AND name = ?",
                 (cluster_name, environment, host_name),
+            )
+        return cur.rowcount > 0
+
+    def set_firewall_mds_domain(
+        self, environment: str, host_name: str, mds_domain: str | None
+    ) -> bool:
+        """Set (or clear, with ``None``) the MDS Domain/CMA a firewall lives
+        in — from discovery-time import, or the Firewalls panel's edit modal.
+        Same targeted-UPDATE pattern as ``set_firewall_cluster_name``, kept
+        out of ``upsert_firewall`` for the same reason. Returns False if the
+        firewall doesn't exist in the environment."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE firewalls SET mds_domain = ? WHERE environment = ? AND name = ?",
+                (mds_domain, environment, host_name),
             )
         return cur.rowcount > 0
 
@@ -1297,6 +1330,7 @@ def _firewall_from_row(row: sqlite3.Row) -> FirewallRow:
         notes=row["notes"],
         credential_set_id=row["credential_set_id"],
         cluster_name=row["cluster_name"],
+        mds_domain=row["mds_domain"],
     )
 
 

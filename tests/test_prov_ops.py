@@ -340,6 +340,72 @@ def test_cluster_name_is_never_applied_on_a_later_edit(
     assert firewall_manager.list_firewalls(ENV)[0].cluster_name == "prod-cluster"
 
 
+def test_mds_domain_is_applied_on_creation(
+    service: ProvisioningJobService, firewall_manager: FirewallManager
+) -> None:
+    """A discovery import passes mds_domain along with the initial create,
+    same as cluster_name."""
+    service.submit_put_firewall(
+        ENV,
+        name="fw-01",
+        address="192.0.2.20",
+        role="gateway",
+        ssh_user="admin",
+        ssh_port=22,
+        notes=None,
+        mds_domain="CustomerA",
+    )
+    _run(service)
+    assert firewall_manager.list_firewalls(ENV)[0].mds_domain == "CustomerA"
+
+
+def test_mds_domain_is_never_applied_on_a_later_edit(
+    service: ProvisioningJobService, firewall_manager: FirewallManager
+) -> None:
+    """Regression guard mirroring test_cluster_name_is_never_applied_on_a_later_edit:
+    an ordinary edit must not wipe out a previously-tracked domain, and even a
+    caller mistakenly passing mds_domain on an edit is ignored — the JOB_ADD
+    gate protects this, not caller discipline."""
+    service.submit_put_firewall(
+        ENV,
+        name="fw-01",
+        address="192.0.2.20",
+        role="gateway",
+        ssh_user="admin",
+        ssh_port=22,
+        notes=None,
+        mds_domain="CustomerA",
+    )
+    _run(service)
+
+    job = service.submit_put_firewall(
+        ENV,
+        name="fw-01",
+        address="192.0.2.21",
+        role="gateway",
+        ssh_user="admin",
+        ssh_port=22,
+        notes=None,
+    )
+    assert job.kind == JOB_EDIT
+    _run(service)
+    assert firewall_manager.list_firewalls(ENV)[0].mds_domain == "CustomerA"
+
+    job = service.submit_put_firewall(
+        ENV,
+        name="fw-01",
+        address="192.0.2.22",
+        role="gateway",
+        ssh_user="admin",
+        ssh_port=22,
+        notes=None,
+        mds_domain="CustomerB",
+    )
+    assert job.kind == JOB_EDIT
+    _run(service)
+    assert firewall_manager.list_firewalls(ENV)[0].mds_domain == "CustomerA"
+
+
 def test_firewall_validation_error_surfaces_as_a_failed_job(
     service: ProvisioningJobService, store: Store
 ) -> None:

@@ -114,6 +114,17 @@ class FirewallManager:
             raise InventoryError(f"firewall {host_name!r} not found in environment {environment!r}")
         self._env_manager.rebuild()
 
+    def set_domain(self, environment: str, host_name: str, mds_domain: str | None) -> None:
+        """Set (or clear, with ``None``) which MDS Domain/CMA a firewall
+        lives in. Called at discovery-import time (kind-gated in
+        services/prov_ops.py, same as set_cluster_name) and by the Firewalls
+        panel's edit modal domain dropdown for manual correction. Rebuilds
+        the registry, matching every other mutation here."""
+        self._require_env(environment)
+        if not self._store.set_firewall_mds_domain(environment, host_name, mds_domain):
+            raise InventoryError(f"firewall {host_name!r} not found in environment {environment!r}")
+        self._env_manager.rebuild()
+
     def _require_env(self, environment: str) -> None:
         if not self._store.environment_exists(environment):
             raise InventoryError(f"unknown environment: {environment!r}")

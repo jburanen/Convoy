@@ -72,12 +72,14 @@ discovery/re-check already used), it's just a new caller.
 - `ServerStateRow.cluster_name` (store schema v18) was **removed** the same
   day it shipped, once this design landed — `cluster_role` stayed there
   (still live), the name moved to `FirewallRow`.
-- The Management API path can't resolve a cluster name for MDS environments
-  during a post-hoc re-check (no Domain/CMA is tracked per-firewall) — it
-  works at discovery time only, since discovery already has the operator-
-  picked Domain in scope. On an MDS, the re-check button will report
-  `resolved: false` every time; the manual field is the only way to set the
-  name there today.
+- The Management API path resolves a cluster name for MDS environments
+  during a post-hoc re-check by logging into the firewall's stored
+  `FirewallRow.mds_domain` (store schema v20 — see
+  [[mds-domain-per-firewall]]). Before that shipped (2026-07-23), no
+  Domain/CMA was tracked per-firewall and the re-check button always
+  reported `resolved: false` on MDS; the manual field was the only way to
+  set the name there. It's still the fallback when `mds_domain` itself is
+  unset (never discovered/imported, or manually added without setting it).
 - Distinct from `checks.py`'s `HealthChecks.cluster_state` (still
   `NotImplementedError`) — that one is deployment-gating (pass/fail against
   an *expected* role), a different consumer with different requirements.

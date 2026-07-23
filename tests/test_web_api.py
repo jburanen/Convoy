@@ -528,6 +528,59 @@ def test_firewall_set_cluster_name_manually_can_clear_it(client: TestClient) -> 
     assert firewalls["fw-x"]["cluster_name"] is None
 
 
+def test_discover_firewalls_import_carries_mds_domain(client: TestClient) -> None:
+    """FirewallIn.mds_domain is only applied on genuine creation, same
+    JOB_ADD gate as cluster_name — the discover-firewalls import flow relies
+    on this to pre-fill it."""
+    job = _add_firewall(
+        client, name="fw-x", address="192.0.2.70", role="gateway", mds_domain="CustomerA"
+    )
+    assert job["status"] == "succeeded", job["error"]
+    firewalls = {f["name"]: f for f in client.get("/api/env/default/firewalls").json()}
+    assert firewalls["fw-x"]["mds_domain"] == "CustomerA"
+
+    # An ordinary edit (mds_domain omitted) must not clobber it.
+    _add_firewall(client, name="fw-x", address="192.0.2.71", role="gateway")
+    firewalls = {f["name"]: f for f in client.get("/api/env/default/firewalls").json()}
+    assert firewalls["fw-x"]["mds_domain"] == "CustomerA"
+
+
+def test_firewall_set_mds_domain_manually(client: TestClient) -> None:
+    _add_firewall(client, name="fw-x", address="192.0.2.70", role="gateway")
+    resp = client.post(
+        "/api/env/default/firewalls/fw-x/mds-domain", json={"mds_domain": "CustomerB"}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"mds_domain": "CustomerB"}
+    firewalls = {f["name"]: f for f in client.get("/api/env/default/firewalls").json()}
+    assert firewalls["fw-x"]["mds_domain"] == "CustomerB"
+
+    # Clearing it, and unknown firewall 404s (mirrors cluster-name).
+    resp = client.post("/api/env/default/firewalls/fw-x/mds-domain", json={"mds_domain": None})
+    assert resp.json() == {"mds_domain": None}
+    resp = client.post("/api/env/default/firewalls/ghost/mds-domain", json={"mds_domain": "x"})
+    assert resp.status_code == 404, resp.text
+
+
+def test_firewall_cluster_recheck_uses_the_firewalls_stored_mds_domain(
+    client: TestClient,
+) -> None:
+    """Regression guard for the bug report this shipped to fix: on a Multi-
+    Domain environment the cluster-name lookup must log into the firewall's
+    tracked Domain, not the MDS system context — without a domain, the
+    Management API has nothing to scope the lookup to."""
+    _add_firewall(client, name="fw-x", address="192.0.2.70", role="gateway")
+    client.post("/api/env/default/firewalls/fw-x/mds-domain", json={"mds_domain": "CustomerA"})
+
+    # No primary management server configured in "default" — find_cluster_name
+    # can't reach the API regardless, so this only verifies the endpoint reads
+    # and forwards the stored domain without erroring, not the login payload
+    # itself (that's covered at the service layer, see test_discovery.py).
+    resp = client.post("/api/env/default/firewalls/fw-x/cluster-recheck")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"cluster_name": None, "resolved": False}
+
+
 def test_delete_environment_and_its_servers(client: TestClient) -> None:
     client.post("/api/environments", json={"name": "temp"})
     job = _add_server(client, "temp", name="m1", address="192.0.2.80", role="mds")

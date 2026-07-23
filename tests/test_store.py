@@ -389,6 +389,28 @@ def test_set_firewall_cluster_name(store: Store) -> None:
     assert store.set_firewall_cluster_name("corp", "ghost", "x") is False
 
 
+def test_set_firewall_mds_domain(store: Store) -> None:
+    store.insert_environment("corp")
+    store.upsert_firewall(
+        FirewallRow(environment="corp", name="fw-01", address="10.0.0.1", role="gateway")
+    )
+    assert store.get_firewall("corp", "fw-01").mds_domain is None  # type: ignore[union-attr]
+
+    assert store.set_firewall_mds_domain("corp", "fw-01", "CustomerA") is True
+    assert store.get_firewall("corp", "fw-01").mds_domain == "CustomerA"  # type: ignore[union-attr]
+
+    # upsert_firewall (an ordinary add/edit) never touches mds_domain — only
+    # this targeted UPDATE does (mirrors set_firewall_cluster_name).
+    store.upsert_firewall(
+        FirewallRow(environment="corp", name="fw-01", address="10.0.0.2", role="gateway")
+    )
+    assert store.get_firewall("corp", "fw-01").mds_domain == "CustomerA"  # type: ignore[union-attr]
+
+    assert store.set_firewall_mds_domain("corp", "fw-01", None) is True  # clears it
+    assert store.get_firewall("corp", "fw-01").mds_domain is None  # type: ignore[union-attr]
+    assert store.set_firewall_mds_domain("corp", "ghost", "x") is False
+
+
 def test_deleting_environment_cascades_to_firewalls(store: Store) -> None:
     store.insert_environment("corp")
     store.upsert_firewall(

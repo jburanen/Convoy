@@ -388,6 +388,23 @@ def test_find_cluster_name_via_management_api() -> None:
     assert service.find_cluster_name("default", "not-a-member") is None
 
 
+def test_find_cluster_name_passes_domain_through_to_the_api_login() -> None:
+    """MDS lookups need a Domain to log into — the caller (the web layer,
+    reading the firewall's stored mds_domain) passes it through as-is."""
+    inv = _inventory(Host(name="mds-primary", address="10.0.0.1", role=Role.PRIMARY_MDS))
+    connector = _FakeConnector(inv, _api_bundle(), is_mds=True)
+    seen_kwargs: list[dict[str, object]] = []
+
+    def factory(host: object, **kw: object) -> _FakeMgmtClient:
+        client = _FakeMgmtClient([], clusters=CLUSTERS, **kw)
+        seen_kwargs.append(client.kwargs)
+        return client
+
+    service = DiscoveryService(_FakeRegistry(connector), mgmt_client_factory=factory)  # type: ignore[arg-type]
+    assert service.find_cluster_name("default", "cluster-01", domain="CustomerA") == "prod-cluster"
+    assert seen_kwargs[0]["domain"] == "CustomerA"
+
+
 def test_find_cluster_name_no_primary_configured_returns_none() -> None:
     # No Primary SMS/MDS in the inventory at all — primary_mgmt_host() raises.
     inv = _inventory(Host(name="fw-01", address="192.0.2.20", role=Role.GATEWAY))

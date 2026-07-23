@@ -1757,7 +1757,12 @@ async function loadFirewalls() {
     // The name itself is the row's only Edit trigger now — Remove lives inside
     // the modal it opens, rather than its own row button.
     row.querySelector(".fw-name-link").addEventListener("click", () => {
-      openEditFirewallModal(fw, state && state.credential_set, state && state.cluster_name);
+      openEditFirewallModal(
+        fw,
+        state && state.credential_set,
+        state && state.cluster_name,
+        state && state.mds_domain,
+      );
     });
     tbody.appendChild(row);
     tbody.appendChild(stateRow);
@@ -1937,13 +1942,14 @@ async function openAddFirewallModal() {
   document.getElementById("firewall-modal-submit").textContent = "Add firewall";
   document.getElementById("firewall-modal-remove").classList.add("hidden");
   // Nothing to check yet — the host doesn't exist in the store until this
-  // form is submitted, and cluster-recheck needs an existing firewall.
+  // form is submitted, and cluster-recheck/domain need an existing firewall.
   document.getElementById("fm-cluster-info").classList.add("hidden");
+  document.getElementById("fm-domain-info").classList.add("hidden");
   await populateFirewallCredSelect();
   document.getElementById("firewall-modal").classList.remove("hidden");
   document.getElementById("fm-name").focus();
 }
-async function openEditFirewallModal(fw, assignedSetName, clusterName) {
+async function openEditFirewallModal(fw, assignedSetName, clusterName, mdsDomain) {
   editingFirewallName = fw.name;
   document.getElementById("fm-name").value = fw.name;
   document.getElementById("fm-name").disabled = true;
@@ -1957,6 +1963,12 @@ async function openEditFirewallModal(fw, assignedSetName, clusterName) {
   document.getElementById("fm-cluster-info").classList.remove("hidden");
   renderFirewallClusterInfo(clusterName);
   await populateFirewallCredSelect(assignedSetName);
+  if (envIsMds[currentEnv]) {
+    document.getElementById("fm-domain-info").classList.remove("hidden");
+    await populateFirewallDomainSelect(mdsDomain);
+  } else {
+    document.getElementById("fm-domain-info").classList.add("hidden");
+  }
   document.getElementById("firewall-modal").classList.remove("hidden");
   document.getElementById("fm-address").focus();
 }
@@ -1964,6 +1976,31 @@ async function openEditFirewallModal(fw, assignedSetName, clusterName) {
 function renderFirewallClusterInfo(clusterName) {
   document.getElementById("fm-cluster-name").value = clusterName || "";
   document.getElementById("fm-cluster-status").textContent = "";
+}
+
+// MDS-only. Populates the Domain dropdown from the same /domains endpoint the
+// discover-firewalls modal uses, so the operator picks from real Domain names
+// rather than typing one by hand.
+async function populateFirewallDomainSelect(currentDomain) {
+  const select = document.getElementById("fm-domain-select");
+  select.querySelectorAll("option:not(:first-child)").forEach((o) => o.remove());
+  document.getElementById("fm-domain-status").textContent = "";
+  try {
+    const { domains, warnings } = await api(
+      `/api/environments/${encodeURIComponent(currentEnv)}/domains`,
+    );
+    for (const d of domains) select.appendChild(new Option(d, d));
+    for (const w of warnings || []) toast(w);
+  } catch (e) {
+    document.getElementById("fm-domain-status").textContent = "Could not load domains: " + e.message;
+  }
+  // The stored domain may not be in the current domains list (renamed/removed
+  // on the MDS since it was set) — add it anyway so Save doesn't silently
+  // change it just by opening the modal.
+  if (currentDomain && !select.querySelector(`option[value="${CSS.escape(currentDomain)}"]`)) {
+    select.appendChild(new Option(currentDomain, currentDomain));
+  }
+  select.value = currentDomain || "";
 }
 
 // Management API only, no SSH — Check Point doesn't expose the SmartConsole
@@ -1992,8 +2029,8 @@ document.getElementById("fm-cluster-recheck").addEventListener("click", async ()
 });
 
 // Manual fallback for when the Management API can't resolve a name (no
-// primary configured, older management version, MDS domain not tracked
-// per-firewall) — operator types the real cluster object name in by hand.
+// primary configured, older management version, or no Domain set on this
+// firewall on an MDS) — operator types the real cluster object name in by hand.
 document.getElementById("fm-cluster-save").addEventListener("click", async () => {
   const name = editingFirewallName;
   if (!name) return;
@@ -2010,6 +2047,29 @@ document.getElementById("fm-cluster-save").addEventListener("click", async () =>
     await loadFirewalls();
   } catch (e) {
     document.getElementById("fm-cluster-status").textContent = "save failed: " + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// MDS Domain/CMA membership — set automatically at discovery-import time, or
+// adjustable here for manually-added firewalls or if it was ever guessed wrong.
+document.getElementById("fm-domain-save").addEventListener("click", async () => {
+  const name = editingFirewallName;
+  if (!name) return;
+  const btn = document.getElementById("fm-domain-save");
+  const value = document.getElementById("fm-domain-select").value;
+  btn.disabled = true;
+  try {
+    await api(envUrl(`/firewalls/${encodeURIComponent(name)}/mds-domain`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mds_domain: value || null }),
+    });
+    document.getElementById("fm-domain-status").textContent = "saved";
+    await loadFirewalls();
+  } catch (e) {
+    document.getElementById("fm-domain-status").textContent = "save failed: " + e.message;
   } finally {
     btn.disabled = false;
   }
@@ -2202,6 +2262,9 @@ function renderDiscoverFirewallsResults(result) {
     // so it rides straight into the add-firewall payload without a second
     // round trip.
     row.dataset.clusterName = s.cluster_name || "";
+    // Same idea as clusterName above — the Domain/CMA this whole scan ran
+    // against (None on SMS), so it rides straight into the import payload.
+    row.dataset.mdsDomain = s.mds_domain || "";
     let noteText = s.note || "";
     if (s.already_in_inventory) {
       noteText = "already in inventory";
@@ -2250,6 +2313,7 @@ document.getElementById("discover-firewalls-import").addEventListener("click", a
           name, address, role, ssh_user: discoverFwPrimarySshUser,
           credential_set: (storageEnabled() && discoverFwPrimaryCredSet) || undefined,
           cluster_name: r.dataset.clusterName || undefined,
+          mds_domain: r.dataset.mdsDomain || undefined,
         }),
       });
       lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if it finishes fast

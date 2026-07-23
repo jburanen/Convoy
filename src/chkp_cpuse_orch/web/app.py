@@ -241,6 +241,10 @@ class ClusterNameRequest(BaseModel):
     cluster_name: str | None = None  # None clears a manually-set name
 
 
+class FirewallDomainRequest(BaseModel):
+    mds_domain: str | None = None  # None clears a manually-set domain
+
+
 class CandidatesIn(OperationCredentials):
     header: list[str]
     rows: list[list[str]]  # row order == deployment order
@@ -324,6 +328,11 @@ class FirewallIn(BaseModel):
     # genuine creation (services/prov_ops.py gates on JOB_ADD), so leaving
     # this unset on an edit can never clobber a previously-detected name.
     cluster_name: str | None = None
+    # MDS Domain/CMA this firewall lives in, pre-filled by the discover-
+    # firewalls import flow (the operator-picked Domain that scan ran
+    # against). Same JOB_ADD-only gating as cluster_name — manual correction
+    # goes through the dedicated mds-domain endpoint instead.
+    mds_domain: str | None = None
 
 
 # -- app factory -------------------------------------------------------------------
@@ -896,6 +905,7 @@ def _register_routes(app: FastAPI) -> None:
                     body.credential_set if "credential_set" in body.model_fields_set else UNSET
                 ),
                 cluster_name=body.cluster_name,
+                mds_domain=body.mds_domain,
                 triggered_by=_current_user(request),
             )
         except OrchestratorError as exc:
@@ -934,6 +944,11 @@ def _register_routes(app: FastAPI) -> None:
                     "needs_review": s.needs_review,
                     "note": s.note,
                     "cluster_name": s.cluster_name,
+                    # The Domain/CMA this whole scan ran against (None on SMS) —
+                    # uniform across every row in one discover-firewalls call, so
+                    # it's threaded straight from the request rather than tracked
+                    # per-server. Rides into the import payload as FirewallIn.mds_domain.
+                    "mds_domain": body.domain,
                 }
                 for s in result.servers
             ],
@@ -1113,6 +1128,7 @@ def _register_routes(app: FastAPI) -> None:
                         "installable": cached.installable if cached else [],
                         "cluster_role": cached.cluster_role if cached else None,
                         "cluster_name": fw_row.cluster_name if fw_row else None,
+                        "mds_domain": fw_row.mds_domain if fw_row else None,
                     }
                 )
             return result
@@ -1142,6 +1158,7 @@ def _register_routes(app: FastAPI) -> None:
             "installable": cached.installable,
             "cluster_role": cached.cluster_role,
             "cluster_name": fw_row.cluster_name if fw_row else None,
+            "mds_domain": fw_row.mds_domain if fw_row else None,
             "packages": [
                 {
                     "identifier": p.identifier,
@@ -1162,23 +1179,44 @@ def _register_routes(app: FastAPI) -> None:
         at discovery time (manually added, or added before this shipped).
         Never falls back to SSH: Check Point doesn't expose the SmartConsole
         cluster object's own name over the CLI on the member itself (see
-        clusterxl.py), so no live command can ever answer this. If the API
+        clusterxl.py), so no live command can ever answer this. On a Multi-
+        Domain environment, the lookup logs into the firewall's stored
+        ``mds_domain`` (set at discovery-import time, or by hand from the
+        edit modal's Domain dropdown) — without one, the Management API has
+        no Domain to log into and this always resolves nothing. If the API
         can't resolve one (no primary configured, no usable credentials,
-        older management version, or an MDS domain we don't track
-        per-firewall), the previously stored name is left untouched —
-        operators can set it by hand via the edit modal's manual field
-        instead."""
+        older management version, or no domain tracked for this firewall),
+        the previously stored name is left untouched — operators can set it
+        by hand via the edit modal's manual field instead."""
         discovery: DiscoveryService = request.app.state.discovery
-        cluster_name = await asyncio.to_thread(discovery.find_cluster_name, env, name)
+        store: Store = request.app.state.store
+        fw_row = store.get_firewall(env, name)
+        domain = fw_row.mds_domain if fw_row else None
+        cluster_name = await asyncio.to_thread(
+            discovery.find_cluster_name, env, name, domain=domain
+        )
         if cluster_name is not None:
             try:
                 _fwmgr(request).set_cluster_name(env, name, cluster_name)
             except OrchestratorError as exc:
                 raise _map_error(exc) from exc
             return {"cluster_name": cluster_name, "resolved": True}
-        store: Store = request.app.state.store
-        fw_row = store.get_firewall(env, name)
         return {"cluster_name": fw_row.cluster_name if fw_row else None, "resolved": False}
+
+    @app.post("/api/env/{env}/firewalls/{name}/mds-domain")
+    def firewall_set_mds_domain(
+        env: str, name: str, body: FirewallDomainRequest, request: Request
+    ) -> dict[str, Any]:
+        """Manually set (or clear, with ``null``) the MDS Domain/CMA a
+        firewall lives in — the Firewalls panel edit modal's Domain dropdown,
+        for MDS environments only. Deliberate, separate action from the
+        generic firewall edit save, matching cluster-name's manual field:
+        ordinary edits never touch this field (see FirewallManager.set_domain)."""
+        try:
+            _fwmgr(request).set_domain(env, name, body.mds_domain)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        return {"mds_domain": body.mds_domain}
 
     @app.post("/api/env/{env}/firewalls/{name}/cluster-name")
     def firewall_set_cluster_name(

@@ -242,9 +242,10 @@ class DiscoveryService:
         member all just resolve to None, same as "not a cluster member".
 
         MDS environments need a Domain to log into to see any clusters at
-        all, and which Domain a given firewall lives in isn't tracked
-        per-firewall today — callers there should pass ``domain`` if they
-        know it; without one this always returns None rather than guessing."""
+        all — callers should pass the firewall's stored ``mds_domain``
+        (``FirewallRow.mds_domain``, set at discovery-import time or via the
+        edit modal's Domain dropdown) if they have it; without one this
+        always returns None rather than guessing."""
         connector = self._registry.get(environment)
         try:
             primary = connector.primary_mgmt_host()

@@ -193,3 +193,34 @@ def test_editing_a_firewall_never_clobbers_a_previously_set_cluster_name(store: 
     fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.1", role="gateway", ssh_user="other")
     assert store.get_firewall("corp", "fw-1").ssh_user == "other"  # type: ignore[union-attr]
     assert store.get_firewall("corp", "fw-1").cluster_name == "prod-cluster"  # type: ignore[union-attr]
+
+
+def test_set_domain(store: Store) -> None:
+    registry = EnvironmentRegistry()
+    env_mgr, fw_mgr = _managers(store, registry)
+    env_mgr.create_environment("corp")
+    fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.1", role="gateway", ssh_user="admin")
+
+    fw_mgr.set_domain("corp", "fw-1", "CustomerA")
+    assert store.get_firewall("corp", "fw-1").credential_set_id is None  # untouched
+    assert store.get_firewall("corp", "fw-1").mds_domain == "CustomerA"  # type: ignore[union-attr]
+
+    fw_mgr.set_domain("corp", "fw-1", None)  # clears it
+    assert store.get_firewall("corp", "fw-1").mds_domain is None  # type: ignore[union-attr]
+
+    with pytest.raises(InventoryError, match="firewall 'ghost' not found"):
+        fw_mgr.set_domain("corp", "ghost", "CustomerA")
+
+
+def test_editing_a_firewall_never_clobbers_a_previously_set_domain(store: Store) -> None:
+    """Same reasoning as cluster_name above: upsert_firewall must never touch
+    mds_domain — only set_domain (a targeted UPDATE) does."""
+    registry = EnvironmentRegistry()
+    env_mgr, fw_mgr = _managers(store, registry)
+    env_mgr.create_environment("corp")
+    fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.1", role="gateway", ssh_user="admin")
+    fw_mgr.set_domain("corp", "fw-1", "CustomerA")
+
+    fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.1", role="gateway", ssh_user="other")
+    assert store.get_firewall("corp", "fw-1").ssh_user == "other"  # type: ignore[union-attr]
+    assert store.get_firewall("corp", "fw-1").mds_domain == "CustomerA"  # type: ignore[union-attr]

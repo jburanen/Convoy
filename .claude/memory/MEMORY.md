@@ -22,3 +22,4 @@ Load this at the start of each session; read a linked file when its hook looks r
 - [Firewall discovery domain picker](firewall-discovery-domain-picker.md) — no source-server picker (one primary/env); MDS picks a Domain via `show-domains` (unverified against live gear)
 - [ClusterXL live state](clusterxl-live-state.md) — Firewalls panel: role is live (cphaprob, every refresh); cluster name is static, Mgmt-API-only + manual fallback, stored on FirewallRow
 - [No SSH for cluster name](no-ssh-for-cluster-name.md) — cluster object name is Mgmt-API-only, ever; manual entry is the only valid fallback, never SSH/CLI
+- [MDS domain per firewall](mds-domain-per-firewall.md) — FirewallRow.mds_domain tracks each firewall's Domain/CMA so post-hoc API lookups can log in correctly on MDS

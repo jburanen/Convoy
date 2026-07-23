@@ -753,6 +753,19 @@
         </div>
         <p class="hint" id="fm-cluster-status"></p>
       </div>
+      <!-- Edit mode only, MDS environments only. Which Domain/CMA this firewall
+           lives in — set automatically by the discover-firewalls import flow, or
+           adjustable here by hand. Management API calls scoped to one Domain
+           (e.g. cluster-name re-check) need this to log in correctly. -->
+      <div id="fm-domain-info" class="hidden">
+        <label>Domain (MDS)
+          <select id="fm-domain-select"><option value="">unknown — not set</option></select>
+        </label>
+        <div class="cred-modal-actions">
+          <button type="button" id="fm-domain-save" class="small secondary">Save domain</button>
+        </div>
+        <p class="hint" id="fm-domain-status"></p>
+      </div>
       <div class="cred-modal-actions">
         <button type="submit" id="firewall-modal-submit">Add firewall</button>
         <button type="button" id="firewall-modal-cancel" class="secondary">Cancel</button>
