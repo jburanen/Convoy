@@ -15,17 +15,19 @@ from pathlib import Path
 
 from .store import JobRecord, Store, utcnow
 
-DEFAULT_MAX_AGE_DAYS = 366
-DEFAULT_MAX_BYTES = 50 * 1024 * 1024  # 50MB
+DEFAULT_MAX_AGE_DAYS = 366  # ~1 year in the DB, then a job ages out to the archive
+DEFAULT_ARCHIVE_RETENTION_DAYS = 3 * 366  # ~3 years kept in the archive file, then dropped
 
 
 class JobArchiver:
     """Moves finished jobs older than ``max_age_days`` — their metadata,
     progress log, and any captured CPUSE install-log text — out of the DB
     and appends each as one JSON line to ``archive_path``, then deletes them
-    from the DB (their events cascade). The archive file is kept under
-    ``max_bytes`` by dropping the oldest lines as new ones are added, so it
-    never grows unbounded even across years of operation."""
+    from the DB (their events cascade). Whenever it appends, it also drops any
+    archived entries older than ``archive_retention_days`` (by the same
+    ``created_at`` the DB archival keys off), so the file holds a bounded,
+    time-based window — the most recent ~3 years — rather than growing forever
+    or being trimmed by raw size."""
 
     def __init__(
         self,
@@ -33,16 +35,18 @@ class JobArchiver:
         archive_path: Path,
         *,
         max_age_days: int = DEFAULT_MAX_AGE_DAYS,
-        max_bytes: int = DEFAULT_MAX_BYTES,
+        archive_retention_days: int = DEFAULT_ARCHIVE_RETENTION_DAYS,
     ) -> None:
         self._store = store
         self._path = Path(archive_path)
         self._max_age_days = max_age_days
-        self._max_bytes = max_bytes
+        self._archive_retention_days = archive_retention_days
 
     def run(self, now: datetime | None = None) -> int:
-        """Archive + delete eligible jobs. Returns how many were archived."""
-        cutoff = (now or utcnow()) - timedelta(days=self._max_age_days)
+        """Archive + delete eligible jobs, then prune archive entries past the
+        retention window. Returns how many jobs were archived."""
+        now = now or utcnow()
+        cutoff = now - timedelta(days=self._max_age_days)
         candidates = self._store.list_archivable_jobs(cutoff)
         if not candidates:
             return 0
@@ -52,7 +56,7 @@ class JobArchiver:
                 f.write(json.dumps(_archive_record(job, self._store), sort_keys=True))
                 f.write("\n")
                 self._store.delete_job(job.id)
-        _enforce_max_bytes(self._path, self._max_bytes)
+        _prune_older_than(self._path, now - timedelta(days=self._archive_retention_days))
         return len(candidates)
 
 
@@ -76,23 +80,30 @@ def _archive_record(job: JobRecord, store: Store) -> dict[str, object]:
     }
 
 
-def _enforce_max_bytes(path: Path, max_bytes: int) -> None:
-    """Drop whole lines from the *front* of the file until it's back under
-    ``max_bytes`` — the archive is append-only and time-ordered, so the
-    oldest entries are always at the start."""
+def _prune_older_than(path: Path, cutoff: datetime) -> None:
+    """Drop archived entries whose job was created before ``cutoff`` — the same
+    ``created_at`` basis the DB archival uses. The archive is append-only and
+    roughly time-ordered, but we parse each line's timestamp rather than assume
+    order, so a hand-edited or out-of-order file still prunes correctly. Lines
+    that don't parse are kept — we'd rather retain an odd line than lose audit
+    data — and the file is only rewritten when something is actually dropped."""
     try:
-        size = path.stat().st_size
+        raw = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return
-    if size <= max_bytes:
-        return
-    data = path.read_bytes()
-    lines = data.split(b"\n")
-    total = len(data)
-    start = 0
-    # Keep at least the final (possibly empty) element from the trailing
-    # newline's split so a well-formed file still ends in a newline.
-    while total > max_bytes and start < len(lines) - 1:
-        total -= len(lines[start]) + 1  # the line plus its newline
-        start += 1
-    path.write_bytes(b"\n".join(lines[start:]))
+    kept: list[str] = []
+    dropped = False
+    for line in raw.splitlines():
+        if not line:
+            continue
+        try:
+            created = datetime.fromisoformat(json.loads(line)["created_at"])
+        except (ValueError, KeyError, TypeError):
+            kept.append(line)  # unparseable/legacy line — never silently discard
+            continue
+        if created >= cutoff:
+            kept.append(line)
+        else:
+            dropped = True
+    if dropped:
+        path.write_text("".join(f"{line}\n" for line in kept), encoding="utf-8")

@@ -240,13 +240,41 @@ section h2 { margin: 0 0 0.75rem; font-size: 1.15rem; }
    left to right) instead of spreading them out via the row's space-between. */
 .section-head-actions { display: flex; align-items: center; gap: 0.5rem; }
 
-/* Collapsible panel whose <summary> IS the section header (see #provision) —
-   same visual weight as a plain section h2, just clickable. Its own action
-   button/hint/form live in the details body, so they hide along with
-   everything else when collapsed. */
-#provision > summary { cursor: pointer; margin-bottom: 0.75rem; }
-#provision > summary h2 { display: inline; margin: 0; }
-#provision .section-head-actions { margin-bottom: 0.75rem; }
+/* Collapsible panel whose <summary> IS the section header — same visual weight
+   as a plain section h2, just clickable. Its own action button(s)/hint/form
+   live in the details body, so they hide along with everything else when
+   collapsed. Shared by #provision-details (Provisioning/Bootstrap, collapsed
+   by default) and #servers-details (CPUSE/Management Servers, expanded by
+   default via its "open" attribute) — same UI factors, different default
+   open state, which lives on the element, not this CSS. */
+#provision-details > summary,
+#servers-details > summary {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  margin-bottom: 0.75rem;
+  /* Drop the default left disclosure marker so the title lines up flush-left
+     with every other panel's section h2 (the triangle moves right, below). */
+  list-style: none;
+}
+#provision-details > summary::-webkit-details-marker,
+#servers-details > summary::-webkit-details-marker { display: none; }
+#provision-details > summary h2,
+#servers-details > summary h2 { margin: 0; }
+/* Custom triangle: inline with the title, centred in the gap between the title
+   and the panel's right edge — flex:1 makes the pseudo-element fill that gap,
+   text-align centres the glyph within it. Right-pointing collapsed, down open. */
+#provision-details > summary::after,
+#servers-details > summary::after {
+  content: "▸";
+  flex: 1;
+  text-align: center;
+  color: var(--muted);
+}
+#provision-details[open] > summary::after,
+#servers-details[open] > summary::after { content: "▾"; }
+#provision .section-head-actions,
+#servers .section-head-actions { margin-bottom: 0.75rem; }
 
 /* ---- tables ---- */
 table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
@@ -278,6 +306,13 @@ tr.job-row:hover td { background: var(--badge-bg); }
 #jobs-table th,
 .job-kind, .job-target, .job-env, .job-status, .job-started {
   white-space: nowrap;
+}
+
+/* Uniform row text: every Jobs cell (and the Status badge) renders at the Env
+   column's size (0.85rem, the .muted size). Font-size only — colors unchanged. */
+#jobs-table td,
+#jobs-table .badge {
+  font-size: 0.85rem;
 }
 
 /* A copy of CPUSE's own install log (install jobs only, once captured) —
@@ -332,14 +367,14 @@ tr.job-install-log-row td { padding-top: 0; padding-bottom: 0.5rem; }
   align-items: flex-start;
 }
 
-/* Packages table: filename/size, sha1(+retention hint), sha256 form one
-   grouped three-line entry, so only the last (sha256) row carries the
-   separator below it. .pkg-actions is excluded — it's a rowspan="3" cell
-   that structurally belongs to tr.pkg-row, so this rule was also wiping its
-   border-bottom, leaving the divider line short of the right edge under
-   the Delete button for the whole three-row span. */
-tr.pkg-row td:not(.pkg-actions), tr.pkg-sha1-row td { border-bottom: none; padding-bottom: 0; }
-tr.pkg-sha1-row td, tr.pkg-sha256-row td { padding-top: 0; }
+/* Packages table: filename/size and sha1(+retention hint) form one grouped
+   two-line entry, so only the last (sha1) row carries the separator below
+   it. .pkg-actions is excluded — it's a rowspan="2" cell that structurally
+   belongs to tr.pkg-row, so this rule was also wiping its border-bottom,
+   leaving the divider line short of the right edge under the Delete button
+   for the whole two-row span. */
+tr.pkg-row td:not(.pkg-actions) { border-bottom: none; padding-bottom: 0; }
+tr.pkg-sha1-row td { padding-top: 0; }
 .pkg-expiry.warn { color: var(--warn); font-weight: 600; }
 /* Nowrap so the column auto-sizes to fit "expires M/D/YYYY" on one line
    instead of shrinking to the Keep checkbox's width and wrapping the hint. */
@@ -401,6 +436,9 @@ button.link-btn:disabled { opacity: 0.5; text-decoration: none; }
 .badge.ok { color: var(--ok); }
 .badge.warn { color: var(--warn); }
 .badge.err { color: var(--danger); }
+/* Agent-build status that isn't "up to date" — surfaced in orange (the --warn
+   amber) so an out-of-date/abnormal Deployment Agent stands out at a glance. */
+.agent-build-attention { color: var(--warn); font-weight: 600; }
 
 .mono { font-family: var(--mono); font-size: 0.86rem; }
 .muted { color: var(--muted); font-size: 0.85rem; }
@@ -446,6 +484,11 @@ tr.srv-state-row td { padding-top: 0; }
    itself — so these three columns don't wrap. The fill column (below) is
    what absorbs/gives up space instead. */
 .srv-name, .srv-address, .srv-role, .col-nowrap { white-space: nowrap; }
+/* Address/SSH-user cells here carry the shared .mono class (monospace, smaller),
+   but this table should read as one uniform font — match the Server column
+   (.srv-name), which is unstyled body text. Scoped to this table only, so the
+   .mono class itself (used elsewhere, e.g. the Credentials table) is untouched. */
+#servers-info-table .mono { font-family: inherit; font-size: inherit; }
 /* A flex wrapper *inside* the cell, not the <td> itself — display: flex
    directly on a table-cell risks it dropping out of column-width
    calculations in some browsers. */
@@ -567,7 +610,7 @@ tr.srv-state-row td { padding-top: 0; }
   color: var(--muted);
   font-size: 0.72rem;
   font-weight: 700;
-  vertical-align: middle;
+  vertical-align: baseline; /* pill text sits on the same baseline as the name */
 }
 /* Out-rank the generic .hidden — same-specificity tie, .pill declared later
    would otherwise always win and the pill never actually hides. */

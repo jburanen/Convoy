@@ -79,28 +79,49 @@ def test_install_log_is_included_in_the_archived_record(store: Store, tmp_path: 
     assert record["install_log"] == "captured log text\nsecond line"
 
 
-def test_enforces_max_bytes_by_dropping_oldest_entries(store: Store, tmp_path: Path) -> None:
-    # Three archivable jobs, oldest first, each with a long install_log so
-    # every archived line is a predictable, substantial size.
-    job_ids = []
-    for age in (403, 402, 401):  # oldest to newest
-        job = _old_finished_job(store, age_days=age)
-        store.set_install_log(job.id, "x" * 500)
-        job_ids.append(job.id)
-
+def test_prunes_archived_entries_past_the_retention_window(store: Store, tmp_path: Path) -> None:
+    # Two jobs, both aged out of the DB (>366 days), but one is older than the
+    # 3-year archive-retention window and the other isn't. Both get archived out
+    # of the DB in this pass; only the within-window one stays in the file.
+    stale = _old_finished_job(store, age_days=4 * 366)  # older than 3-year retention
+    recent = _old_finished_job(store, age_days=400)  # aged out of the DB, within retention
     archive_path = tmp_path / "job_archive.log"
-    # Each archived line is ~1KB here (500-byte install_log + JSON overhead) —
-    # 1500 bytes leaves room for exactly one of the three.
-    archived = JobArchiver(store, archive_path, max_bytes=1500).run()
 
-    assert archived == 3  # all three were archived (and removed from the DB)...
-    assert archive_path.stat().st_size <= 1500  # ...but the file stayed bounded
+    archived = JobArchiver(store, archive_path, archive_retention_days=3 * 366).run()
+
+    assert archived == 2  # both were archived out of the DB...
+    surviving_ids = [json.loads(line)["id"] for line in archive_path.read_text().splitlines()]
+    assert surviving_ids == [recent.id]  # ...but the >3-year-old entry was pruned from the file
+    assert stale.id not in surviving_ids
+
+
+def test_appending_prunes_preexisting_stale_entries(store: Store, tmp_path: Path) -> None:
+    # An entry archived long ago (job created 4 years back) already sits in the
+    # file. Archiving a freshly-aged-out job must, in the same pass, drop it.
+    archive_path = tmp_path / "job_archive.log"
+    stale_ts = (utcnow() - timedelta(days=4 * 366)).isoformat()
+    archive_path.write_text(
+        json.dumps({"id": "stale", "created_at": stale_ts}) + "\n", encoding="utf-8"
+    )
+
+    fresh = _old_finished_job(store, age_days=400)
+    JobArchiver(store, archive_path, archive_retention_days=3 * 366).run()
 
     surviving_ids = [json.loads(line)["id"] for line in archive_path.read_text().splitlines()]
-    # Whatever survived is a suffix of the oldest-to-newest write order — the
-    # oldest entries were the ones dropped, not the newest.
-    assert surviving_ids == job_ids[len(job_ids) - len(surviving_ids) :]
-    assert job_ids[-1] in surviving_ids  # the newest always survives
+    assert surviving_ids == [fresh.id]  # the stale entry is gone, the new one remains
+
+
+def test_unparseable_archive_lines_are_never_dropped(store: Store, tmp_path: Path) -> None:
+    # A legacy/hand-edited line without a parseable created_at is kept even when
+    # a prune runs, so pruning never silently loses audit data.
+    archive_path = tmp_path / "job_archive.log"
+    archive_path.write_text("not json at all\n", encoding="utf-8")
+
+    _old_finished_job(store, age_days=400)  # forces an append + prune pass
+    JobArchiver(store, archive_path, archive_retention_days=3 * 366).run()
+
+    lines = archive_path.read_text().splitlines()
+    assert "not json at all" in lines
 
 
 def test_run_is_a_noop_with_nothing_to_archive(store: Store, tmp_path: Path) -> None:

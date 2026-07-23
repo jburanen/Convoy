@@ -1364,8 +1364,20 @@ function renderStateRow(stateRow, data) {
     checked.textContent = "";
     return;
   }
+  const agentBuild = formatAgentBuild(data.agent_build);
   summary.textContent =
-    `Running ${data.version ?? "—"} w/JHF ${data.jhf ?? "—"} | CPUSE Agent ${formatAgentBuild(data.agent_build)}`;
+    `Running ${data.version ?? "—"} w/JHF ${data.jhf ?? "—"} | CPUSE Agent `;
+  // The DA build normally reports "(Agent build is up to date)". Any other
+  // status — a newer build available, an error string — warrants the operator's
+  // eye, so render that text in orange instead of the normal muted colour.
+  if (agentBuild !== "—" && !/agent build is up to date/i.test(data.agent_build || "")) {
+    const attn = document.createElement("span");
+    attn.className = "agent-build-attention";
+    attn.textContent = agentBuild;
+    summary.appendChild(attn);
+  } else {
+    summary.appendChild(document.createTextNode(agentBuild));
+  }
   checked.textContent = data.checked_at ? ` | Refreshed ${fmtTime(data.checked_at)}` : "";
 }
 
@@ -1714,8 +1726,6 @@ async function loadPackages() {
 
     const sha1Row = el("tpl-package-sha1-row");
     sha1Row.querySelector(".pkg-sha1").textContent = `sha1: ${pkg.sha1}`;
-    const sha256Row = el("tpl-package-sha256-row");
-    sha256Row.querySelector(".pkg-sha256").textContent = `sha256: ${pkg.sha256}`;
 
     // Retention: ticked "Keep" == pinned (no expiry). Otherwise show the deadline.
     const pin = row.querySelector(".pkg-pin");
@@ -1754,7 +1764,6 @@ async function loadPackages() {
     });
     tbody.appendChild(row);
     tbody.appendChild(sha1Row);
-    tbody.appendChild(sha256Row);
   }
   await populateCdtSelectors(); // keep the CDT dropdowns in sync with packages/servers
 }

@@ -240,7 +240,7 @@
             <th></th>
           </tr>
         </thead>
-        <tbody><!-- tpl-package-row / tpl-package-sha1-row / tpl-package-sha256-row instances --></tbody>
+        <tbody><!-- tpl-package-row / tpl-package-sha1-row instances --></tbody>
       </table>
     </section>
 
@@ -250,49 +250,55 @@
   <div class="tab-panel" id="tab-management">
 
     <section id="servers">
-      <div class="section-head">
-        <h2>Management Servers</h2>
+      <!-- Collapsible with the same UI factors as #provision-details (Provisioning
+           / Bootstrap panel) — custom triangle centred between the title and the
+           panel's right edge, action button(s) in the details body so they hide
+           along with everything else when collapsed. Expanded by default (the
+           "open" attribute), unlike Bootstrap, since this is the primary CPUSE
+           working view. -->
+      <details id="servers-details" open>
+        <summary><h2>Management Servers</h2></summary>
         <div class="section-head-actions">
           <!-- Queries live show installer packages state for every server in
                this environment, one after another. -->
           <button type="button" id="refresh-all-btn" class="small">Refresh all</button>
         </div>
-      </div>
-      <p class="hint">
-        Patched locally via CPUSE (CDT does not patch management servers). The
-        detected state shown below (last row per server) is cached — click
-        <strong>Refresh</strong> on a server, or <strong>Refresh all</strong> above, to
-        query it live over SSH. Assign or change a server's credential set from
-        the <strong>Edit</strong> button on the Provisioning tab.
-      </p>
+        <p class="hint">
+          Patched locally via CPUSE (CDT does not patch management servers). The
+          detected state shown below (last row per server) is cached — click
+          <strong>Refresh</strong> on a server, or <strong>Refresh all</strong> above, to
+          query it live over SSH. Assign or change a server's credential set from
+          the <strong>Edit</strong> button on the Provisioning tab.
+        </p>
 
-      <div id="bulk-import">
-        <div class="bulk-import-row">
-          <label class="muted" for="bulk-import-package">Import a stored package:</label>
-          <select id="bulk-import-package"><option value="">— package —</option></select>
-          <button type="button" id="bulk-import-btn" class="small">Upload and import to selected</button>
+        <div id="bulk-import">
+          <div class="bulk-import-row">
+            <label class="muted" for="bulk-import-package">Import a stored package:</label>
+            <select id="bulk-import-package"><option value="">— package —</option></select>
+            <button type="button" id="bulk-import-btn" class="small">Upload and import to selected</button>
+          </div>
+          <div class="bulk-import-row">
+            <label class="muted" for="bulk-import-cloud-id">Or import directly from Check Point's cloud:</label>
+            <input type="text" id="bulk-import-cloud-id" placeholder="CPUSE package identifier">
+            <button type="button" id="bulk-import-cloud-btn" class="small">Import from cloud to selected</button>
+          </div>
         </div>
-        <div class="bulk-import-row">
-          <label class="muted" for="bulk-import-cloud-id">Or import directly from Check Point's cloud:</label>
-          <input type="text" id="bulk-import-cloud-id" placeholder="CPUSE package identifier">
-          <button type="button" id="bulk-import-cloud-btn" class="small">Import from cloud to selected</button>
-        </div>
-      </div>
 
-      <table id="servers-table">
-        <thead>
-          <tr>
-            <th class="col-select">
-              <input type="checkbox" id="srv-select-all" title="select/deselect all servers">
-            </th>
-            <th class="col-nowrap">Server</th>
-            <th class="col-nowrap">Address</th>
-            <th class="col-nowrap">Role</th>
-            <th class="col-fill">Packages imported and ready to install</th>
-          </tr>
-        </thead>
-        <tbody><!-- tpl-server-row / tpl-server-state-row instances --></tbody>
-      </table>
+        <table id="servers-table">
+          <thead>
+            <tr>
+              <th class="col-select">
+                <input type="checkbox" id="srv-select-all" title="select/deselect all servers">
+              </th>
+              <th class="col-nowrap">Server</th>
+              <th class="col-nowrap">Address</th>
+              <th class="col-nowrap">Role</th>
+              <th class="col-fill">Packages imported and ready to install</th>
+            </tr>
+          </thead>
+          <tbody><!-- tpl-server-row / tpl-server-state-row instances --></tbody>
+        </table>
+      </details>
     </section>
 
   </div>
@@ -356,9 +362,9 @@
       <p class="hint">
         Every import/install/CDT action runs as a background job and survives page
         reloads. Click a row to see its progress log. Running jobs can be cancelled
-        at the next safe point. Jobs older than a year are archived to
-        <span id="job-archive-hint" class="mono">a flat file on the server</span> and
-        removed from this list.
+        at the next safe point. Jobs older than a year are removed from this list, 
+        archived to a flat file on the server, and stored there for three 
+        additional years.
       </p>
       <!-- Multiselect filters, one per column — options are populated from
            /api/jobs/facets (every job that exists, not just the currently
@@ -748,9 +754,9 @@
   </tr>
 </template>
 
-<!-- A package is three rows: filename/size/Keep, sha1 (+ retention hint), and
-     sha256. The action cell spans all three so there's no empty cell (and its
-     padding) under the hashes to push them away from the filename row. -->
+<!-- A package is two rows: filename/size/Keep, then sha1 (+ retention hint).
+     The action cell spans both so there's no empty cell (and its padding)
+     under the hash to push it away from the filename row. -->
 <template id="tpl-package-row">
   <tr class="pkg-row">
     <td class="pkg-filename mono"></td>
@@ -760,7 +766,7 @@
         <input type="checkbox" class="pkg-pin"> Keep
       </label>
     </td>
-    <td class="pkg-actions" rowspan="3"><button class="btn-delete small danger">Delete</button></td>
+    <td class="pkg-actions" rowspan="2"><button class="btn-delete small danger">Delete</button></td>
   </tr>
 </template>
 
@@ -768,13 +774,6 @@
   <tr class="pkg-sha1-row">
     <td colspan="2" class="pkg-sha1 mono muted"></td>
     <td class="pkg-expiry muted"></td>
-  </tr>
-</template>
-
-<template id="tpl-package-sha256-row">
-  <tr class="pkg-sha256-row">
-    <td colspan="2" class="pkg-sha256 mono muted"></td>
-    <td></td>
   </tr>
 </template>
 

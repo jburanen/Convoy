@@ -175,13 +175,14 @@ it is tested and confirmed by a human. There will not be a packaged release unti
 ### Roadmap / Punch List
 
 - All: Add .env var to hide the hint text under the tabs
+- All: Add logic to display a warning on mobile devices that the UI of this tool does not scale down
+  well and you should use it on a larger display.
 - Provisioning: Treat credential management actions as jobs and track with prov. prefix
 - Provisioning: Treat server discovery and connection actions as jobs and track with prov. prefix
 - Provisioning: Filter role picker based on whether environment is labeled as MDS or not
 - Packages: Investigate if we can extract and display meta data like compatible major version from the package file
 - Packages: Treat uploads/deletions as a job and log them on the jobs tab with pkgs. prefix
 - Packages: When unchecking the keep box, set the retention timer to the configured duration beginning at time of action
-- Packages: Only display SHA1 hash, sha256 is not needed
 - Packages: Add ability to upload a stored package to the smartconsole packages repo using mgmt api [major]
 - CPUSE: Should multiple CPUSE jobs (with different tarets) be permitted to run concurrently?
 - CPUSE: Add concept of direct patching for gateways with a separate panel from mgmt servers [major]
