@@ -2045,9 +2045,22 @@ document.getElementById("jobs-limit").addEventListener("change", async () => {
   await loadJobs();
 });
 
-// Column -> query param name; also the "jobs-filter-<field>" select id suffix
-// and the /api/jobs/facets response key ("<field>s", e.g. "kinds").
+// Column -> query param name; also the "jobs-filter-<field>" select id
+// suffix. FACETS_KEY maps each to its /api/jobs/facets response key — NOT a
+// naive "<field>s" (that broke "status", whose facets key is "statuses":
+// "status" + "s" is "statuss", not a real key, so facets[...] was undefined
+// and the for-of loop below threw — operator-reported, 2026-07-23, as "the
+// filters show the right options but no jobs show" — because that throw
+// aborted loadJobFacets() (and the loadJobs() call awaiting it) partway
+// through the field loop, after kind/target/environment had already
+// populated but before the table ever got rebuilt).
 const JOBS_FILTER_FIELDS = ["kind", "target", "environment", "status"];
+const JOBS_FACETS_KEY = {
+  kind: "kinds",
+  target: "targets",
+  environment: "environments",
+  status: "statuses",
+};
 
 function jobsFilterSelect(field) {
   return document.getElementById(`jobs-filter-${field}`);
@@ -2072,7 +2085,7 @@ async function loadJobFacets() {
     const select = jobsFilterSelect(field);
     const selected = new Set([...select.selectedOptions].map((o) => o.value));
     select.replaceChildren();
-    for (const value of facets[`${field}s`]) {
+    for (const value of facets[JOBS_FACETS_KEY[field]]) {
       const opt = new Option(value, value);
       opt.selected = selected.has(value);
       select.appendChild(opt);
@@ -2137,7 +2150,15 @@ async function loadJobs() {
     // The visible set just changed shape — a plausible moment for a new
     // kind/target/environment/status to have shown up too, so refresh the
     // filter options (cheap; preserves the operator's current selections).
-    await loadJobFacets();
+    // A failure here must never block rendering the jobs table itself —
+    // that already happened once (2026-07-23: a facets bug threw here and
+    // silently left the whole Jobs tab blank even though the job fetch
+    // above had already succeeded).
+    try {
+      await loadJobFacets();
+    } catch (e) {
+      console.error("could not refresh job filter options:", e);
+    }
     tbody.replaceChildren();
     for (const job of jobs) {
       const row = el("tpl-job-row");
