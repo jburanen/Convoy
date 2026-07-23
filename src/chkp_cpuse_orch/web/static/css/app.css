@@ -340,12 +340,19 @@ tr.job-row:hover td { background: var(--badge-bg); }
   font-size: 0.85rem;
 }
 
-/* A copy of CPUSE's own install log (install jobs only, once captured) —
-   grouped under its job row the same way a package's hash lines are grouped
-   under the filename row: the job row's border moves down to this line
-   instead. Collapsed by default (<details> with no "open" attribute); the
-   summary line is all that shows until clicked. */
-tr.job-row:has(+ tr.job-install-log-row) td { border-bottom: none; }
+/* A job entry is one to three rows — job-row, then optionally job-events-row
+   (command output) and/or job-install-log-row (a copy of CPUSE's own install
+   log, install jobs only, once captured) — grouped the same way a package's
+   hash lines are grouped under the filename row: only the LAST row of a job's
+   group keeps its border-bottom, which then reads as the divider before the
+   next job. So strip it from job-row/job-events-row whenever a continuation
+   row immediately follows, whichever type that is. The install-log <details>
+   is collapsed by default; the summary line is all that shows until clicked. */
+tr.job-row:has(+ tr.job-events-row) td,
+tr.job-row:has(+ tr.job-install-log-row) td,
+tr.job-events-row:has(+ tr.job-install-log-row) td {
+  border-bottom: none;
+}
 tr.job-install-log-row td { padding-top: 0; padding-bottom: 0.5rem; }
 .job-install-log-summary { cursor: pointer; }
 .job-install-log {
