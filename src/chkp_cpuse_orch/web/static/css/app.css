@@ -580,10 +580,23 @@ tr.srv-state-row td { padding-top: 0; }
   justify-content: space-between;
   gap: 0.5rem;
 }
-/* min-width: 0 lets a flex item shrink below its content's intrinsic width
-   when needed instead of overflowing the row — flex: 1 does the requested
-   "expand to fill the remaining space" against the Install button. */
-.srv-actions-inner .install-select { flex: 1; min-width: 0; }
+/* A <select>'s closed box refuses to shrink below its longest <option>'s
+   text in several browsers even with min-width: 0 on a flex item — the
+   table's auto layout picks that up too and widens the whole panel to fit
+   a single long package filename. An explicit `width: 0` (a definite size,
+   not content-based) sidesteps that: flex-grow then expands it to fill the
+   row as normal, but nothing upstream ever consults the option text's
+   width. The truncation below is just the closed box's own display — the
+   native dropdown popup isn't width-constrained by its closed control, so
+   opening it still shows full package names. */
+.srv-actions-inner .install-select {
+  flex: 1 1 0;
+  width: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .skip-verify-label {
   display: flex;
   align-items: center;

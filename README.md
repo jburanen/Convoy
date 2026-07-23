@@ -187,6 +187,7 @@ CPUSE: ✨ Make the firewalls import-from-cloud line identical to the servers li
 CPUSE: ✨ Add muted explanatory text at top of firewalls panel to talk about how direct patching is mostly for management servers and small numbers of gateways. gateways can also be patched from SmartConsole and Web SmartConsole (generate a link). Large numbers of gateways can be patched with the CDT tab (future).  
 CPUSE: 🤞 If the disk space is below threshold, offer the option to override unless disk space is less than actual pkg size. also provide links to disk space SKs  
 CPUSE: ⏫ Consider adding the ability to populate and uninstall installed packages  
+CPUSE: 🤞 Some kind of sledgehammer to swing to release config/job lock if something gets stranded  
 
 Jobs: ⏫ Add syslog output configuration  
 Jobs: 🤞 Add a download button for the install log  
