@@ -1513,7 +1513,7 @@ function renderStateRow(stateRow, data) {
     cluster.className = role.startsWith("ACTIVE") ? "cluster-active"
       : role.startsWith("STANDBY") ? "cluster-standby"
       : "cluster-other";
-    cluster.textContent = `${label} in ${data.cluster_name}`;
+    cluster.textContent = `${label} cluster member in ${data.cluster_name}`;
     summary.appendChild(cluster);
     summary.appendChild(document.createElement("br"));
   }
