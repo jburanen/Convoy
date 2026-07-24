@@ -15,10 +15,18 @@ id (``sid``) returned by ``login`` is sent as ``X-chkp-sid`` on every later call
 TLS: management servers present a self-signed certificate by default, so
 ``verify_tls`` defaults to ``False`` (with a logged note). Set it True when the
 server presents a CA-trusted certificate.
+
+Set ``CHKP_CPUSE_LOG_API_CALLS`` to log every request/response through
+``docker compose logs`` — off by default (this is every Management API call in
+full, useful for troubleshooting but noisy). Payloads/bodies are redacted
+(``_redact``) before logging so passwords/API keys/session ids never land in
+the log, and logged at WARNING regardless of ``CHKP_CPUSE_WEB_LOG_LEVEL`` so
+turning this on is never silently neutered by the default log-level threshold.
 """
 
 from __future__ import annotations
 
+import os
 from types import TracebackType
 from typing import Any
 
@@ -32,6 +40,31 @@ logger = get_logger(__name__)
 
 # Server-side default page size for list commands; we page until we've seen `total`.
 _PAGE_LIMIT = 200
+
+LOG_API_CALLS_ENV = "CHKP_CPUSE_LOG_API_CALLS"
+
+# Keys whose values are redacted before a payload/response is logged — secrets
+# (password/api-key) and the session id, which is itself a bearer credential
+# for the lifetime of the login.
+_SENSITIVE_KEYS = {"password", "api-key", "apikey", "secret", "sid"}
+_REDACTED = "***REDACTED***"
+
+
+def _log_api_calls_enabled() -> bool:
+    raw = os.environ.get(LOG_API_CALLS_ENV, "")
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _redact(value: Any) -> Any:
+    """Recursively replace sensitive values (see ``_SENSITIVE_KEYS``) so a
+    logged payload/response body never carries a real secret."""
+    if isinstance(value, dict):
+        return {
+            k: (_REDACTED if k.lower() in _SENSITIVE_KEYS else _redact(v)) for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact(v) for v in value]
+    return value
 
 
 class ManagementAPIClient:
@@ -195,6 +228,14 @@ class ManagementAPIClient:
         if self._client is None:
             raise TransportError("Management API client is not logged in")
         headers = {"X-chkp-sid": self._sid} if authed and self._sid else {}
+        log_calls = _log_api_calls_enabled()
+        if log_calls:
+            logger.warning(
+                "mgmt-api request",
+                server=self.server.address,
+                command=command,
+                payload=_redact(payload),
+            )
         try:
             resp = self._client.post(f"/{command}", json=payload, headers=headers)
         except httpx.HTTPError as exc:
@@ -209,6 +250,14 @@ class ManagementAPIClient:
             body: dict[str, Any] = resp.json()
         except ValueError as exc:
             raise TransportError(f"Management API {command} returned invalid JSON") from exc
+        if log_calls:
+            logger.warning(
+                "mgmt-api response",
+                server=self.server.address,
+                command=command,
+                status=resp.status_code,
+                body=_redact(body),
+            )
         return body
 
 

@@ -4,7 +4,10 @@ Equivalent to ``uvicorn chkp_cpuse_orch.web.app:app --host 0.0.0.0 --port 8080``
 (see app.py's module docstring) but also wires up optional, off-by-default HTTPS
 from the environment (see .env.example). Plain HTTP unless both
 ``CHKP_CPUSE_SSL_CERTFILE`` and ``CHKP_CPUSE_SSL_KEYFILE`` are set; a partial pair
-fails startup rather than silently serving HTTP.
+fails startup rather than silently serving HTTP. Also applies
+``CHKP_CPUSE_WEB_LOG_LEVEL`` (see reporting.resolve_log_level) to uvicorn's own
+access/error logs, same level app.py's lifespan applies to the app's own
+structlog output — so the two never drift apart under docker compose logs.
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ from collections.abc import Mapping
 import uvicorn
 
 from ..errors import ConfigError
+from ..reporting import resolve_log_level
 
 SSL_CERTFILE_ENV = "CHKP_CPUSE_SSL_CERTFILE"
 SSL_KEYFILE_ENV = "CHKP_CPUSE_SSL_KEYFILE"
@@ -42,6 +46,7 @@ def main() -> None:
         port=8080,
         ssl_certfile=certfile,
         ssl_keyfile=keyfile,
+        log_level=resolve_log_level(),
     )
 
 

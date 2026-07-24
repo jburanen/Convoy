@@ -7,7 +7,8 @@ import pytest
 
 from chkp_cpuse_orch.errors import TransportError
 from chkp_cpuse_orch.inventory import Host, Role
-from chkp_cpuse_orch.transport.mgmt_api import ManagementAPIClient
+from chkp_cpuse_orch.transport import mgmt_api
+from chkp_cpuse_orch.transport.mgmt_api import LOG_API_CALLS_ENV, ManagementAPIClient, _redact
 
 
 def _host() -> Host:
@@ -99,3 +100,46 @@ def test_login_omits_domain_when_unset() -> None:
 
     ManagementAPIClient(_host(), api_key="k", transport=httpx.MockTransport(handler)).login()
     assert "domain" not in seen_payload
+
+
+def test_redact_hides_sensitive_keys_recursively() -> None:
+    redacted = _redact(
+        {
+            "user": "admin",
+            "password": "hunter2",
+            "nested": {"api-key": "abc123", "note": "keep me"},
+            "list": [{"sid": "S-1"}, "plain"],
+        }
+    )
+    assert redacted == {
+        "user": "admin",
+        "password": "***REDACTED***",
+        "nested": {"api-key": "***REDACTED***", "note": "keep me"},
+        "list": [{"sid": "***REDACTED***"}, "plain"],
+    }
+
+
+def test_api_calls_not_logged_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, dict]] = []
+    monkeypatch.setattr(mgmt_api.logger, "warning", lambda msg, **kw: calls.append((msg, kw)))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"sid": "SID-123"})
+
+    _client(handler).login()
+    assert calls == []
+
+
+def test_api_calls_logged_and_sanitized_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(LOG_API_CALLS_ENV, "true")
+    calls: list[tuple[str, dict]] = []
+    monkeypatch.setattr(mgmt_api.logger, "warning", lambda msg, **kw: calls.append((msg, kw)))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"sid": "SID-123"})
+
+    _client(handler).login()
+
+    messages = {msg: kw for msg, kw in calls}
+    assert messages["mgmt-api request"]["payload"]["api-key"] == "***REDACTED***"
+    assert messages["mgmt-api response"]["body"]["sid"] == "***REDACTED***"

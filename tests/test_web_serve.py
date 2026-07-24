@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from chkp_cpuse_orch.errors import ConfigError
+from chkp_cpuse_orch.reporting import LOG_LEVEL_ENV, resolve_log_level
 from chkp_cpuse_orch.web.__main__ import SSL_CERTFILE_ENV, SSL_KEYFILE_ENV, resolve_ssl
 
 
@@ -24,3 +27,17 @@ def test_resolve_ssl_returns_both_paths_when_set() -> None:
             SSL_KEYFILE_ENV: "/data/certs/privkey.pem",
         }
     ) == ("/data/certs/fullchain.pem", "/data/certs/privkey.pem")
+
+
+def test_resolve_log_level_defaults_to_warning() -> None:
+    assert resolve_log_level({}) == logging.WARNING
+
+
+def test_resolve_log_level_reads_env() -> None:
+    assert resolve_log_level({LOG_LEVEL_ENV: "debug"}) == logging.DEBUG
+    assert resolve_log_level({LOG_LEVEL_ENV: "ERROR"}) == logging.ERROR
+
+
+def test_resolve_log_level_rejects_unknown_name() -> None:
+    with pytest.raises(ConfigError, match=LOG_LEVEL_ENV):
+        resolve_log_level({LOG_LEVEL_ENV: "chatty"})

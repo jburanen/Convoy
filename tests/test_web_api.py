@@ -216,6 +216,14 @@ def test_status_reports_unlocked_and_counts(client: TestClient) -> None:
     assert body["management_servers"] == 1  # fw-01 is a gateway, not counted
     assert body["environments"] == ["default"]
     assert body["job_archive_path"]  # Jobs tab points the operator here
+    assert body["show_tab_hints"] is True  # shown unless explicitly disabled
+
+
+def test_status_show_tab_hints_disabled_via_env(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CHKP_CPUSE_SHOW_TAB_HINTS", "false")
+    assert client.get("/api/status").json()["show_tab_hints"] is False
 
 
 def test_environments_endpoint(client: TestClient) -> None:

@@ -1002,6 +1002,9 @@ async function refreshStatus() {
     const s = await api("/api/status");
     document.getElementById("footer-version").textContent = "v" + s.version;
     document.getElementById("job-archive-hint").textContent = s.job_archive_path;
+    // CHKP_CPUSE_SHOW_TAB_HINTS (default true — hide only on an explicit false).
+    document.getElementById("tab-guide-viewport").classList.toggle("hidden", s.show_tab_hints === false);
+    positionTabGuide();
     // Chips are for warnings only (counts live on their own tabs).
     if (!s.credentials_unlocked) {
       addChip(box, "credential store LOCKED — set CHKP_CPUSE_MASTER_KEY and restart", "warn");

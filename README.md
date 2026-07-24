@@ -155,13 +155,10 @@ until v1.
 ### Roadmap / Punch List
 ⏫ Probably a major change, 🤞 Non-blocking nice-to-have, ✨ Cosmetic only
 
-🤞 Add .env var to hide the hint text under the tabs  
-✨ Add logic to display a warning on mobile devices that the UI of this tool does not scale down well (by design) and you should use it on a larger display - also probably you shoudn't patch your firewalls or management servers from your phone!  
+✨ Add logic to display a warning on mobile devices that the UI of this tool does not scale down well (by design) and you should use it on a larger display. 
 ✨ Make a favicon  
 ✨ Name the project  
 ✨ Improve padding of collapsed section headers  
-🤞 Add .env var to control logging for http requests (error only vs all)  
-🤞 Add .env var to control logging for chkp api calls and responses (on vs off)  
 
 #### Provisioning
 🤞 Filter role picker based on whether environment is labeled as MDS or not  
