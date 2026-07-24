@@ -11,31 +11,24 @@ Management Servers and Security Gateways, through a web interface.
 
 ## Scope
 
-CPUSE is powerful but operates one host at a time and lacks fleet-level orchestration. 
-CDT is integrated into SmartConsole for limited use cases including single gateways 
-and ClusterXL, but the more sophisticated operations lack a UI. Staged rollouts, 
-per-site batching, cluster-aware deployment, health checks, maintenance-window gating, 
-and an auditable record are part of a responsible patching regime. This tool strives 
-to provide that orchestration layer for specific scenarios.
+CPUSE is powerful but operates one host at a time and lacks fleet-level orchestration. CDT is integrated into SmartConsole for limited use cases including single gateways and ClusterXL, but the more sophisticated operations lack a UI. This tool provides a UI for patching on-premise management servers and their managed firewalls.
 
 ### Supported
-You can patch these management servers and gateway deployments:  
+Patching is supported for:  
 ✅ On-Premise Smart Center (SMS) servers  
 ✅ On-Premise Multi-Domain Management (MDM/MDSM) servers  
-✅ Gaia gateways and ClusterXL managed by above on-prem environments  
-✅ Spark gateways and clusters managed by above on-prem environments  
+✅ Gaia firewalls managed by above on-prem environments  
 
 ### NOT Supported
-By design, this tool does NOT support patching of these scenarios:  
-❌ Smart-1 Cloud Management (this platform is patched by Check Point)  
-❌ Spark Management Portal (this platform is patched by Check Point)  
-❌ Gaia Standalone (self-managed) deployments  
-❌ Gateways defined as dynamic IP (DAIP)  
+By design, this tool does NOT support patching:  
+❌ Smart-1 Cloud Management *(this platform is patched by Check Point)*  
+❌ Spark Management Portal *(this platform is patched by Check Point)*  
+❌ Gaia Standalone (self-managed) deployments  *(uncommon)*  
+❌ Firewalls defined as dynamic IP (DAIP)  *(code limitation)*  
+❌ Spark firewalls managed by above on-prem environments  *(code limitation)*  
 
-This tool does not CURRENTLY support but may one day support:  
-⏳ Self-managed Spark  
-⏳ Self-managed Spark clusters  
-⏳ Maestro    
+This tool does not CURRENTLY support but may one day support:
+⏳ Maestro  
 ⏳ ElasticXL  
 
 ## What it does
@@ -92,8 +85,13 @@ python -m venv .venv && . .venv/Scripts/activate   # Windows; use bin/activate o
 pip install -e ".[dev,web]"
 
 # Web UI (reload for development):
-export CHKP_CPUSE_MASTER_KEY='dev-passphrase'
+export CHKP_CPUSE_MASTER_KEY='choose-a-strong-passphrase'
 uvicorn chkp_cpuse_orch.web.app:app --reload --port 8080
+
+# Or, to also exercise optional native HTTPS (see .env.example):
+export CHKP_CPUSE_SSL_CERTFILE=./certs/fullchain.pem
+export CHKP_CPUSE_SSL_KEYFILE=./certs/privkey.pem
+python -m chkp_cpuse_orch.web
 
 # Secondary CLI (validation + dry-run planning):
 chkp-cpuse-orch validate -i inventory.yaml -c config.yaml
@@ -120,23 +118,9 @@ These concepts are applied by both human and AI developers:
 - **No deletes** - the tool deliberately does not offer the ability to remove packages 
   from the CPUSE repository or the SmartConsole central repository and cannot delete credentials from firewalls or management servers. This stance may be revisited in future versions.
 
-### Future
+> Prior to the v1 initial release a policy will be implemented to require code security review by an independent agentic analyst prior to release publication.
 
-Prior to the v1 initial release a policy will be implemented to require
-code security review by an independent agentic analyst prior to release publication.
-
-Cluster/health pre-gating (`checks.py`) is the next safety layer to wire in. See
-[.claude/memory/safety-constraints.md](.claude/memory/safety-constraints.md).
-
-### Security & public-repo hygiene
-
-This repo is **public**. Only `*.example.*` templates with placeholder values are
-tracked. Real inventories, CDT plans, keys, `.env`, the `data/` volume, logs, and run
-reports are git-ignored (and `.claudeignore`d). Credentials are encrypted at rest and
-never echoed by the API. See
-[.claude/memory/security-hygiene.md](.claude/memory/security-hygiene.md).
-
-## Status and Milestones
+## 🎯 Status and Milestones
 
 **Working, pre-production.** The web UI, service core, SSH transport, CPUSE and CDT
 wrappers, credential/package stores, environments, and the background job runner are
@@ -155,7 +139,7 @@ it is tested and confirmed working by a human. There will not be a packaged rele
 until v1.
 
 ✅ Implement ldap authentication  
-◻️ Implement local TLS support  
+◻️ Implement native TLS support  
 ✅ Test Nginx/NPM support  
 ◻️ Test firewall discovery in SMS/Smart Center environment  
 ✅ Test firewall discovery in MDS/Multi-Domain environment  
@@ -166,38 +150,36 @@ until v1.
 ### Milestones to reach v2
 
 ◻️ CDT deployment to Gaia/Force gateways  
-◻️ CDT deployment to Gaia/Force ClusterXL  
 
 ### Roadmap / Punch List
 ⏫ Probably a major change, 🤞 Non-blocking nice-to-have, ✨ Cosmetic only
 
-All: 🤞 Add .env var to hide the hint text under the tabs  
-All: ✨ Add logic to display a warning on mobile devices that the UI of this tool does not scale down well (by design) and you should use it on a larger display - also probably you shoudn't patch your firewalls or management servers from your phone!  
-All: ✨ Make a favicon  
-All: ✨ Name the project  
-All: ✨ Improve padding of collapsed section headers  
+🤞 Add .env var to hide the hint text under the tabs  
+✨ Add logic to display a warning on mobile devices that the UI of this tool does not scale down well (by design) and you should use it on a larger display - also probably you shoudn't patch your firewalls or management servers from your phone!  
+✨ Make a favicon  
+✨ Name the project  
+✨ Improve padding of collapsed section headers  
+🤞 Add .env var to control logging for http requests (error only vs all)  
+🤞 Add .env var to control logging for chkp api calls and responses (on vs off)  
 
-Provisioning: 🤞 Filter role picker based on whether environment is labeled as MDS or not  
-Provisioning: CRUD for credentials should occur immediately. TRACK these changes in jobs, but don't make them RUN as jobs.  
+#### Provisioning
+🤞 Filter role picker based on whether environment is labeled as MDS or not  
 
-Packages: 🤞 Investigate if we can extract and display meta data like compatible major version from the package file  
-Packages: ⏫ Add ability to upload a stored package to the smartconsole packages repo using mgmt api  
-Packages: CRUD for packages should occur immediately. TRACK these changes in jobs, but don't make them RUN as jobs.  
+#### Packages
+🤞 Investigate if we can extract and display meta data like compatible major version from the package file  
+⏫ Add ability to upload a stored package to the smartconsole packages repo using mgmt api  
 
-CPUSE: ⏫ Add deployment agent upgrade option  
-CPUSE: ✨ Make the firewalls import-from-cloud line identical to the servers line  
-CPUSE: ✨ Add muted explanatory text at top of firewalls panel to talk about how direct patching is mostly for management servers and small numbers of gateways. gateways can also be patched from SmartConsole and Web SmartConsole (generate a link). Large numbers of gateways can be patched with the CDT tab (future).  
-CPUSE: 🤞 If the disk space is below threshold, offer the option to override unless disk space is less than actual pkg size. also provide links to disk space SKs  
-CPUSE: ⏫ Consider adding the ability to populate and uninstall installed packages  
-CPUSE: 🤞 Some kind of sledgehammer to swing to release config/job lock if something gets stranded  
+#### Direct Patching (CPUSE)
+⏫ Add deployment agent upgrade option  
+✨ Update explanatory text at top of firewalls panel to talk about how direct patching is mostly for management servers and small numbers of gateways. gateways can also be patched from SmartConsole and Web SmartConsole (include a link). Large numbers of gateways can be patched with the CDT tab (future).  
+🤞 If the disk space is below threshold, offer the option to override unless disk space is less than actual pkg size. also provide links to disk space SKs  
+⏫ Consider adding the ability to populate and uninstall installed packages  
+🤞 Some kind of sledgehammer to swing to release config/job lock if something gets stranded  
 
-Jobs: ⏫ Add syslog output configuration  
-Jobs: 🤞 Add a download button for the install log  
+#### Jobs
+⏫ Add syslog output configuration  
+🤞 Add a download button for the install log  
 
-## Disclaimer
-
-Not affiliated with or endorsed by Check Point Software Technologies. "Check Point",
-"CDT", and "CPUSE" refer to their products. Use only on infrastructure you are
-authorized to maintain. 
-
-Written by Claude under the direction of humans. Deploy, **test**, and use this tool with appropriate caution. No guarantees or assurance of safety is made by the developers.
+> Not affiliated with or endorsed by Check Point Software Technologies. "Check Point", "CDT", and "CPUSE" refer to their products. Use only on infrastructure you are authorized to maintain.  
+>  
+> Written by Claude under the direction of humans. Deploy, <u>test</u>, and use this tool with appropriate caution. No guarantees or assurance of safety is made by the developers.

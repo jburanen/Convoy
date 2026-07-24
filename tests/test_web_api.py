@@ -143,12 +143,12 @@ _SSH_CREDS = [{"kind": "ssh_password", "username": "admin", "secret": "pw"}]
 
 
 def _upload_package(client: TestClient, name: str = "jhf.tgz", content: bytes = b"x" * 64) -> None:
-    """Upload and block until the pkgs.upload job succeeds, so callers can
-    assume the package exists the moment this returns — uploads run as a
-    background job (see services/pkgs_ops.py), not synchronously."""
+    """Upload a package. Executes immediately (see services/pkgs_ops.py) — the
+    response is already the finished pkgs.upload job, so callers can assume
+    the package exists the moment this returns."""
     resp = client.post("/api/packages", files={"file": (name, content)})
-    assert resp.status_code == 202, resp.text
-    job = _wait_for_job(client, resp.json()["id"])
+    assert resp.status_code == 200, resp.text
+    job = resp.json()
     assert job["status"] == "succeeded", job["error"]
 
 
@@ -744,21 +744,22 @@ def test_package_upload_list_delete(client: TestClient) -> None:
     assert len(listing[0]["sha256"]) == 64
 
     resp = client.delete("/api/packages/jhf.tgz")
-    assert resp.status_code == 202, resp.text
-    job = _wait_for_job(client, resp.json()["id"])
+    assert resp.status_code == 200, resp.text
+    job = resp.json()
     assert job["status"] == "succeeded", job["error"]
     assert client.get("/api/packages").json() == []
 
 
 def test_package_conflict_rejected(client: TestClient) -> None:
     _upload_package(client, content=b"original")
-    # The name/content dedupe check only runs once the pkgs.upload job hashes
-    # the staged file, so the conflict surfaces as a failed job, not an
-    # immediate HTTP error (unlike retention/delete, which 404 synchronously
-    # since PackageStore.get() is cheap to check before creating the job).
+    # The name/content dedupe check only runs once add_stream hashes the
+    # staged file, so the conflict surfaces as a failed job in the (already
+    # terminal) response, not an immediate HTTP error (unlike retention/delete,
+    # which 404 synchronously since PackageStore.get() is cheap to check
+    # before creating a job at all).
     resp = client.post("/api/packages", files={"file": ("jhf.tgz", b"different")})
-    assert resp.status_code == 202, resp.text
-    job = _wait_for_job(client, resp.json()["id"])
+    assert resp.status_code == 200, resp.text
+    job = resp.json()
     assert job["status"] == "failed"
     assert "different content" in job["error"]
 
@@ -773,15 +774,15 @@ def test_package_retention_pin_and_unpin(client: TestClient) -> None:
     _upload_package(client)
 
     resp = client.post("/api/packages/jhf.tgz/retention", json={"pinned": True})
-    assert resp.status_code == 202, resp.text
-    job = _wait_for_job(client, resp.json()["id"])
+    assert resp.status_code == 200, resp.text
+    job = resp.json()
     assert job["status"] == "succeeded", job["error"]
     assert job["kind"] == "pkgs.keep"
     assert client.get("/api/packages").json()[0]["expires_at"] is None  # kept indefinitely
 
     resp = client.post("/api/packages/jhf.tgz/retention", json={"pinned": False})
-    assert resp.status_code == 202, resp.text
-    job = _wait_for_job(client, resp.json()["id"])
+    assert resp.status_code == 200, resp.text
+    job = resp.json()
     assert job["status"] == "succeeded", job["error"]
     assert job["kind"] == "pkgs.notkeep"
     assert client.get("/api/packages").json()[0]["expires_at"] is not None  # window reapplied
@@ -789,7 +790,7 @@ def test_package_retention_pin_and_unpin(client: TestClient) -> None:
 
 def test_package_retention_missing_is_404(client: TestClient) -> None:
     # Still an immediate 404 — submit_retention() checks existence before
-    # creating a job, so an unknown filename never even reaches the runner.
+    # creating a job at all, so an unknown filename never gets a job row.
     resp = client.post("/api/packages/ghost.tgz/retention", json={"pinned": True})
     assert resp.status_code == 404
 

@@ -4,7 +4,9 @@ The UI is plain HTML/CSS/JS served from ``web/static/`` (no build step, no
 templating — see .claude/memory/patching-web-design.md). Routes here stay thin:
 business logic lives in ``services/``.
 
-Run: ``uvicorn chkp_cpuse_orch.web.app:app --host 0.0.0.0 --port 8080``.
+Run: ``uvicorn chkp_cpuse_orch.web.app:app --host 0.0.0.0 --port 8080``, or
+``python -m chkp_cpuse_orch.web`` (see web/__main__.py) for optional, off-by-default
+HTTPS via ``CHKP_CPUSE_SSL_CERTFILE`` / ``CHKP_CPUSE_SSL_KEYFILE``.
 
 Startup wiring (lifespan): config → Store → PackageStore → CredentialStore
 (if the master key env is set — otherwise credential/patching endpoints return
@@ -423,7 +425,8 @@ def create_app(
             registry=registry, packages=packages, runner=runner, vault=vault, store=store
         )
         cdt_service = CDTService(registry=registry, packages=packages, runner=runner, vault=vault)
-        pkgs_jobs = PackageJobService(packages=packages, runner=runner)
+        # No runner: package CRUD runs synchronously (services/pkgs_ops.py).
+        pkgs_jobs = PackageJobService(packages=packages, store=store)
         # Only when the store is actually unlocked — a locked store already
         # returns 503 for every credential-dependent endpoint (see
         # _credentials_or_503), and that check happens before this is ever
@@ -1289,10 +1292,10 @@ def _register_routes(app: FastAPI) -> None:
         return {"credential_set": body.set}
 
     # -- packages ------------------------------------------------------------
-    # Upload/keep/unkeep/delete all run as pkgs.* jobs (see services/pkgs_ops.py)
-    # for Jobs-tab visibility and audit history — each returns a JobRecord
-    # (202) rather than the mutated PackageRecord; the UI watches the Jobs tab
-    # (or /api/jobs/{id}) for the outcome instead of getting it synchronously.
+    # Upload/keep/unkeep/delete execute immediately (see services/pkgs_ops.py)
+    # but each still returns a (already-terminal) JobRecord rather than the
+    # mutated PackageRecord, so a pkgs.* row still lands on the Jobs tab for
+    # audit history.
 
     def _pkgs_jobs(request: Request) -> PackageJobService:
         service: PackageJobService = request.app.state.pkgs_jobs
@@ -1303,7 +1306,7 @@ def _register_routes(app: FastAPI) -> None:
         packages: PackageStore = request.app.state.packages
         return packages.list()
 
-    @app.post("/api/packages", status_code=202)
+    @app.post("/api/packages")
     async def upload_package(file: UploadFile, request: Request) -> JobRecord:
         packages: PackageStore = request.app.state.packages
         if not file.filename:
@@ -1311,11 +1314,11 @@ def _register_routes(app: FastAPI) -> None:
         # Stage to a stable path inside the package directory first — the
         # upload's bytes only exist for the lifetime of this request (Starlette
         # tears down its spooled temp file once the response is sent), so the
-        # slow part (packages.add_stream: hash, dedupe, move into place) is
-        # deferred to the pkgs.upload job using this copy instead, which
-        # survives past the request. Cleaned up here if anything goes wrong
-        # before the job takes ownership of it; the job cleans it up itself
-        # once it does (see PackageJobService._do_upload).
+        # actual work (packages.add_stream: hash, dedupe, move into place) —
+        # done synchronously in submit_upload, see services/pkgs_ops.py — reads
+        # from this copy instead. Cleaned up here if anything goes wrong before
+        # submit_upload takes ownership of it; that call cleans it up itself
+        # once it does.
         staged_path = packages.directory / f".upload-{uuid.uuid4().hex}"
 
         def _stage() -> None:
@@ -1324,8 +1327,12 @@ def _register_routes(app: FastAPI) -> None:
 
         try:
             await asyncio.to_thread(_stage)
-            return _pkgs_jobs(request).submit_upload(
-                file.filename, staged_path, triggered_by=_current_user(request)
+            # submit_upload does real (blocking) disk I/O — off the event loop.
+            return await asyncio.to_thread(
+                _pkgs_jobs(request).submit_upload,
+                file.filename,
+                staged_path,
+                triggered_by=_current_user(request),
             )
         except OrchestratorError as exc:
             staged_path.unlink(missing_ok=True)
@@ -1334,10 +1341,11 @@ def _register_routes(app: FastAPI) -> None:
             staged_path.unlink(missing_ok=True)
             raise
 
-    @app.post("/api/packages/{filename}/retention", status_code=202)
+    @app.post("/api/packages/{filename}/retention")
     def set_package_retention(filename: str, body: RetentionRequest, request: Request) -> JobRecord:
         """Pin a package to keep it indefinitely, or un-pin it so the retention
-        window applies again — runs as a pkgs.keep/pkgs.notkeep job."""
+        window applies again — executes immediately as a tracked
+        pkgs.keep/pkgs.notkeep job."""
         try:
             return _pkgs_jobs(request).submit_retention(
                 filename, body.pinned, triggered_by=_current_user(request)
@@ -1345,8 +1353,9 @@ def _register_routes(app: FastAPI) -> None:
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
-    @app.delete("/api/packages/{filename}", status_code=202)
+    @app.delete("/api/packages/{filename}")
     def delete_package(filename: str, request: Request) -> JobRecord:
+        """Executes immediately as a tracked pkgs.delete job."""
         try:
             return _pkgs_jobs(request).submit_delete(filename, triggered_by=_current_user(request))
         except OrchestratorError as exc:

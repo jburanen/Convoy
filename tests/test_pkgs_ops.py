@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import asyncio
 import io
 from pathlib import Path
 
 import pytest
 
 from chkp_cpuse_orch.errors import PackageError
-from chkp_cpuse_orch.jobs import JobRunner
 from chkp_cpuse_orch.packages import PackageStore
 from chkp_cpuse_orch.services.pkgs_ops import (
     JOB_DELETE,
@@ -34,15 +32,11 @@ def packages(store: Store, tmp_path: Path) -> PackageStore:
 
 @pytest.fixture
 def service(store: Store, packages: PackageStore) -> PackageJobService:
-    return PackageJobService(packages=packages, runner=JobRunner(store))
-
-
-def _run(service: PackageJobService) -> None:
-    asyncio.run(service.runner.run_until_idle())
+    return PackageJobService(packages=packages, store=store)
 
 
 def _stage(packages: PackageStore, content: bytes, name: str = "staged") -> Path:
-    """Mimic what the route does before submitting a pkgs.upload job: copy the
+    """Mimic what the route does before calling submit_upload: copy the
     (already fully-received) upload to a stable path inside the package dir."""
     path = packages.directory / f".upload-{name}"
     path.write_bytes(content)
@@ -58,8 +52,6 @@ def test_upload_job_stores_the_package(
     staged = _stage(packages, PKG_CONTENT)
     job = service.submit_upload(PKG, staged)
     assert job.kind == JOB_UPLOAD
-    _run(service)
-
     assert store.get_job(job.id).status == JobStatus.SUCCEEDED
     rec = packages.get(PKG)
     assert rec.size == len(PKG_CONTENT)
@@ -70,7 +62,6 @@ def test_upload_job_cleans_up_the_staged_file(
 ) -> None:
     staged = _stage(packages, PKG_CONTENT)
     service.submit_upload(PKG, staged)
-    _run(service)
     assert not staged.exists()
 
 
@@ -81,7 +72,6 @@ def test_upload_job_fails_on_conflicting_content(
 
     staged = _stage(packages, b"different content")
     job = service.submit_upload(PKG, staged)
-    _run(service)
 
     finished = store.get_job(job.id)
     assert finished.status == JobStatus.FAILED
@@ -94,7 +84,6 @@ def test_upload_job_logs_progress(
 ) -> None:
     staged = _stage(packages, PKG_CONTENT)
     job = service.submit_upload(PKG, staged)
-    _run(service)
     messages = [e.message for e in store.events(job.id)]
     assert any("stored" in m and PKG in m for m in messages)
 
@@ -108,8 +97,6 @@ def test_keep_job_pins_the_package(
     packages.add_stream(PKG, io.BytesIO(PKG_CONTENT))
     job = service.submit_retention(PKG, pinned=True)
     assert job.kind == JOB_KEEP
-    _run(service)
-
     assert store.get_job(job.id).status == JobStatus.SUCCEEDED
     assert packages.get(PKG).pinned
 
@@ -122,8 +109,6 @@ def test_notkeep_job_unpins_the_package(
 
     job = service.submit_retention(PKG, pinned=False)
     assert job.kind == JOB_NOTKEEP
-    _run(service)
-
     assert store.get_job(job.id).status == JobStatus.SUCCEEDED
     assert not packages.get(PKG).pinned
 
@@ -148,8 +133,6 @@ def test_delete_job_removes_the_package(
     packages.add_stream(PKG, io.BytesIO(PKG_CONTENT))
     job = service.submit_delete(PKG)
     assert job.kind == JOB_DELETE
-    _run(service)
-
     assert store.get_job(job.id).status == JobStatus.SUCCEEDED
     with pytest.raises(PackageError):
         packages.get(PKG)

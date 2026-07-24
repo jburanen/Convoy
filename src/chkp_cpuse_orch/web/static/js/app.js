@@ -627,9 +627,10 @@ document.getElementById("server-form").addEventListener("submit", async (ev) => 
     ? credSelect.selectedOptions[0]?.dataset.sshUser || "admin"
     : document.getElementById("sm-user").value.trim() || "admin";
   try {
-    // Runs as a prov.add/prov.edit job (services/prov_ops.py) — "queued, not
-    // done" model, same as credentials/packages. PROV_JOB_KINDS in pollJobs()
-    // reloads once it actually finishes (near-instant in practice).
+    // Runs as a prov.add/prov.edit job (services/prov_ops.py) — still a
+    // genuinely "queued, not done" async job, unlike credentials/packages
+    // (which now execute immediately, see services/cred_ops.py/pkgs_ops.py).
+    // PROV_JOB_KINDS in pollJobs() reloads once it actually finishes.
     const job = await addServer({
       name,
       address: document.getElementById("sm-address").value.trim(),
@@ -1498,8 +1499,11 @@ function renderStateRow(stateRow, data) {
   // stored real cluster object name (set at discovery time, or via the edit
   // modal's "Re-check cluster membership") — see clusterxl-live-state memory.
   // Only shown once both are known; a role with no stored name yet (e.g. a
-  // manually-added firewall never re-checked) shows no prefix at all rather
-  // than a misleading blank.
+  // manually-added firewall never re-checked) omits this first line entirely
+  // rather than showing a misleading blank. cluster_name is only ever present
+  // on firewall records (never management servers — see /api/env/{env}/servers
+  // in app.py), so this branch never fires for the Servers table's shared
+  // renderStateRow call.
   if (data.cluster_role && data.cluster_name) {
     const role = data.cluster_role.toUpperCase();
     const label = role.startsWith("ACTIVE") ? "Active"
@@ -1511,7 +1515,7 @@ function renderStateRow(stateRow, data) {
       : "cluster-other";
     cluster.textContent = `${label} in ${data.cluster_name}`;
     summary.appendChild(cluster);
-    summary.appendChild(document.createTextNode(" | "));
+    summary.appendChild(document.createElement("br"));
   }
   const agentBuild = formatAgentBuild(data.agent_build);
   summary.appendChild(document.createTextNode(
@@ -2088,9 +2092,10 @@ document.getElementById("firewall-form").addEventListener("submit", async (ev) =
     ? credSelect.selectedOptions[0]?.dataset.sshUser || "admin"
     : document.getElementById("fm-user").value.trim() || "admin";
   try {
-    // Runs as a prov.add/prov.edit job (services/prov_ops.py) — "queued, not
-    // done" model, same as credentials/packages. PROV_JOB_KINDS in pollJobs()
-    // reloads once it actually finishes (near-instant in practice).
+    // Runs as a prov.add/prov.edit job (services/prov_ops.py) — still a
+    // genuinely "queued, not done" async job, unlike credentials/packages
+    // (which now execute immediately, see services/cred_ops.py/pkgs_ops.py).
+    // PROV_JOB_KINDS in pollJobs() reloads once it actually finishes.
     const job = await addFirewall({
       name,
       address: document.getElementById("fm-address").value.trim(),
@@ -2524,13 +2529,10 @@ async function loadPackages() {
       expiry.classList.toggle("warn", soon);
     };
     renderRetention(pkg);
-    // Retention now runs as a pkgs.keep/pkgs.notkeep job (services/pkgs_ops.py)
-    // rather than completing synchronously, so this only reflects whether the
-    // job started — same model as every other job-backed action in this app
-    // (e.g. installPackage below never waits for the install job itself
-    // either). A submit failure reverts the optimistic toggle immediately;
-    // the job's own outcome shows up on the Jobs tab, and PKGS_JOB_KINDS in
-    // pollJobs() reloads this table once it finishes either way.
+    // Retention executes immediately (services/pkgs_ops.py) — the response is
+    // already the finished pkgs.keep/pkgs.notkeep job, tracked on the Jobs
+    // tab for audit history only. Revert the optimistic toggle if the write
+    // itself failed, not just on a request-level (network/HTTP) failure.
     pin.addEventListener("change", async () => {
       pin.disabled = true;
       try {
@@ -2539,23 +2541,27 @@ async function loadPackages() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ pinned: pin.checked }),
         });
-        lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if it finishes fast
-        await loadJobs();
+        lastJobStatus.set(job.id, job.status);
+        if (job.status !== "succeeded") {
+          pin.checked = !pin.checked; // revert — the write itself failed
+          toast("Retention update failed: " + (job.error || "unknown error"));
+        }
+        await Promise.all([loadJobs(), loadPackages()]);
       } catch (e) {
-        pin.checked = !pin.checked; // revert the optimistic toggle — the job never even started
-        toast("Could not start retention update: " + e.message);
+        pin.checked = !pin.checked; // revert the optimistic toggle — the request itself failed
+        toast("Could not update retention: " + e.message);
       } finally {
         pin.disabled = false;
       }
     });
 
-    // Delete likewise now runs as a pkgs.delete job — see the comment above.
+    // Delete likewise executes immediately — see the comment above.
     row.querySelector(".btn-delete").addEventListener("click", async () => {
       if (!confirm(`Delete package ${pkg.filename}?`)) return;
       try {
         const job = await api(`/api/packages/${encodeURIComponent(pkg.filename)}`, { method: "DELETE" });
         lastJobStatus.set(job.id, job.status);
-        await loadJobs();
+        await Promise.all([loadJobs(), loadPackages()]);
       } catch (e) { toast("Delete failed to start: " + e.message); }
     });
     tbody.appendChild(row);
@@ -2566,10 +2572,10 @@ async function loadPackages() {
 
 // Shared upload path for the form and drag & drop. The multipart body itself
 // is still sent synchronously (inherent to HTTP — the browser is actively
-// streaming it during this request), but the server only stages it here; the
-// slow part (hash, dedupe, store) runs as a pkgs.upload job, so "done" below
-// means "queued", not "stored" — see the retention/delete comment above and
-// services/pkgs_ops.py's module docstring for why upload needs the staging step.
+// streaming it during this request); the server then stages it and does the
+// rest (hash, dedupe, store) immediately too — see services/pkgs_ops.py — so
+// the response here is already the finished pkgs.upload job, not a "queued"
+// placeholder.
 async function uploadPackageFile(file) {
   const progress = document.getElementById("upload-progress");
   const btn = document.getElementById("upload-btn");
@@ -2580,8 +2586,14 @@ async function uploadPackageFile(file) {
   try {
     const job = await api("/api/packages", { method: "POST", body: form });
     lastJobStatus.set(job.id, job.status);
-    progress.textContent = `${file.name}: queued — see the Jobs tab for progress`;
-    await loadJobs();
+    if (job.status === "succeeded") {
+      progress.textContent = `${file.name}: stored`;
+      await Promise.all([loadJobs(), loadPackages()]);
+    } else {
+      progress.textContent = "";
+      toast(`Upload of ${file.name} failed: ` + (job.error || "unknown error"));
+      await loadJobs();
+    }
   } catch (e) {
     progress.textContent = "";
     toast(`Upload of ${file.name} failed to start: ` + e.message);
@@ -2791,11 +2803,10 @@ const openJobLogs = new Set(); // job ids whose progress log is expanded
 // show up after a manual reload/tab switch, since nothing else re-fetches
 // #servers-table on a timer.
 const IMPORT_JOB_KINDS = ["cpuse.import", "cpuse.import_cloud"];
-// Same idea for package actions (see services/pkgs_ops.py) — upload/keep/
-// unkeep/delete all run as jobs now, so the Packages tab needs the same
-// terminal-transition-triggers-a-reload treatment as the Management tab gets
-// for imports, otherwise a package's new retention/existence state only
-// shows up after a manual reload.
+// pkgs.* (services/pkgs_ops.py) executes immediately, so its own call sites
+// already reload the Packages table directly — this only exists as a
+// fallback for another tab/session polling in the narrow window between a
+// job's insert and its (near-instant) finish.
 const PKGS_JOB_KINDS = ["pkgs.upload", "pkgs.keep", "pkgs.notkeep", "pkgs.delete"];
 // cred.* (services/cred_ops.py) executes immediately, so its own call sites
 // already reload the Credentials table directly — this only exists as a
