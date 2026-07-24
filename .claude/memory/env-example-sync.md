@@ -20,8 +20,13 @@ undiscoverable — the operator won't know the knob exists.
   [[security-hygiene]]). Secret vars (`CHKP_CPUSE_MASTER_KEY`) use `changeme`;
   optional/tunable vars stay commented out showing their default.
 - Current runtime env vars: `CHKP_CPUSE_MASTER_KEY` (+ `_FILE`), `CHKP_CPUSE_CONFIG`,
-  `CHKP_CPUSE_PACKAGE_RETENTION_DAYS`, and the web-auth set (see [[web-auth]]):
-  `CHKP_CPUSE_LDAP_URL`, `CHKP_CPUSE_LDAP_REQUIRED_GROUP`, `CHKP_CPUSE_LDAP_BIND_DN`,
+  `CHKP_CPUSE_PACKAGE_RETENTION_DAYS`, `CHKP_CPUSE_SSL_CERTFILE`/`_KEYFILE` (native
+  HTTPS, `web/__main__.py`), `CHKP_CPUSE_SHOW_TAB_HINTS` (`web/app.py`),
+  `CHKP_CPUSE_WEB_LOG_LEVEL` (`reporting.resolve_log_level`, also applied to
+  uvicorn's own logs by `web/__main__.py`), `CHKP_CPUSE_LOG_API_CALLS`
+  (`transport/mgmt_api.py` — sanitized request/response logging), and the
+  web-auth set (see [[web-auth]]): `CHKP_CPUSE_LDAP_URL`,
+  `CHKP_CPUSE_LDAP_REQUIRED_GROUP`, `CHKP_CPUSE_LDAP_BIND_DN`,
   `CHKP_CPUSE_LDAP_BIND_PASSWORD` (+ `_FILE`), `CHKP_CPUSE_LDAP_USER_BASE_DN`,
   `CHKP_CPUSE_LDAP_USER_FILTER`, `CHKP_CPUSE_LDAP_USER_DN_TEMPLATE`,
   `CHKP_CPUSE_LDAP_MEMBER_OF_ATTR`, `CHKP_CPUSE_LDAP_START_TLS`,
