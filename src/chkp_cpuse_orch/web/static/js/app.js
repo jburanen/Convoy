@@ -1495,7 +1495,7 @@ function renderStateRow(stateRow, data) {
   if (data == null) {
     summary.textContent = "Not yet checked.";
     checked.textContent = "";
-    return;
+    return false;
   }
   // ClusterXL role, when this host is a live cluster member. cluster_role is
   // refreshed every check (live `cphaprob`); cluster_name is the firewall's
@@ -1507,7 +1507,8 @@ function renderStateRow(stateRow, data) {
   // on firewall records (never management servers — see /api/env/{env}/servers
   // in app.py), so this branch never fires for the Servers table's shared
   // renderStateRow call.
-  if (data.cluster_role && data.cluster_name) {
+  const hasClusterLine = !!(data.cluster_role && data.cluster_name);
+  if (hasClusterLine) {
     const role = data.cluster_role.toUpperCase();
     const label = role.startsWith("ACTIVE") ? "Active"
       : role.startsWith("STANDBY") ? "Standby"
@@ -1536,6 +1537,7 @@ function renderStateRow(stateRow, data) {
     summary.appendChild(document.createTextNode(agentBuild));
   }
   checked.textContent = data.checked_at ? ` | Refreshed ${fmtTime(data.checked_at)}` : "";
+  return hasClusterLine;
 }
 
 // Options are the server's cached `installable` list (imported but not yet
@@ -1755,7 +1757,8 @@ async function loadFirewalls() {
 
     const stateRow = el("tpl-firewall-state-row");
     stateRow.dataset.firewall = fw.name; // looked up by the "Refresh all" button
-    renderStateRow(stateRow, state && state.checked_at ? state : null);
+    const hasClusterLine = renderStateRow(stateRow, state && state.checked_at ? state : null);
+    row.classList.toggle("fw-cluster-member", hasClusterLine);
     stateRow
       .querySelector(".srv-refresh-link")
       .addEventListener("click", () => refreshFirewallState(fw.name, row, stateRow));
@@ -1794,7 +1797,8 @@ async function refreshFirewallState(name, row, stateRow) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(extra),
     });
-    renderStateRow(stateRow, state);
+    const hasClusterLine = renderStateRow(stateRow, state);
+    row.classList.toggle("fw-cluster-member", hasClusterLine);
     renderInstallSelect(row, state.installable ?? [], name);
   } catch (e) {
     cacheEvictCreds(name); // a cached wrong/stale password re-prompts next time

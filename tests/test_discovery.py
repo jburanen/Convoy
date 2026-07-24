@@ -68,9 +68,9 @@ def test_map_gateways_and_servers_roles() -> None:
 CLUSTERS = [
     {
         "name": "prod-cluster",
-        "members": [{"name": "cluster-01", "uid": "u1"}, {"name": "cluster-01-b"}],
+        "cluster-members": [{"name": "cluster-01", "uid": "u1"}, {"name": "cluster-01-b"}],
     },
-    {"name": "other-cluster", "members": ["member-x", "member-y"]},
+    {"name": "other-cluster", "cluster-members": ["member-x", "member-y"]},
 ]
 
 
