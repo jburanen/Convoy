@@ -53,7 +53,7 @@ from ..errors import CredentialError, OrchestratorError, TransportError
 from ..inventory import Host, Role
 from ..reporting import get_logger
 from ..transport.mgmt_api import ManagementAPIClient
-from .common import EnvironmentRegistry, HostConnector
+from .common import EnvironmentRegistry, HostConnector, api_auth
 
 logger = get_logger(__name__)
 
@@ -179,7 +179,7 @@ class DiscoveryService:
 
         result = DomainsResult()
         try:
-            auth = _api_auth(bundle)
+            auth = api_auth(bundle)
         except CredentialError as exc:
             result.warnings.append(str(exc))
             return result
@@ -201,7 +201,7 @@ class DiscoveryService:
         domain: str | None = None,
     ) -> None:
         try:
-            auth = _api_auth(bundle)
+            auth = api_auth(bundle)
         except CredentialError as exc:
             result.warnings.append(str(exc))
             return
@@ -250,7 +250,7 @@ class DiscoveryService:
         try:
             primary = connector.primary_mgmt_host()
             bundle = connector.host_credentials(primary)
-            auth = _api_auth(bundle)
+            auth = api_auth(bundle)
         except OrchestratorError:
             return None
         if domain is not None:
@@ -308,7 +308,7 @@ class DiscoveryService:
         domain: str | None = None,
     ) -> None:
         try:
-            auth = _api_auth(bundle)
+            auth = api_auth(bundle)
         except CredentialError as exc:
             result.warnings.append(str(exc))
             return
@@ -551,21 +551,6 @@ def _first_field(line: str) -> str:
         if token and not _IP_RE.fullmatch(token):
             return token
     return ""
-
-
-def _api_auth(bundle: dict[CredentialKind, Any]) -> dict[str, Any]:
-    """Build Management API auth kwargs from a credential bundle: prefer an API key,
-    else the SSH username/password (the Gaia admin usually doubles as the API user)."""
-    api_key_cred = bundle.get(CredentialKind.API_KEY)
-    if api_key_cred is not None:
-        return {"api_key": api_key_cred.reveal()}
-    pw_cred = bundle.get(CredentialKind.SSH_PASSWORD)
-    if pw_cred is not None and pw_cred.username:
-        return {"username": pw_cred.username, "password": pw_cred.reveal()}
-    raise CredentialError(
-        "the credential set assigned to the primary has no API key or "
-        "username/password — add one on the Provisioning tab to run discovery"
-    )
 
 
 __all__ = [

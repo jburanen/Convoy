@@ -2571,6 +2571,34 @@ async function loadPackages() {
         await Promise.all([loadJobs(), loadPackages()]);
       } catch (e) { toast("Delete failed to start: " + e.message); }
     });
+
+    // Unlike the rest of this table, this is genuinely slow (SFTP to the
+    // primary + a server-side import — see services/pkg_repo_ops.py) so it
+    // stays a real background job: submit and let the Jobs tab / the
+    // PKGS_JOB_KINDS entry in pollJobs() reflect progress and completion,
+    // rather than waiting here. Uses the environment name (not a host name —
+    // the primary is resolved server-side, and the Packages tab has no
+    // per-row host to key on) as the credential-prompt/cache key.
+    row.querySelector(".btn-push-repo").addEventListener("click", async () => {
+      if (!currentEnv) { toast("Pick an environment first."); return; }
+      const btn = row.querySelector(".btn-push-repo");
+      const extra = await operationCredentials(currentEnv, "upload to the repository");
+      if (extra === null) return; // credential prompt cancelled
+      btn.disabled = true;
+      try {
+        const job = await api(
+          `/api/env/${encodeURIComponent(currentEnv)}/packages/${encodeURIComponent(pkg.filename)}/push-to-repo`,
+          { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(extra) },
+        );
+        lastJobStatus.set(job.id, job.status);
+        toast("Upload to repository started — see the Jobs tab for progress.");
+        await loadJobs();
+      } catch (e) {
+        toast("Could not start upload: " + e.message);
+      } finally {
+        btn.disabled = false;
+      }
+    });
     tbody.appendChild(row);
     tbody.appendChild(sha1Row);
   }
@@ -2814,7 +2842,9 @@ const IMPORT_JOB_KINDS = ["cpuse.import", "cpuse.import_cloud"];
 // already reload the Packages table directly — this only exists as a
 // fallback for another tab/session polling in the narrow window between a
 // job's insert and its (near-instant) finish.
-const PKGS_JOB_KINDS = ["pkgs.upload", "pkgs.keep", "pkgs.notkeep", "pkgs.delete"];
+const PKGS_JOB_KINDS = [
+  "pkgs.upload", "pkgs.keep", "pkgs.notkeep", "pkgs.delete", "pkgs.push_to_repo",
+];
 // cred.* (services/cred_ops.py) executes immediately, so its own call sites
 // already reload the Credentials table directly — this only exists as a
 // fallback for another tab/session polling in the narrow window between a
