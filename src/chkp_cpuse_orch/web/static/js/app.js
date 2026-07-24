@@ -1154,10 +1154,9 @@ async function saveBootstrapCredential(setName, username, password) {
     name = choice === "overwrite" ? existing.name : uniqueCredentialName(setName);
   }
   try {
-    // Runs as a cred.add/cred.edit job (services/cred_ops.py) rather than
-    // completing synchronously — same model as packages. "ok: true" here
-    // means "queued", not "stored"; CRED_JOB_KINDS in pollJobs() reloads the
-    // Credentials table once it actually finishes (near-instant in practice).
+    // Executes immediately (services/cred_ops.py); "ok: true" means "stored",
+    // not "queued" — tracked as a finished cred.add/cred.edit job for the
+    // Jobs tab only.
     const job = await api(envUrl("/credentials"), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -1168,7 +1167,7 @@ async function saveBootstrapCredential(setName, username, password) {
         default_if_none: true, // first credentials become the environment default
       }),
     });
-    lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if it finishes fast
+    lastJobStatus.set(job.id, job.status);
     await Promise.all([loadJobs(), loadCredentialSets(), loadServers()]);
     return { ok: true, name };
   } catch (e) {
@@ -2672,13 +2671,12 @@ async function loadCredentialSets() {
     row.querySelector(".cs-expert").textContent = tick(set.has_expert);
     row.querySelector(".cs-api").textContent = tick(set.has_api);
     row.querySelector(".btn-edit").addEventListener("click", () => openCredEditModal(set));
-    // Runs as a cred.delete job (services/cred_ops.py) — see the credential-form
-    // submit handler below for the same "queued, not done" model.
+    // Executes immediately as a tracked cred.delete job (services/cred_ops.py).
     row.querySelector(".btn-delete").addEventListener("click", async () => {
       if (!confirm(`Delete credential set "${set.name}"? Servers using it lose access.`)) return;
       try {
         const job = await api(envUrl(`/credentials/${encodeURIComponent(set.name)}`), { method: "DELETE" });
-        lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if it finishes fast
+        lastJobStatus.set(job.id, job.status);
         await Promise.all([loadJobs(), loadCredentialSets(), loadServers()]);
       } catch (e) { toast("Delete failed to start: " + e.message); }
     });
@@ -2716,10 +2714,9 @@ document.getElementById("credential-form").addEventListener("submit", async (ev)
   const expertInput = document.getElementById("cs-expert");
   const apiInput = document.getElementById("cs-api");
   try {
-    // Runs as a cred.add/cred.edit job (services/cred_ops.py) rather than
-    // completing synchronously — same "queued, not done" model as packages
-    // (see uploadPackageFile). CRED_JOB_KINDS in pollJobs() reloads the
-    // Credentials table once it actually finishes (near-instant in practice).
+    // Executes immediately (services/cred_ops.py) — the response is already
+    // the finished cred.add/cred.edit job, tracked on the Jobs tab for audit
+    // history only (unlike packages, this never queues).
     const job = await api(envUrl("/credentials"), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -2732,7 +2729,7 @@ document.getElementById("credential-form").addEventListener("submit", async (ev)
         api_key: apiInput.value || null,
       }),
     });
-    lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if it finishes fast
+    lastJobStatus.set(job.id, job.status);
     closeCredAddModal(); // resets the form so no secrets linger in the DOM
     await Promise.all([loadJobs(), loadCredentialSets(), loadServers()]);
   } catch (e) {
@@ -2800,9 +2797,10 @@ const IMPORT_JOB_KINDS = ["cpuse.import", "cpuse.import_cloud"];
 // for imports, otherwise a package's new retention/existence state only
 // shows up after a manual reload.
 const PKGS_JOB_KINDS = ["pkgs.upload", "pkgs.keep", "pkgs.notkeep", "pkgs.delete"];
-// Same idea for credential-set actions (see services/cred_ops.py) — the
-// Credentials table (and any server/firewall row showing an assigned set's
-// name) needs the same reload-on-finish treatment.
+// cred.* (services/cred_ops.py) executes immediately, so its own call sites
+// already reload the Credentials table directly — this only exists as a
+// fallback for another tab/session polling in the narrow window between a
+// job's insert and its (near-instant) finish.
 const CRED_JOB_KINDS = ["cred.add", "cred.edit", "cred.delete"];
 // Management-server AND firewall add/edit/delete (services/prov_ops.py) share
 // one set of kinds — no server/firewall split in the Kind column (operator-

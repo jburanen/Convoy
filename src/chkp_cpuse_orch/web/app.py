@@ -428,8 +428,9 @@ def create_app(
         # returns 503 for every credential-dependent endpoint (see
         # _credentials_or_503), and that check happens before this is ever
         # reached, but there's no valid CredentialStore to hand it otherwise.
+        # No runner/vault: credential CRUD runs synchronously (services/cred_ops.py).
         cred_jobs = (
-            CredentialJobService(credentials=credentials, runner=runner, vault=vault)
+            CredentialJobService(credentials=credentials, store=store)
             if credentials is not None
             else None
         )
@@ -1358,11 +1359,12 @@ def _register_routes(app: FastAPI) -> None:
         _require_env(request, env)
         return _credentials_or_503(request).list_sets(env)
 
-    @app.put("/api/env/{env}/credentials", status_code=202)
+    @app.put("/api/env/{env}/credentials")
     def put_credential_set(env: str, body: CredentialSetIn, request: Request) -> JobRecord:
-        """Runs as a cred.add/cred.edit job (services/cred_ops.py) for Jobs-tab
-        visibility and audit history — same model as packages. The plaintext
-        secrets ride the in-memory job-credential vault, never JobRecord.params
+        """Executes immediately (services/cred_ops.py) — unlike CPUSE/CDT/pkgs/prov
+        jobs, this never queues. Still recorded as a cred.add/cred.edit JobRecord,
+        already terminal by the time it's returned, for Jobs-tab visibility and
+        audit history. The plaintext secrets never reach JobRecord.params
         (persisted as plain JSON)."""
         _require_env(request, env)
         if request.app.state.auth is None:
@@ -1406,9 +1408,10 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=404, detail=f"credential set {name!r} not found")
         return {"default": name}
 
-    @app.delete("/api/env/{env}/credentials/{name}", status_code=202)
+    @app.delete("/api/env/{env}/credentials/{name}")
     def delete_credential_set(env: str, name: str, request: Request) -> JobRecord:
-        """Runs as a cred.delete job — see put_credential_set above."""
+        """Executes immediately as a tracked cred.delete job — see
+        put_credential_set above."""
         _require_env(request, env)
         try:
             return _cred_jobs(request).submit_delete(env, name, triggered_by=_current_user(request))

@@ -201,6 +201,23 @@ environment RBAC** — environments are DB rows partly for that reason.
     unrelated to prov.*: `cred.*` jobs' Jobs-tab Env column stopped showing a
     synthetic "Credentials" label and now shows the real environment name, like
     every non-`pkgs.*` kind always has (the Env *filter* dropdown already used
+    it).
+
+    **Update, 2026-07-24: `cred.*` no longer queues.** Credential-set add/edit/
+    delete now execute **synchronously** inside the request (`services/cred_ops.py`,
+    operator-directed) instead of going through `JobRunner.submit()` — a local
+    encrypt+DB write with no SSH host involved has no reason to make the operator
+    wait on the async queue. A `JobRecord` is still inserted and immediately
+    finished (`insert_job` → do the write → `finish_job`) purely for Jobs-tab
+    visibility/audit history; there's no PENDING state, no background pickup, no
+    `JobCredentialVault` involvement (secrets pass straight through the same call
+    stack, never touching `JobRecord.params`). Routes return `200`, not `202`. The
+    "existence read decides add vs edit" and "missing-target delete 404s
+    synchronously, no job row" conventions above are unchanged — they just also
+    apply to the rest of the write now, not only the pre-submit check. `prov.*`
+    and `pkgs.*` deliberately still mirror the *old*, queued `cred.*` shape
+    described above (their own docstrings/tests didn't change) — read "matching
+    cred.*" in that context as historical, not current.
     the real name via `list_job_facets()` — only the rendered column lagged).
 - **Cached CPUSE state per server** (`server_state` table, migration v11,
   2026-07-22). The Management tab no longer queries CPUSE state on page load —

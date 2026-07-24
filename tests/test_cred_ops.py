@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest
 
-from chkp_cpuse_orch.credentials import CredentialStore, JobCredentialVault
+from chkp_cpuse_orch.credentials import CredentialStore
 from chkp_cpuse_orch.errors import InventoryError
-from chkp_cpuse_orch.jobs import JobRunner
 from chkp_cpuse_orch.services.cred_ops import JOB_ADD, JOB_DELETE, JOB_EDIT, CredentialJobService
 from chkp_cpuse_orch.store import Store
 
@@ -27,21 +25,8 @@ def credentials(store: Store) -> CredentialStore:
 
 
 @pytest.fixture
-def vault() -> JobCredentialVault:
-    return JobCredentialVault()
-
-
-@pytest.fixture
-def service(
-    store: Store, credentials: CredentialStore, vault: JobCredentialVault
-) -> CredentialJobService:
-    return CredentialJobService(
-        credentials=credentials, runner=JobRunner(store, on_job_finished=vault.discard), vault=vault
-    )
-
-
-def _run(service: CredentialJobService) -> None:
-    asyncio.run(service.runner.run_until_idle())
+def service(store: Store, credentials: CredentialStore) -> CredentialJobService:
+    return CredentialJobService(credentials=credentials, store=store)
 
 
 # -- add / edit -----------------------------------------------------------------------
@@ -62,7 +47,7 @@ def test_new_name_submits_as_add(
     )
     assert job.kind == JOB_ADD
     assert job.target == "primary"
-    _run(service)
+    assert job.status.value == "succeeded"
 
     info = credentials.get_info(ENV, "primary")
     assert info is not None
@@ -85,7 +70,7 @@ def test_existing_name_submits_as_edit(
         default_if_none=False,
     )
     assert job.kind == JOB_EDIT
-    _run(service)
+    assert job.status.value == "succeeded"
 
     info = credentials.get_info(ENV, "primary")
     assert info is not None
@@ -106,7 +91,6 @@ def test_default_if_none_sets_default_once(
         api_key=None,
         default_if_none=True,
     )
-    _run(service)
     assert credentials.default_set_name(ENV) == "primary"
 
     service.submit_put(
@@ -119,7 +103,6 @@ def test_default_if_none_sets_default_once(
         api_key=None,
         default_if_none=True,
     )
-    _run(service)
     assert credentials.default_set_name(ENV) == "primary"  # not stolen
 
 
@@ -127,8 +110,8 @@ def test_validation_error_surfaces_as_a_failed_job_not_a_raise(
     service: CredentialJobService, store: Store
 ) -> None:
     """Adding a set with neither an SSH password nor a private key is invalid
-    (CredentialStore.put_set raises) — that happens inside the job handler,
-    so submission itself succeeds and the failure shows up on the job."""
+    (CredentialStore.put_set raises) — submission itself doesn't raise, the
+    failure shows up on the (already-terminal) returned job instead."""
     job = service.submit_put(
         ENV,
         name="broken",
@@ -139,10 +122,10 @@ def test_validation_error_surfaces_as_a_failed_job_not_a_raise(
         api_key=None,
         default_if_none=False,
     )
-    _run(service)
+    assert job.status.value == "failed"
+    assert "password or private key" in (job.error or "")
     finished = store.get_job(job.id)
     assert finished.status.value == "failed"
-    assert "password or private key" in (finished.error or "")
 
 
 # -- delete -------------------------------------------------------------------------
@@ -155,7 +138,7 @@ def test_delete_removes_the_set(
     job = service.submit_delete(ENV, "primary")
     assert job.kind == JOB_DELETE
     assert job.target == "primary"
-    _run(service)
+    assert job.status.value == "succeeded"
     assert credentials.get_info(ENV, "primary") is None
 
 
@@ -184,42 +167,7 @@ def test_secrets_never_land_in_job_params(service: CredentialJobService, store: 
         default_if_none=False,
     )
     # Only non-secret fields travel in params (persisted as plain JSON —
-    # see store.py); the four secret fields go through the vault instead.
+    # see store.py); the secrets never leave this call stack at all.
     assert job.params == {"ssh_username": "admin", "default_if_none": False}
     # Round-tripped through the DB, not just the in-memory object.
     assert store.get_job(job.id).params == {"ssh_username": "admin", "default_if_none": False}
-
-
-def test_vault_entry_put_before_submit_and_discarded_after_completion(
-    service: CredentialJobService, vault: JobCredentialVault
-) -> None:
-    job = service.submit_put(
-        ENV,
-        name="primary",
-        ssh_username="admin",
-        ssh_password="pw",
-        ssh_private_key=None,
-        expert_password=None,
-        api_key=None,
-        default_if_none=False,
-    )
-    assert vault.get(job.id) is not None  # available to the handler once it runs
-    _run(service)
-    assert vault.get(job.id) is None  # dropped once the job reaches a terminal state
-
-
-def test_vault_entry_discarded_even_if_the_job_fails(
-    service: CredentialJobService, vault: JobCredentialVault
-) -> None:
-    job = service.submit_put(
-        ENV,
-        name="broken",
-        ssh_username="admin",
-        ssh_password=None,
-        ssh_private_key=None,
-        expert_password=None,
-        api_key=None,
-        default_if_none=False,
-    )
-    _run(service)
-    assert vault.get(job.id) is None
