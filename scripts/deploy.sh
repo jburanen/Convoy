@@ -12,6 +12,14 @@ git pull --ff-only
 echo ">> ensure data dir"
 mkdir -p data
 
+# The container runs as this uid:gid (docker-compose.yml's `user:`) so the
+# bind-mounted ./data above — just created owned by whoever is running this
+# script — is always writable by the container too, on any host, without a
+# manual chown.
+export DEPLOY_UID DEPLOY_GID
+DEPLOY_UID="$(id -u)"
+DEPLOY_GID="$(id -g)"
+
 echo ">> build + (re)start"
 docker compose up -d --build
 
