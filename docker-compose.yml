@@ -27,13 +27,8 @@ services:
     volumes:
       - ./data:/data:rw
     restart: unless-stopped
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health').status==200 else 1)"
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
+    # No healthcheck override here — the Dockerfile's own HEALTHCHECK already
+    # covers this (and follows CHKP_CPUSE_SSL_CERTFILE to probe https:// when
+    # native TLS is on). A duplicate here previously went stale and always
+    # probed plain http://, so a TLS-enabled deploy showed "unhealthy" even
+    # though the app was serving fine over https.
