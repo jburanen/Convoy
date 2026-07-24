@@ -143,6 +143,7 @@ until v1.
 ✅ Test Nginx/NPM support  
 ◻️ Test firewall discovery in SMS/Smart Center environment  
 ✅ Test firewall discovery in MDS/Multi-Domain environment  
+◻️ Test firewall cluster name discovery in SMS and MDS
 ✅ Test Gaia/Force Gateway patching via CPUSE  
 ◻️ Packaged deployment release that doesn't require clone and --build  
 ◻️ Independent agentic code security review  
