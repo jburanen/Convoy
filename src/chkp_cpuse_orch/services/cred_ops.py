@@ -1,36 +1,27 @@
-"""Credential-set jobs: add/edit/delete — run through the shared job runner,
-like CPUSE/CDT/pkgs jobs, for Jobs-tab visibility and audit history (see
-.claude/memory/patching-web-design.md). Local encrypt+DB writes with no SSH
-host involved, submitted directly via ``JobRunner.submit`` rather than
-``services.common.submit_host_job`` — same shape as PackageJobService.
+"""Credential-set operations: add/edit/delete.
+
+Unlike CPUSE/CDT/pkgs/prov operations, these run **synchronously** — a local
+encrypt+DB write with no SSH host involved, so there's no reason to make the
+operator wait on the async job queue the way a real device operation must
+(operator-directed, 2026-07-24). Each call still records a ``JobRecord`` (already
+terminal by the time it returns) purely for Jobs-tab visibility and audit
+history, matching every other kind of change — it just never goes through
+``JobRunner``: no PENDING state, no background pickup, nothing to poll.
 
 The plaintext secrets themselves must never reach ``JobRecord.params`` (it's
 persisted as plain JSON in the jobs table — see store.py — and later archived
 to a flat file), which would defeat the whole point of encrypting credentials
-at rest. Instead they ride in the same in-memory-only ``JobCredentialVault``
-already used for storage-disabled environments' one-shot credentials: put
-there under the job id *before* submission, read back by the handler, and
-dropped the instant the job finishes (``JobRunner``'s ``on_job_finished``
-hook, already wired to ``vault.discard``) — the vault doesn't care why the
-credentials are needed, only that they're job-scoped and ephemeral.
+at rest. Since execution is synchronous, they simply pass straight through to
+``CredentialStore.put_set`` in this same call stack and are never stored
+anywhere but the encrypted row itself — no vault or other cross-call ferrying
+needed.
 """
 
 from __future__ import annotations
 
-import asyncio
-
-from pydantic import SecretStr
-
-from ..credentials import (
-    Credential,
-    CredentialBundle,
-    CredentialKind,
-    CredentialStore,
-    JobCredentialVault,
-)
+from ..credentials import CredentialStore
 from ..errors import InventoryError
-from ..jobs import JobContext, JobRunner
-from ..store import JobRecord, new_id
+from ..store import JobRecord, JobStatus, Store, utcnow
 
 JOB_ADD = "cred.add"
 JOB_EDIT = "cred.edit"
@@ -38,19 +29,14 @@ JOB_DELETE = "cred.delete"
 
 
 class CredentialJobService:
-    """Wraps CredentialStore's write operations as background jobs."""
+    """Wraps CredentialStore's write operations with immediate execution and
+    Jobs-tab tracking."""
 
-    def __init__(
-        self, *, credentials: CredentialStore, runner: JobRunner, vault: JobCredentialVault
-    ) -> None:
+    def __init__(self, *, credentials: CredentialStore, store: Store) -> None:
         self._credentials = credentials
-        self._vault = vault
-        self.runner = runner
-        runner.register(JOB_ADD, self._put_job)
-        runner.register(JOB_EDIT, self._put_job)
-        runner.register(JOB_DELETE, self._delete_job)
+        self._store = store
 
-    # -- submit -------------------------------------------------------------
+    # -- submit ---------------------------------------------------------------
 
     def submit_put(
         self,
@@ -65,42 +51,35 @@ class CredentialJobService:
         default_if_none: bool,
         triggered_by: str | None = None,
     ) -> JobRecord:
-        """``ssh_username``/``default_if_none`` aren't secret and travel in
-        ``params``; the four secret fields go in the vault instead, keyed by
-        job id. Whether this is an add or an edit is decided here (a
-        secret-free read), before the kind is picked — the job kind itself is
-        what the Jobs tab's Env/Target columns key off of."""
+        """Whether this is an add or an edit is decided here (a secret-free
+        read), before the kind is picked — the job kind itself is what the
+        Jobs tab's Env/Target columns key off of."""
         kind = JOB_ADD if self._credentials.get_info(environment, name) is None else JOB_EDIT
-        bundle: CredentialBundle = {}
-        for value, ckind in (
-            (ssh_password, CredentialKind.SSH_PASSWORD),
-            (ssh_private_key, CredentialKind.SSH_PRIVATE_KEY),
-            (expert_password, CredentialKind.EXPERT_PASSWORD),
-            (api_key, CredentialKind.API_KEY),
-        ):
-            if value is not None:
-                bundle[ckind] = Credential(
-                    host=name,
-                    kind=ckind,
-                    username=ssh_username,
-                    secret=SecretStr(value),
-                    environment=environment,
-                )
-
-        job_id = new_id()
-        self._vault.put(job_id, bundle)
+        job = self._start(
+            kind,
+            target=name,
+            environment=environment,
+            params={"ssh_username": ssh_username, "default_if_none": default_if_none},
+            triggered_by=triggered_by,
+        )
         try:
-            return self.runner.submit(
-                kind,
-                target=name,
-                environment=environment,
-                params={"ssh_username": ssh_username, "default_if_none": default_if_none},
-                job_id=job_id,
-                triggered_by=triggered_by,
+            info = self._credentials.put_set(
+                environment,
+                name,
+                ssh_username=ssh_username,
+                ssh_password=ssh_password,
+                ssh_private_key=ssh_private_key,
+                expert_password=expert_password,
+                api_key=api_key,
             )
-        except Exception:
-            self._vault.discard(job_id)
-            raise
+            no_default_yet = self._credentials.default_set_name(environment) is None
+            if default_if_none and no_default_yet:
+                self._credentials.set_default(environment, name)
+            verb = "added" if kind == JOB_ADD else "updated"
+            self._succeed(job, f"{verb} credential set {name!r} (ssh_auth={info.ssh_auth})")
+        except Exception as exc:  # job boundary: record failure, don't raise
+            self._fail(job, exc)
+        return self._store.get_job(job.id)
 
     def submit_delete(
         self, environment: str, name: str, *, triggered_by: str | None = None
@@ -109,50 +88,50 @@ class CredentialJobService:
             raise InventoryError(
                 f"credential set {name!r} not found in environment {environment!r}"
             )
-        return self.runner.submit(
-            JOB_DELETE, target=name, environment=environment, triggered_by=triggered_by
+        job = self._start(
+            JOB_DELETE, target=name, environment=environment, params={}, triggered_by=triggered_by
         )
+        try:
+            deleted = self._credentials.delete_set(environment, name)
+            message = (
+                f"deleted credential set {name!r}" if deleted else "credential set was already gone"
+            )
+            self._succeed(job, message)
+        except Exception as exc:  # job boundary: record failure, don't raise
+            self._fail(job, exc)
+        return self._store.get_job(job.id)
 
-    # -- handlers -------------------------------------------------------------
+    # -- internals --------------------------------------------------------------
 
-    async def _put_job(self, ctx: JobContext) -> None:
-        await asyncio.to_thread(self._do_put, ctx)
-
-    def _do_put(self, ctx: JobContext) -> None:
-        bundle = self._vault.require(ctx.job.id)
-
-        def _plain(kind: CredentialKind) -> str | None:
-            cred = bundle.get(kind)
-            return cred.reveal() if cred is not None else None
-
-        name = ctx.job.target
-        assert name is not None
-        p = ctx.job.params
-        info = self._credentials.put_set(
-            ctx.job.environment,
-            name,
-            ssh_username=p.get("ssh_username"),
-            ssh_password=_plain(CredentialKind.SSH_PASSWORD),
-            ssh_private_key=_plain(CredentialKind.SSH_PRIVATE_KEY),
-            expert_password=_plain(CredentialKind.EXPERT_PASSWORD),
-            api_key=_plain(CredentialKind.API_KEY),
+    def _start(
+        self,
+        kind: str,
+        *,
+        target: str,
+        environment: str,
+        params: dict[str, object],
+        triggered_by: str | None,
+    ) -> JobRecord:
+        job = JobRecord(
+            kind=kind,
+            target=target,
+            environment=environment,
+            params=params,
+            username=triggered_by,
+            status=JobStatus.RUNNING,
+            started_at=utcnow(),
         )
-        no_default_yet = self._credentials.default_set_name(ctx.job.environment) is None
-        if p.get("default_if_none") and no_default_yet:
-            self._credentials.set_default(ctx.job.environment, name)
-        verb = "added" if ctx.job.kind == JOB_ADD else "updated"
-        ctx.log(f"{verb} credential set {name!r} (ssh_auth={info.ssh_auth})")
+        self._store.insert_job(job)
+        return job
 
-    async def _delete_job(self, ctx: JobContext) -> None:
-        await asyncio.to_thread(self._do_delete, ctx)
+    def _succeed(self, job: JobRecord, message: str) -> None:
+        self._store.append_event(job.id, message)
+        self._store.finish_job(job.id, JobStatus.SUCCEEDED)
 
-    def _do_delete(self, ctx: JobContext) -> None:
-        name = ctx.job.target
-        assert name is not None
-        deleted = self._credentials.delete_set(ctx.job.environment, name)
-        ctx.log(
-            f"deleted credential set {name!r}" if deleted else "credential set was already gone"
-        )
+    def _fail(self, job: JobRecord, exc: Exception) -> None:
+        error = f"{type(exc).__name__}: {exc}"
+        self._store.append_event(job.id, f"job failed: {error}", level="error")
+        self._store.finish_job(job.id, JobStatus.FAILED, error=error)
 
 
 __all__ = ["JOB_ADD", "JOB_DELETE", "JOB_EDIT", "CredentialJobService"]

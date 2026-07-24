@@ -1,15 +1,18 @@
 """Provisioning jobs: add/edit/delete of management servers and CPUSE-patched
-firewalls — run through the shared job runner, like credential-set and
-package actions (see .claude/memory/patching-web-design.md), for Jobs-tab
-visibility and audit history.
+firewalls — run through the shared job runner, like package actions (see
+.claude/memory/patching-web-design.md), for Jobs-tab visibility and audit
+history. (Credential-set CRUD used to follow this same queued shape but now
+runs synchronously instead — see services/cred_ops.py, operator-directed,
+2026-07-24 — so it's no longer a fair comparison for the *queuing* behavior
+below, only for the existence-check/failed-job conventions noted inline.)
 
 Local DB writes with no SSH host involved, submitted directly via
 ``JobRunner.submit`` rather than ``services.common.submit_host_job`` — same
-shape as CredentialJobService/PackageJobService. Servers and firewalls share
-one set of job kinds (``prov.add``/``prov.edit``/``prov.delete`` — operator-
-directed, 2026-07-23: no server/firewall split in the Kind column) rather than
-one pair per entity; ``params["entity"]`` is the internal discriminator the
-single handler pair uses to call the right manager, invisible on the Jobs tab.
+shape as PackageJobService. Servers and firewalls share one set of job kinds
+(``prov.add``/``prov.edit``/``prov.delete`` — operator-directed, 2026-07-23:
+no server/firewall split in the Kind column) rather than one pair per entity;
+``params["entity"]`` is the internal discriminator the single handler pair
+uses to call the right manager, invisible on the Jobs tab.
 
 Whether an add is really an add or an edit is decided the same way
 CredentialJobService decides it: a cheap existence read *before* the kind is
@@ -26,10 +29,11 @@ it), or a set name — using the ``UNSET`` sentinel below to tell "omitted" from
 
 Validation (bad role, name colliding with the other entity table, etc.)
 happens inside ``EnvironmentManager``/``FirewallManager`` as before, which
-means — operator-directed, 2026-07-23, "match credentials" — it now surfaces
-as a **failed job**, not a synchronous 400/409, same tradeoff already made for
-cred.*. Only environment existence and (for delete) target existence are
-cheap enough to keep as an instant, pre-submit check (mirrors
+means — operator-directed, 2026-07-23, "match credentials" — it surfaces as a
+**failed job**, not a synchronous 400/409, the same tradeoff cred.* made
+while it was still queued (and still keeps, just resolved synchronously now).
+Only environment existence and (for delete) target existence are cheap
+enough to keep as an instant, pre-submit check (mirrors
 CredentialJobService.submit_delete's "don't defer an obviously-doomed job").
 """
 

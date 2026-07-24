@@ -112,15 +112,15 @@ def _enable_storage(client: TestClient, env: str) -> None:
 def _put_set(
     client: TestClient, env: str = "default", name: str = "primary", **extra: object
 ) -> dict:
-    """PUT a credential set. Runs as a cred.add/cred.edit job now (see
-    services/cred_ops.py) rather than completing synchronously — waits for it
-    to finish and returns the finished job dict for callers that need the
-    outcome (e.g. which kind ran, or is_default)."""
+    """PUT a credential set. Executes immediately (see services/cred_ops.py) —
+    the response body is already the finished cred.add/cred.edit JobRecord, no
+    polling needed. Returned for callers that need the outcome (e.g. which
+    kind ran, or is_default)."""
     body: dict[str, object] = {"name": name, "ssh_username": "admin", "ssh_password": "pw"}
     body.update(extra)
     resp = client.put(f"/api/env/{env}/credentials", json=body)
-    assert resp.status_code == 202, resp.text
-    job = _wait_for_job(client, resp.json()["id"])
+    assert resp.status_code == 200, resp.text
+    job = resp.json()
     assert job["status"] == "succeeded", job["error"]
     return job
 
@@ -300,8 +300,8 @@ def test_edit_credential_set_adds_api_key_without_resending_secret(client: TestC
     resp = client.put(
         "/api/env/default/credentials", json={"name": "primary", "api_key": "APIKEY123"}
     )
-    assert resp.status_code == 202, resp.text
-    job = _wait_for_job(client, resp.json()["id"])
+    assert resp.status_code == 200, resp.text
+    job = resp.json()
     assert job["status"] == "succeeded", job["error"]
     assert job["kind"] == "cred.edit"  # a set with this name already existed
     sets = client.get("/api/env/default/credentials").json()
@@ -316,8 +316,8 @@ def test_bootstrap_credentials_become_the_default(client: TestClient) -> None:
         "/api/env/default/credentials",
         json={"name": "primary", "ssh_password": "pw", "default_if_none": True},
     )
-    assert resp.status_code == 202, resp.text
-    job = _wait_for_job(client, resp.json()["id"])
+    assert resp.status_code == 200, resp.text
+    job = resp.json()
     assert job["status"] == "succeeded", job["error"]
     sets = client.get("/api/env/default/credentials").json()
     assert sets[0]["is_default"] is True
@@ -327,7 +327,7 @@ def test_bootstrap_credentials_become_the_default(client: TestClient) -> None:
         "/api/env/default/credentials",
         json={"name": "backup", "ssh_password": "pw", "default_if_none": True},
     )
-    _wait_for_job(client, resp2.json()["id"])
+    assert resp2.status_code == 200, resp2.text
     defaults = [
         s["name"] for s in client.get("/api/env/default/credentials").json() if s["is_default"]
     ]
@@ -713,8 +713,8 @@ def test_credential_sets_roundtrip_never_echoes_secret(client: TestClient) -> No
     ]
     assert "pw" not in str(listing) and "rootpw" not in str(listing)
     resp = client.delete("/api/env/default/credentials/primary")
-    assert resp.status_code == 202, resp.text
-    job = _wait_for_job(client, resp.json()["id"])
+    assert resp.status_code == 200, resp.text
+    job = resp.json()
     assert job["status"] == "succeeded", job["error"]
     assert job["kind"] == "cred.delete"
     assert client.get("/api/env/default/credentials").json() == []
