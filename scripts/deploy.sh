@@ -20,7 +20,15 @@ for i in $(seq 1 30); do
   status="$(docker inspect --format '{{ .State.Health.Status }}' chkp-cpuse-orch 2>/dev/null || echo starting)"
   if [ "$status" = "healthy" ]; then
     echo ">> healthy"
-    curl -fsS http://localhost:8080/health && echo
+    # Native TLS (CHKP_CPUSE_SSL_CERTFILE/KEYFILE, see .env) makes the app
+    # https-only — try plain http first, fall back to an unverified https
+    # probe (loopback, not a trust decision) so this doesn't print a spurious
+    # failure on a TLS-enabled host.
+    if curl -fsS http://localhost:8080/health 2>/dev/null; then
+      echo
+    else
+      curl -fsSk https://localhost:8080/health && echo
+    fi
     exit 0
   fi
   sleep 2
