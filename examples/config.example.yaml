@@ -9,16 +9,18 @@ defaults:
   snapshot_before_install: true
 
 paths:
+  # Relative paths here resolve against THIS FILE's own directory, not
+  # wherever the process happens to be started from — so in the Docker
+  # deployment (this file copied to /data/config.yaml) these already mean
+  # /data/state, /data/packages, etc. with no changes needed. Use absolute
+  # paths instead only if you want a location outside the config file's
+  # directory (e.g. a separate /data volume from state).
   reports_dir: reports
   logs_dir: logs
   state_dir: state
   db_path: state/orch.db        # jobs, credential ciphertext, package metadata
   packages_dir: packages        # uploaded package files
   inventory_path: inventory.yaml
-  # In the Docker deployment everything lives on the mounted volume instead:
-  #   db_path: /data/state/orch.db
-  #   packages_dir: /data/packages
-  #   inventory_path: /data/inventory.yaml
 
 # Independent management environments: each has its own inventory of management
 # servers (gateways are discovered per-environment via CDT) and its own

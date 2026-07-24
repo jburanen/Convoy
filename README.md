@@ -56,7 +56,7 @@ The intended deployment. `docker compose` builds the image and serves the UI on
 ```bash
 # On the host, in the deploy directory:
 mkdir -p data
-cp examples/config.example.yaml data/config.yaml   # adjust /data paths inside
+cp examples/config.example.yaml data/config.yaml   # relative paths inside resolve to this dir
 
 # Master key for the credential store — supply via env or a git-ignored .env.
 # Held in memory only; the app boots "locked" (credentials disabled) without it.

@@ -101,6 +101,17 @@ class Config(BaseModel):
         Resolution order: explicit ``path`` → ``$CHKP_CPUSE_CONFIG`` → defaults.
         ``$CHKP_CPUSE_PACKAGE_RETENTION_DAYS`` overrides the retention window on
         top of whichever config was loaded.
+
+        Relative ``paths.*`` / ``environments[].inventory`` entries are anchored
+        to the config file's own directory, not the process's current working
+        directory — a relative ``db_path: state/orch.db`` in ``/data/config.yaml``
+        means ``/data/state/orch.db``, regardless of where the process was
+        started from. Without this, the *same* relative path is only safe by
+        accident: it resolves against whatever the CWD happens to be (e.g. a
+        container's ``WORKDIR``, which is root-owned and unwritable by the
+        non-root user the container actually runs as — observed 2026-07-24 on a
+        fresh deploy using examples/config.example.yaml's relative paths
+        unmodified). Absolute paths are left untouched either way.
         """
         candidate = path or os.environ.get("CHKP_CPUSE_CONFIG")
         if candidate is None:
@@ -114,8 +125,32 @@ class Config(BaseModel):
             except yaml.YAMLError as exc:  # pragma: no cover - passthrough
                 raise ConfigError(f"invalid YAML in {p}: {exc}") from exc
             cfg = cls.model_validate(data)
+            _anchor_relative_paths(cfg, base_dir=p.resolve().parent)
         _apply_retention_override(cfg)
         return cfg
+
+
+def _anchor(value: Path, base_dir: Path) -> Path:
+    return value if value.is_absolute() else base_dir / value
+
+
+def _anchor_relative_paths(cfg: Config, *, base_dir: Path) -> None:
+    """Mutate ``cfg`` in place so every relative path field resolves against
+    the config file's own directory (``base_dir``) instead of the CWD."""
+    paths = cfg.paths
+    cfg.paths = Paths(
+        reports_dir=_anchor(paths.reports_dir, base_dir),
+        logs_dir=_anchor(paths.logs_dir, base_dir),
+        state_dir=_anchor(paths.state_dir, base_dir),
+        db_path=_anchor(paths.db_path, base_dir),
+        packages_dir=_anchor(paths.packages_dir, base_dir),
+        job_archive_path=_anchor(paths.job_archive_path, base_dir),
+        inventory_path=_anchor(paths.inventory_path, base_dir),
+    )
+    cfg.environments = [
+        EnvironmentDef(name=e.name, inventory=_anchor(e.inventory, base_dir))
+        for e in cfg.environments
+    ]
 
 
 def _apply_retention_override(cfg: Config) -> None:
