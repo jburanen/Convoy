@@ -22,8 +22,10 @@ RUN mkdir -p /data && chown 1001:1001 /data
 EXPOSE 8080
 USER 1001:1001
 
-# Liveness probe used by compose; kept dependency-free (stdlib only).
+# Liveness probe used by compose; kept dependency-free (stdlib only). Follows
+# CHKP_CPUSE_SSL_CERTFILE to probe https:// (unverified — loopback, not a trust
+# decision) when the optional native TLS listener is enabled.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health').status==200 else 1)"
+  CMD python -c "import os,ssl,urllib.request,sys; tls=bool(os.environ.get('CHKP_CPUSE_SSL_CERTFILE')); ctx=ssl._create_unverified_context() if tls else None; sys.exit(0 if urllib.request.urlopen(('https' if tls else 'http')+'://localhost:8080/health', context=ctx).status==200 else 1)"
 
-CMD ["uvicorn", "chkp_cpuse_orch.web.app:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["python", "-m", "chkp_cpuse_orch.web"]

@@ -165,6 +165,28 @@ environment RBAC** — environments are DB rows partly for that reason.
     Delete) only react to *submit* failure now (revert/toast), same as every
     other job-backed action in the app (e.g. `installPackage` never waits for
     its own job either) — the job's actual outcome is Jobs-tab-only.
+
+    **Update, 2026-07-24: `pkgs.*` no longer queues, same change as `cred.*`
+    (see below).** Upload/keep/unkeep/delete now execute **synchronously**
+    inside the request (`services/pkgs_ops.py`, operator-directed) instead of
+    going through `JobRunner.submit()` — local disk+DB ops with no SSH host
+    involved have no reason to make the operator wait on the async queue. A
+    `JobRecord` is still inserted and immediately finished purely for
+    Jobs-tab visibility/audit history; routes return `200`, not `202`. The
+    "same name, different content" conflict is therefore back to being an
+    immediate response (a **failed job** in that response, not a bare 409 —
+    the failed-job convention itself didn't change, only *when* it's
+    knowable) rather than something only detectable on a later poll. Upload
+    still stages to a temp path first (the multipart body's bytes only exist
+    for the request's lifetime — inherent to HTTP, can't be synchronous vs.
+    deferred either way), then `submit_upload` does the real work (hash,
+    dedupe, move into place) in the same call and removes the staging file
+    itself. The frontend's three call sites (upload form/drag-drop, the Keep
+    checkbox, Delete) now react to the *actual* outcome, not just submit
+    failure — e.g. the Keep checkbox reverts if the write itself failed, not
+    only on a network-level error — and reload the Packages table directly
+    rather than waiting for `PKGS_JOB_KINDS`/`pollJobs()`, which is now only a
+    fallback for another tab/session polling mid-write.
   - **Server/firewall CRUD is jobs too** (`prov.add`/`prov.edit`/`prov.delete` —
     `services/prov_ops.py`, `ProvisioningJobService`; operator-directed, 2026-07-23).
     Add/edit/delete of management servers *and* CPUSE firewalls share these three

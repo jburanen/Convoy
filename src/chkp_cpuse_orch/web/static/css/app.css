@@ -615,7 +615,7 @@ tr.srv-state-row td { padding-top: 0; }
   align-items: center;
   margin: 0.5rem 0;
 }
-#bulk-import-cloud-id { min-width: 22rem; }
+#bulk-import-cloud-id, #fw-bulk-import-cloud-id { min-width: 22rem; }
 
 /* ---- CDT (gateway deployment) controls ---- */
 .cdt-controls {
