@@ -5,9 +5,16 @@ services:
     build: .
     image: chkp-cpuse-orch:dev
     container_name: chkp-cpuse-orch
-    # Run as the host deploy account (devuser, uid/gid 1001) so bind-mounted
-    # files stay owned by a non-root user that can manage them without sudo.
-    user: "1001:1001"
+    # Run as whichever host account ran the deploy (scripts/deploy.sh exports
+    # DEPLOY_UID/DEPLOY_GID via `id -u`/`id -g`), so bind-mounted ./data is
+    # always writable by the container without a manual chown — hardcoding a
+    # specific account's uid/gid here broke on the first host whose deploying
+    # user wasn't that exact uid (observed 2026-07-25: `mkdir -p data` on a
+    # fresh host created a directory owned by whoever ran it, not 1001, and
+    # the container — always uid 1001 — got Permission denied). Defaults to
+    # 1001:1001 (devuser on the original dev host) if run without deploy.sh's
+    # exports, e.g. a bare `docker compose up`.
+    user: "${DEPLOY_UID:-1001}:${DEPLOY_GID:-1001}"
     ports:
       - "8080:8080"
     env_file:
