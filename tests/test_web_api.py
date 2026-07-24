@@ -803,6 +803,39 @@ def test_package_retention_missing_is_404(client: TestClient) -> None:
     assert resp.status_code == 404
 
 
+def test_push_package_to_repo_starts_a_job(client: TestClient) -> None:
+    # Unlike the rest of the packages section, this genuinely needs a real
+    # primary (mgmt-01 in the default fixture inventory only has the legacy
+    # "management" role, which primary_mgmt_host() doesn't recognize).
+    job = _add_server(client, name="m9", address="192.0.2.99", role="primary_sms")
+    assert job["status"] == "succeeded", job["error"]
+    _add_ssh_credential(client, host="m9")
+    _upload_package(client)
+
+    resp = client.post("/api/env/default/packages/jhf.tgz/push-to-repo", json={})
+    assert resp.status_code == 202, resp.text
+    job = resp.json()
+    assert job["kind"] == "pkgs.push_to_repo"
+    assert job["status"] == "pending"
+
+
+def test_push_package_to_repo_missing_package_is_404(client: TestClient) -> None:
+    job = _add_server(client, name="m9", address="192.0.2.99", role="primary_sms")
+    assert job["status"] == "succeeded", job["error"]
+    _add_ssh_credential(client, host="m9")
+
+    resp = client.post("/api/env/default/packages/ghost.tgz/push-to-repo", json={})
+    assert resp.status_code == 404
+
+
+def test_push_package_to_repo_without_a_primary_is_400(client: TestClient) -> None:
+    # default fixture's mgmt-01 is role "management" (legacy), not a primary.
+    _upload_package(client)
+    resp = client.post("/api/env/default/packages/jhf.tgz/push-to-repo", json={})
+    assert resp.status_code == 400
+    assert "no primary" in resp.json()["detail"].lower()
+
+
 # -- import / install jobs through the API ----------------------------------------
 
 

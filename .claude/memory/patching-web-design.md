@@ -187,6 +187,33 @@ environment RBAC** — environments are DB rows partly for that reason.
     only on a network-level error — and reload the Packages table directly
     rather than waiting for `PKGS_JOB_KINDS`/`pollJobs()`, which is now only a
     fallback for another tab/session polling mid-write.
+
+    **New, 2026-07-24: `pkgs.push_to_repo` — the one pkgs.\* op that stays
+    queued.** "Upload to repo" button (Packages tab, left of Delete) pushes a
+    stored package onto the environment's *primary* management server and
+    registers it in SmartConsole's Package Repository, via
+    `services/pkg_repo_ops.py`'s `PackageRepoService`. Confirmed against Check
+    Point's official API reference that the real command is
+    `add-repository-package` — it does **not** accept file bytes, it needs the
+    package to already exist at a path on the management server's own
+    filesystem, and returns a `task-id` polled via `show-task`. So this job:
+    SFTPs the file to the primary (same skip-if-already-staged/size-verified
+    pattern as `cdt_ops.py`'s stage step, reusing `patching.py`'s
+    `ProgressReporter`), then opens a **write-capable**
+    (`ManagementAPIClient(..., read_only=False)`) session and calls
+    `add_repository_package` + polls `show_task`. Genuinely slow (large-file
+    SFTP + a server-side import) — deliberately *not* folded into the
+    synchronous `pkgs.*` pattern above, and *not* added to `discovery.py`
+    (whose docstring states it "never writes" — a real boundary). Targets
+    `HostConnector.primary_mgmt_host()` always — no per-row host to pick from
+    on the Packages tab, since packages are environment-agnostic; the
+    Management-API credential↔bundle mapping (`api_auth`, prefers an API key,
+    falls back to the SSH username/password) moved from `discovery.py` to
+    `services/common.py` since this is now its second caller. **Open
+    question, unverified against live gear:** whether `add-repository-package`
+    needs a `publish` call afterward — assumed not (task-based commands like
+    `install-policy` normally don't, unlike object CRUD); a wrong assumption
+    surfaces as a task-failure error, not a silent false success.
   - **Server/firewall CRUD is jobs too** (`prov.add`/`prov.edit`/`prov.delete` —
     `services/prov_ops.py`, `ProvisioningJobService`; operator-directed, 2026-07-23).
     Add/edit/delete of management servers *and* CPUSE firewalls share these three

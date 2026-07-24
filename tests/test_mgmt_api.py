@@ -130,6 +130,91 @@ def test_api_calls_not_logged_by_default(monkeypatch: pytest.MonkeyPatch) -> Non
     assert calls == []
 
 
+def test_login_defaults_to_read_only() -> None:
+    seen_payload = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_payload.update(json.loads(request.content or b"{}"))
+        return httpx.Response(200, json={"sid": "SID-123"})
+
+    ManagementAPIClient(_host(), api_key="k", transport=httpx.MockTransport(handler)).login()
+    assert seen_payload["read-only"] is True
+
+
+def test_login_write_mode_sends_read_only_false() -> None:
+    seen_payload = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_payload.update(json.loads(request.content or b"{}"))
+        return httpx.Response(200, json={"sid": "SID-123"})
+
+    ManagementAPIClient(
+        _host(), api_key="k", read_only=False, transport=httpx.MockTransport(handler)
+    ).login()
+    assert seen_payload["read-only"] is False
+
+
+def test_add_repository_package_returns_task_id() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/login"):
+            return httpx.Response(200, json={"sid": "SID-123"})
+        if request.url.path.endswith("/add-repository-package"):
+            body = json.loads(request.content or b"{}")
+            assert body == {"name": "jhf.tgz", "path": "/var/log/upload", "source": "local"}
+            return httpx.Response(200, json={"task-id": "TASK-1"})
+        raise AssertionError(f"unexpected path {request.url.path}")
+
+    client = ManagementAPIClient(
+        _host(), api_key="k", read_only=False, transport=httpx.MockTransport(handler)
+    )
+    client.login()
+    assert client.add_repository_package("jhf.tgz", "/var/log/upload") == "TASK-1"
+
+
+def test_add_repository_package_raises_without_task_id() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/login"):
+            return httpx.Response(200, json={"sid": "SID-123"})
+        return httpx.Response(200, json={"message": "ok"})
+
+    client = ManagementAPIClient(
+        _host(), api_key="k", read_only=False, transport=httpx.MockTransport(handler)
+    )
+    client.login()
+    with pytest.raises(TransportError, match="no task-id"):
+        client.add_repository_package("jhf.tgz", "/var/log/upload")
+
+
+def test_show_task_returns_first_task() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/login"):
+            return httpx.Response(200, json={"sid": "SID-123"})
+        if request.url.path.endswith("/show-task"):
+            body = json.loads(request.content or b"{}")
+            assert body == {"task-id": "TASK-1"}
+            return httpx.Response(
+                200, json={"tasks": [{"status": "succeeded", "task-id": "TASK-1"}]}
+            )
+        raise AssertionError(f"unexpected path {request.url.path}")
+
+    client = _client(handler)
+    client.login()
+    task = client.show_task("TASK-1")
+    assert task["status"] == "succeeded"
+
+
+def test_show_task_raises_when_empty() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/login"):
+            return httpx.Response(200, json={"sid": "SID-123"})
+        return httpx.Response(200, json={"tasks": []})
+
+    client = _client(handler)
+    client.login()
+    with pytest.raises(TransportError, match="no tasks"):
+        client.show_task("TASK-1")
+
+
 def test_api_calls_logged_and_sanitized_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(LOG_API_CALLS_ENV, "true")
     calls: list[tuple[str, dict]] = []

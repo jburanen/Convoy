@@ -12,6 +12,11 @@ service layer (services/discovery.py), never here.
 Auth: an API key (preferred, from a credential set) or user/password. The session
 id (``sid``) returned by ``login`` is sent as ``X-chkp-sid`` on every later call.
 
+Sessions default read-only (``read_only=True``) — enough for discovery-style
+reads and avoids taking a global write lock. Pass ``read_only=False`` for
+commands that actually write (e.g. ``add_repository_package``, used by
+services/pkg_repo_ops.py).
+
 TLS: management servers present a self-signed certificate by default, so
 ``verify_tls`` defaults to ``False`` (with a logged note). Set it True when the
 server presents a CA-trusted certificate.
@@ -80,6 +85,7 @@ class ManagementAPIClient:
         domain: str | None = None,
         port: int = 443,
         verify_tls: bool = False,
+        read_only: bool = True,
         timeout: float = 30.0,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
@@ -94,6 +100,7 @@ class ManagementAPIClient:
         self._domain = domain
         self._base_url = f"https://{server.address}:{port}/web_api"
         self._verify_tls = verify_tls
+        self._read_only = read_only
         self._timeout = timeout
         self._transport = transport  # tests inject an httpx.MockTransport
         self._sid: str | None = None
@@ -130,8 +137,7 @@ class ManagementAPIClient:
             if self._api_key
             else {"user": self._username, "password": self._password}
         )
-        # read-only is enough for discovery and avoids taking a global write lock.
-        payload["read-only"] = True
+        payload["read-only"] = self._read_only
         if self._domain is not None:
             payload["domain"] = self._domain
         data = self._post("login", payload, authed=False)
@@ -219,6 +225,30 @@ class ManagementAPIClient:
             if not batch or offset >= total:
                 break
         return objects
+
+    def add_repository_package(self, name: str, path: str, *, source: str = "local") -> str:
+        """Register a package already sitting on the management server's own
+        filesystem (at ``path``, a directory — ``name`` is the filename inside
+        it) into the SmartConsole Package Repository. Note this does **not**
+        upload bytes — the caller must get the file onto the server first
+        (e.g. via ``Transport.put``, see services/pkg_repo_ops.py). Requires a
+        write-capable (``read_only=False``) session. Returns a ``task-id`` to
+        poll via ``show_task``."""
+        data = self._post("add-repository-package", {"name": name, "path": path, "source": source})
+        task_id = data.get("task-id")
+        if not isinstance(task_id, str) or not task_id:
+            raise TransportError("add-repository-package returned no task-id")
+        return task_id
+
+    def show_task(self, task_id: str) -> dict[str, Any]:
+        """Poll one async task's status/progress (e.g. from
+        ``add_repository_package``)."""
+        data = self._post("show-task", {"task-id": task_id})
+        tasks = data.get("tasks") or []
+        if not tasks:
+            raise TransportError(f"show-task returned no tasks for {task_id}")
+        result: dict[str, Any] = tasks[0]
+        return result
 
     # -- transport ---------------------------------------------------------------
 

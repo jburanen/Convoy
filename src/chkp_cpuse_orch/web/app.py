@@ -23,7 +23,7 @@ import shutil
 import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -66,6 +66,7 @@ from ..services.discovery import DiscoveryService, MgmtClientFactory
 from ..services.environments import EnvironmentManager
 from ..services.firewalls import FirewallManager
 from ..services.patching import PatchingService
+from ..services.pkg_repo_ops import PackageRepoService, RepoClientFactory
 from ..services.pkgs_ops import PackageJobService
 from ..services.prov_ops import UNSET, ProvisioningJobService
 from ..services.provisioning import (
@@ -238,6 +239,10 @@ class StageRequest(OperationCredentials):
 
 class GenerateRequest(OperationCredentials):
     pass  # credentials only
+
+
+class PushToRepoRequest(OperationCredentials):
+    pass  # credentials only — the target is always the environment's primary
 
 
 class PrepareRequest(OperationCredentials):
@@ -456,6 +461,15 @@ def create_app(
             store=store, env_manager=env_manager, firewall_manager=firewall_manager, runner=runner
         )
         discovery = DiscoveryService(registry=registry, mgmt_client_factory=mgmt_client_factory)
+        pkg_repo = PackageRepoService(
+            registry=registry,
+            packages=packages,
+            runner=runner,
+            vault=vault,
+            # Same test-injection knob DiscoveryService uses just above — both
+            # protocols just mean "a callable that builds a ManagementAPIClient".
+            mgmt_client_factory=cast("RepoClientFactory | None", mgmt_client_factory),
+        )
 
         app.state.store = store
         app.state.job_archive_path = str(cfg.paths.job_archive_path)
@@ -472,6 +486,7 @@ def create_app(
         app.state.cred_jobs = cred_jobs
         app.state.prov_jobs = prov_jobs
         app.state.discovery = discovery
+        app.state.pkg_repo = pkg_repo
 
         interrupted = runner.recover()
         if interrupted:
@@ -1372,6 +1387,29 @@ def _register_routes(app: FastAPI) -> None:
         """Executes immediately as a tracked pkgs.delete job."""
         try:
             return _pkgs_jobs(request).submit_delete(filename, triggered_by=_current_user(request))
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+
+    def _pkg_repo(request: Request) -> PackageRepoService:
+        service: PackageRepoService = request.app.state.pkg_repo
+        return service
+
+    @app.post("/api/env/{env}/packages/{filename}/push-to-repo", status_code=202)
+    def push_package_to_repo(
+        env: str, filename: str, request: Request, body: PushToRepoRequest | None = None
+    ) -> JobRecord:
+        """Push a stored package onto the environment's primary management
+        server and register it in the SmartConsole Package Repository (see
+        services/pkg_repo_ops.py) — genuinely slow (file transfer + a
+        server-side import), so unlike the rest of this section this runs as
+        a real background job, not immediately."""
+        try:
+            return _pkg_repo(request).submit_push_to_repo(
+                env,
+                filename,
+                credentials=_op_creds(body, env, env),
+                triggered_by=_current_user(request),
+            )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 

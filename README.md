@@ -5,24 +5,22 @@ It coordinates deployment of patches and upgrades — hotfixes,
 Jumbo Hotfix Accumulators, and major-version upgrades — across fleets of Security
 Management Servers and Security Gateways, through a web interface.
 
-> This is an internal operations tool for authorized maintenance on
-> infrastructure you own. It *drives* Check Point's own CDT/CPUSE agents; it does not
-> replace them.
+> This is an internal operations tool for authorized maintenance on infrastructure you own. It *drives* Check Point's own CDT/CPUSE agents; it does not replace them.
 
 ## Scope
 
-CPUSE is powerful but operates one host at a time and lacks fleet-level orchestration. CDT is integrated into SmartConsole for limited use cases including single gateways and ClusterXL, but the more sophisticated operations lack a UI. This tool provides a UI for patching on-premise management servers and their managed firewalls.
+CPUSE operates one host at a time and lacks fleet-level orchestration. CDT is integrated into SmartConsole for limited use cases including single gateways and ClusterXL, but the more sophisticated operations lack a UI. This tool provides a UI for patching on-premise Smart-1 servers and their managed firewalls.
 
 ### Supported
 Patching is supported for:  
 ✅ On-Premise Smart Center (SMS) servers  
 ✅ On-Premise Multi-Domain Management (MDM/MDSM) servers  
-✅ Gaia firewalls managed by above on-prem environments  
+✅ Gaia (Force) firewalls managed by on-prem environments  
 
 ### NOT Supported
 By design, this tool does NOT support patching:  
-❌ Smart-1 Cloud Management *(this platform is patched by Check Point)*  
-❌ Spark Management Portal *(this platform is patched by Check Point)*  
+❌ Smart-1 Cloud Management *(patched by Check Point)*  
+❌ Spark Management Portal *(patched by Check Point)*  
 ❌ Gaia Standalone (self-managed) deployments  *(uncommon)*  
 ❌ Firewalls defined as dynamic IP (DAIP)  *(code limitation)*  
 ❌ Spark firewalls managed by above on-prem environments  *(code limitation)*  
@@ -36,25 +34,19 @@ This tool does not CURRENTLY support but may one day support:
 Two patching subsystems over one shared core (see
 [.claude/memory/patching-web-design.md](.claude/memory/patching-web-design.md)):
 
-- **Direct Individual Patching — CPUSE.** CDT does *not* patch management servers (beginning in R82.10 this gap begins to close), so
-  the tool does it directly: upload a package, `installer import local`, then
-  `installer verify` / `installer install`. Live `show installer packages` state is
-  shown per server; install is confirmed after reboot.
-- **Bulk Patching — CDT.** Runs CDT *on* a management server: stage the package,
-  generate the candidates list, reorder/trim it (row order = deployment order = blast
-  radius), optional preparations, then execute under `nohup` with live status
-  polled into the job log.
+- **Direct Individual Patching — CPUSE.** CDT does *not* patch management servers (beginning in R82.10 this gap begins to close), so the tool does it directly: upload a package, `installer import local`, then `installer verify` / `installer install`. Live `show installer package` live status is shown in the job log; install is verified after reboot.  
+
+> **FUTURE**  
+> **Bulk Patching — CDT.** Runs CDT *on* a management server: stage the package,
+  generate the candidates list, reorder/trim it, add optional pre-flight and post-flight scripts, then execute with live status in the job log.
 
 Supporting features, all in the UI:
 
 - **Bootstrapping.** Generates the clish commands to create the tool's service account on a primary management server, then discovery the remaining management servers and firewalls.
-- **Independent environments.** Separate management estates, each with its own
-  inventory and its own credential namespace; package repo is shared.
-- **Encrypted credential store.** SSH/API/Expert credential store,
-  encrypted at rest with argon2id; the master key is supplied at startup and never persisted.
+- **Independent environments.** Separate management estates, each with its own inventory and its own credential namespace; package repo is shared.
+- **Encrypted credential store.** SSH/API/Expert credential store, encrypted at rest with argon2id; the master key is supplied at startup and never persisted.
 - **Package store.** Upload CPUSE packages for temporary or permanent storage; upload once, distribute to many.
-- **Background jobs.** Every import/install/CDT action runs as a persisted job with a
-  live progress log, cancellation, and restart recovery.
+- **Background jobs.** Every import/install/CDT action runs as a persisted job with a live progress log, cancellation, and restart recovery.
 
 ## Run it (Docker)
 
@@ -133,10 +125,7 @@ implemented and unit-tested. Caveats:
   stubs.
 
 ### Milestones to reach v1 / Initial Release
-These gates will define the major version releases - the milestones may change in the
-future but they will remain documented here. A milestone is not marked complete until 
-it is tested and confirmed working by a human. There will not be a packaged release 
-until v1.
+These gates define the major version releases - the milestones may change in the future but they will remain documented here. A milestone is not marked complete until it is tested and confirmed working by a human. There will not be a packaged release until v1.
 
 ✅ LDAP authentication  
 ✅ Native TLS support  
@@ -166,14 +155,13 @@ until v1.
 
 #### Packages
 🤞 Investigate if we can extract and display meta data like compatible major version from the package file  
-⏫ Add ability to upload a stored package to the smartconsole packages repo using mgmt api  
 
 #### Direct Patching (CPUSE)
 ⏫ Add deployment agent upgrade option  
 ✨ Update explanatory text at top of firewalls panel to talk about how direct patching is mostly for management servers and small numbers of gateways. gateways can also be patched from SmartConsole and Web SmartConsole (include a link). Large numbers of gateways can be patched with the CDT tab (future).  
 🤞 If the disk space is below threshold, offer the option to override unless disk space is less than actual pkg size. also provide links to disk space SKs  
 ⏫ Consider adding the ability to populate and uninstall installed packages  
-🤞 Some kind of sledgehammer to swing to release config/job lock if something gets stranded  
+🤞 Some kind of sledgehammer to swing to release config/job lock from management server and firewalls if a job gets stranded/stuck  
 
 #### Jobs
 ⏫ Add syslog output configuration  

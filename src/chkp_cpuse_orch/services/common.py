@@ -9,7 +9,7 @@ and open a transport via a swappable factory (tests inject fakes).
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Protocol
+from typing import Any, Protocol
 
 from ..credentials import (
     Credential,
@@ -242,6 +242,20 @@ def job_run_credentials(
     if connector.credential_storage_enabled:
         return None
     return vault.require(job.id)
+
+
+def api_auth(bundle: CredentialBundle) -> dict[str, Any]:
+    """Build Management API auth kwargs from a credential bundle: prefer an API key,
+    else the SSH username/password (the Gaia admin usually doubles as the API user)."""
+    api_key_cred = bundle.get(CredentialKind.API_KEY)
+    if api_key_cred is not None:
+        return {"api_key": api_key_cred.reveal()}
+    pw_cred = bundle.get(CredentialKind.SSH_PASSWORD)
+    if pw_cred is not None and pw_cred.username:
+        return {"username": pw_cred.username, "password": pw_cred.reveal()}
+    raise CredentialError(
+        "the credential set has no API key or username/password — add one on the Provisioning tab"
+    )
 
 
 class EnvironmentRegistry:
