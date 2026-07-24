@@ -138,14 +138,15 @@ future but they will remain documented here. A milestone is not marked complete 
 it is tested and confirmed working by a human. There will not be a packaged release 
 until v1.
 
-✅ Implement ldap authentication  
-◻️ Implement native TLS support  
-✅ Test Nginx/NPM support  
+✅ LDAP authentication  
+✅ Native TLS support  
+✅ Test functionality behind Nginx/NPM  
 ◻️ Test firewall discovery in SMS/Smart Center environment  
 ✅ Test firewall discovery in MDS/Multi-Domain environment  
-◻️ Test firewall cluster name discovery in SMS and MDS
+◻️ Test firewall cluster name discovery in SMS  
+◻️ Test firewall cluster name discovery in MDS  
 ✅ Test Gaia/Force Gateway patching via CPUSE  
-◻️ Packaged deployment release that doesn't require clone and --build  
+◻️ Packaged deployment release that doesn't require git clone and --build  
 ◻️ Independent agentic code security review  
 
 ### Milestones to reach v2
@@ -153,7 +154,7 @@ until v1.
 ◻️ CDT deployment to Gaia/Force gateways  
 
 ### Roadmap / Punch List
-⏫ Probably a major change, 🤞 Non-blocking nice-to-have, ✨ Cosmetic only
+⏫ Probably a major change 🤞 Non-blocking nice-to-have ✨ Cosmetic only
 
 ✨ Add logic to display a warning on mobile devices that the UI of this tool does not scale down well (by design) and you should use it on a larger display. 
 ✨ Make a favicon  

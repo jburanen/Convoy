@@ -508,6 +508,18 @@ button.link-btn:disabled { opacity: 0.5; text-decoration: none; }
    above; any other live state (DOWN, READY, ...) stays unstyled/muted. */
 .cluster-active { color: var(--ok); font-weight: 600; }
 .cluster-standby { color: var(--warn); font-weight: 600; }
+/* Defensive cap: the cluster line shouldn't be able to run far enough right
+   to crowd the packages-to-install picker in the fill column. Check Point
+   object names are short in practice, so this is a rarely-hit safety net —
+   truncate with an ellipsis rather than let it overflow into that column. */
+.cluster-active, .cluster-standby, .cluster-other {
+  display: inline-block;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: top;
+}
 
 .mono { font-family: var(--mono); font-size: 0.86rem; }
 .muted { color: var(--muted); font-size: 0.85rem; }
@@ -535,6 +547,13 @@ button.link-btn:disabled { opacity: 0.5; text-decoration: none; }
    baseline instead of the table's default top alignment. */
 tr.srv-row td { border-bottom: none; vertical-align: baseline; }
 tr.srv-state-row td { padding-top: 0; }
+/* Cluster-member firewall rows (see the fw-cluster-member class toggled in
+   app.js's renderStateRow callers) show an extra first line above the usual
+   version/JHF summary — halve the gap above it so the row doesn't read as
+   looser than a plain, single-line entry. Never applies to the Servers
+   table (cluster_name is never set there — see reporting comment in
+   renderStateRow), only to the Firewalls panel. */
+tr.srv-row.fw-cluster-member td { padding-bottom: 0.225rem; }
 /* The select and button default to inline vertical-align: baseline relative
    to EACH OTHER too, which doesn't match (different control heights) —
    align both to the cell's vertical center between themselves. This is

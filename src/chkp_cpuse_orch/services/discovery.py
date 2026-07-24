@@ -477,12 +477,13 @@ def _truthy_any(blades: dict[str, Any], keys: tuple[str, ...]) -> bool:
 
 
 def _cluster_member_names(cluster: dict[str, Any]) -> list[str]:
-    """Names out of one `show-simple-clusters` object's ``members`` field.
-    The exact member shape isn't confirmed against live gear (Check Point's
-    own docs describe it only as a "typical" pattern), so this tolerates
-    both a bare list of name strings and a list of ``{"name": ...}`` objects
-    — same defensive approach as cpuse.py's output parsing."""
-    members = cluster.get("members")
+    """Names out of one `show-simple-clusters` object's ``cluster-members``
+    field (confirmed against live gear 2026-07-24 — a ``simple-cluster``
+    object has no ``members`` key at all, which silently broke every match
+    until then). Each entry is a ``{"name": ..., "sic-state": ..., ...}``
+    object in practice; a bare string is also tolerated defensively, same
+    approach as cpuse.py's output parsing."""
+    members = cluster.get("cluster-members")
     if not isinstance(members, list):
         return []
     names: list[str] = []
