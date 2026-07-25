@@ -101,7 +101,7 @@
            to review the commands again. The Generate commands button lives
            inside the details body so it hides along with everything else
            when collapsed. -->
-      <details id="provision-details">
+      <details id="provision-details" class="collapsible-panel">
         <summary><h2>1. Bootstrap initial management access</h2></summary>
         <div class="section-head-actions">
           <button type="submit" form="provision-form" id="prov-generate" class="small">Generate commands</button>
@@ -118,11 +118,9 @@
             <label for="prov-cred-name">Credential name</label>
             <label for="prov-username">Username</label>
             <label for="prov-password">Password</label>
-            <label for="prov-uid">UID</label>
             <input type="text" id="prov-cred-name" placeholder="e.g. primary-admin">
             <input type="text" id="prov-username" placeholder="e.g. svc-patch" required>
             <input type="password" id="prov-password" placeholder="8+ characters" required>
-            <input type="number" id="prov-uid" value="0" min="0" max="65000" title="Defaults to 0, matching built-in adminRole accounts">
           </div>
         </form>
         <div id="prov-clish-notes" class="prov-notes hidden"></div>
@@ -151,7 +149,7 @@
            typed SSH user when credential storage is disabled) and executes
            the Management API admin/API-key commands itself, instead of the
            operator pasting them into expert mode. -->
-      <details id="connect-primary-details">
+      <details id="connect-primary-details" class="collapsible-panel">
         <summary><h2>2. Connect to Primary</h2></summary>
         <div class="section-head-actions">
           <button type="submit" form="connect-primary-form" id="connect-primary-btn" class="small">Connect to Primary</button>
@@ -300,7 +298,7 @@
            along with everything else when collapsed. Expanded by default (the
            "open" attribute), unlike Bootstrap, since this is the primary CPUSE
            working view. -->
-      <details id="servers-details" open>
+      <details id="servers-details" class="collapsible-panel" open>
         <summary><h2>Management Servers</h2></summary>
         <div class="section-head-actions">
           <!-- Queries live show installer packages state for every server in
@@ -349,7 +347,7 @@
       <!-- Same collapsible UI factors as #servers-details, a distinct entity:
            firewalls patched directly via CPUSE, one host at a time (not CDT's
            bulk gateway-fleet push, which stays on the Gateways tab). -->
-      <details id="firewalls-details" open>
+      <details id="firewalls-details" class="collapsible-panel" open>
         <summary><h2>Firewalls</h2></summary>
         <div class="section-head-actions">
           <button type="button" id="add-firewall-btn" class="small">Manually add a firewall</button>

@@ -71,7 +71,6 @@ from ..services.pkg_repo_ops import PackageRepoService, RepoClientFactory
 from ..services.pkgs_ops import PackageJobService
 from ..services.prov_ops import UNSET, ProvisioningJobService
 from ..services.provisioning import (
-    DEFAULT_UID,
     MDS_API_NOTE,
     MGMT_API_NOTES,
     PROVISIONING_NOTES,
@@ -304,11 +303,12 @@ class ProvisionRequest(BaseModel):
     """Renders the Gaia service-account clish commands only — Management API
     provisioning is now a separate, automated step (see ConnectPrimaryIn /
     PrimaryConnectService); this endpoint never itself reads or writes the
-    store."""
+    store. No uid field: this tool always provisions uid 0 (render_gaia_user_
+    commands' default, matching the built-in adminRole accounts it mirrors) —
+    not an operator choice."""
 
     username: str
     password: str = Field(min_length=1)  # only hashed, never stored or echoed
-    uid: int = DEFAULT_UID
 
 
 class EnvironmentIn(BaseModel):
@@ -1087,7 +1087,7 @@ def _register_routes(app: FastAPI) -> None:
     @app.post("/api/provision")
     def provision(body: ProvisionRequest) -> dict[str, list[str]]:
         try:
-            commands = render_gaia_user_commands(body.username, body.password, uid=body.uid)
+            commands = render_gaia_user_commands(body.username, body.password)
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
         return {"commands": commands, "notes": PROVISIONING_NOTES}

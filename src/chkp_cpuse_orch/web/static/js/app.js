@@ -1345,19 +1345,10 @@ document.getElementById("provision-form").addEventListener("submit", async (ev) 
     const resp = await api("/api/provision", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        username,
-        password,
-        // A naive `Number(...) || fallback` would silently turn a deliberately-
-        // entered 0 into the fallback (0 is falsy in JS, and Number("") is 0
-        // too) — so this only falls back on a genuinely non-numeric value.
-        uid: (() => {
-          const raw = document.getElementById("prov-uid").value.trim();
-          if (raw === "") return 0;
-          const n = Number(raw);
-          return Number.isNaN(n) ? 0 : n;
-        })(),
-      }),
+      // No uid field — this tool always provisions uid 0 (matching the
+      // built-in adminRole accounts it mirrors), so the backend's default
+      // applies unconditionally; there's nothing here for the operator to change.
+      body: JSON.stringify({ username, password }),
     });
     passwordInput.value = ""; // plaintext leaves the page as soon as possible
     // Save the same credentials to the table so the operator needn't re-enter them.
@@ -1553,9 +1544,10 @@ async function loadServers() {
   bulkPackageSelect.replaceChildren(new Option("— package —", ""));
   for (const pkg of packages) bulkPackageSelect.appendChild(new Option(pkg.filename, pkg.filename));
 
-  for (const srv of editable) {
+  for (const srv of sortByRole(editable)) {
     // Provisioning tab: inventory row with a Remove action (env management —
-    // patching actions stay on the Management tab).
+    // patching actions stay on the Management tab). Same ordering as the
+    // CPUSE tab's table below (sortByRole) for consistency between the two.
     const info = el("tpl-server-info-row");
     info.querySelector(".srv-name").textContent = srv.name;
     info.querySelector(".srv-address").textContent = srv.address;
@@ -2001,6 +1993,12 @@ async function checkDiskSpaceBeforeImport(kind, name, pkg, extra) {
     `${name} is short on disk space for this import, but still has at least 1.5x the ` +
     `package size free:\n\n${lines.join("\n")}\n\nProceed with the import anyway?`
   );
+  // A declined override must not fail silently — in a multi-select bulk import
+  // this confirm() fires once per short-on-space host in turn, and a operator
+  // clicking through a run of them can easily decline one without meaning to
+  // skip it outright (operator-reported, 2026-07-25: a second selected server
+  // appeared to get no job at all, with no indication why).
+  if (!sure) toast(`Skipped ${name}: disk space override declined.`);
   return { proceed: sure, force: sure };
 }
 
@@ -2010,7 +2008,7 @@ document.getElementById("bulk-import-btn").addEventListener("click", () => {
   if (!pkg) { toast("Choose a package first."); return; }
   bulkImport(btn, selectedServerNames, async (name) => {
     const extra = await operationCredentials(name, "import a package");
-    if (extra === null) return; // credential prompt cancelled for this host
+    if (extra === null) { toast(`Skipped ${name}: credentials not provided.`); return; }
     const { proceed, force } = await checkDiskSpaceBeforeImport("servers", name, pkg, extra);
     if (!proceed) return;
     const job = await api(envUrl(`/servers/${encodeURIComponent(name)}/import`), {
@@ -2028,7 +2026,7 @@ document.getElementById("bulk-import-cloud-btn").addEventListener("click", () =>
   if (!packageId) { toast("Enter a CPUSE package identifier first."); return; }
   bulkImport(btn, selectedServerNames, async (name) => {
     const extra = await operationCredentials(name, "import a package from Check Point's cloud");
-    if (extra === null) return;
+    if (extra === null) { toast(`Skipped ${name}: credentials not provided.`); return; }
     const job = await api(envUrl(`/servers/${encodeURIComponent(name)}/import-cloud`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2208,7 +2206,7 @@ document.getElementById("fw-bulk-import-btn").addEventListener("click", () => {
   if (!pkg) { toast("Choose a package first."); return; }
   bulkImport(btn, selectedFirewallNames, async (name) => {
     const extra = await operationCredentials(name, "import a package");
-    if (extra === null) return;
+    if (extra === null) { toast(`Skipped ${name}: credentials not provided.`); return; }
     const { proceed, force } = await checkDiskSpaceBeforeImport("firewalls", name, pkg, extra);
     if (!proceed) return;
     const job = await api(envUrl(`/firewalls/${encodeURIComponent(name)}/import`), {
@@ -2226,7 +2224,7 @@ document.getElementById("fw-bulk-import-cloud-btn").addEventListener("click", ()
   if (!packageId) { toast("Enter a CPUSE package identifier first."); return; }
   bulkImport(btn, selectedFirewallNames, async (name) => {
     const extra = await operationCredentials(name, "import a package from Check Point's cloud");
-    if (extra === null) return;
+    if (extra === null) { toast(`Skipped ${name}: credentials not provided.`); return; }
     const job = await api(envUrl(`/firewalls/${encodeURIComponent(name)}/import-cloud`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
