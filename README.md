@@ -100,23 +100,36 @@ These gates define the major version releases - the milestones may change in the
 ◻️ CDT deployment to Gaia/Force gateways  
 
 ### Roadmap / Punch List
-⏫ Probably a major change 🤞 Non-blocking nice-to-have ✨ Cosmetic only
+🪲 Bugfix ⏫ Probably a major change 🤞 Non-blocking nice-to-have ✨ Cosmetic only
 
 ✨ Add logic to display a warning on mobile devices that the UI of this tool does not scale down well (by design) and you should use it on a larger display.   
+✨ Revisit ALL descriptive text and rewrite for clarity and brevity
 
-#### Provisioning
-Empty is a good sign!  
+#### Provisioning  
+⏫ Move definition of primary SMS/MDS to the Mangement Environment modal? This would make it possible to further automate bootstrapping - test SSH access, provision API account automatically, test access  
+⏫ After bootstrapping the SSH user, use that user to deploy the admin API account, check/test access settings and offer to correct if needed  
+🪲 Add error checking for lack of API access - 403 error probably means the API Access Settings are wrong  
+✨ Make it more clear on the provisioning tab that the SSH account from bootstrapping must be added to ALL management servers - maybe have it test access and indicate in the servers table  
+✨ Sort management servers table by Role
 
 #### Packages
 🤞 Investigate if we can extract and display meta data like compatible major version from the package file  
+✨ Show package upload status  
+🪲 Upload package to management repo fails with path formatting error  
 
 #### Direct Patching (CPUSE)
 ⏫ Add deployment agent upgrade option  
 🤞 Some kind of sledgehammer to swing to release config/job lock from management server and firewalls if a job gets stranded/stuck  
+🪲 Multi-select management servers for import - only starts first server, doesn't queue second  
+🪲 Make timeout and check intervals longer during package import process to account for slower boxes  
+✨ Improve the display of the check intervals in the job log  
+🪲 If an import task fails, we don't clean up the temp file - add a method to do that manually with a button?  
+⏫ Offer via text link in info line to use CPRID to provision SSH access to firewalls if status check fails  
 
 #### Jobs
 ⏫ Add syslog output configuration  
 🤞 Add a download button for the install log  
+🤞 Allow import jobs to be cancelled during file copy stage - clean up partial file on target  
 
 > Not affiliated with or endorsed by Check Point Software Technologies. "Check Point", "CDT", and "CPUSE" refer to their products. Use only on infrastructure you are authorized to maintain.  
 >  

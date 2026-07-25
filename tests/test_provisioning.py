@@ -69,7 +69,9 @@ def test_mgmt_api_commands_single_session_and_api_key() -> None:
     cmds = render_mgmt_api_commands("svc-patch")
     joined = "\n".join(cmds)
     # One login → session file reused for every mutation → published in that session.
-    assert cmds[0].startswith("mgmt_cli login -r true > ")
+    # SMS logins must target "System Data" or add administrator/add api-key fail
+    # with err_inappropriate_domain_type.
+    assert cmds[0].startswith('mgmt_cli login -r true --domain "System Data" > ')
     assert 'authentication-method "api key"' in joined
     assert 'permissions-profile "Super User"' in joined
     # The administrator only sets the auth method; the key itself comes from a
@@ -98,3 +100,6 @@ def test_mgmt_api_commands_use_multi_domain_profile_for_mds() -> None:
     assert "add administrator" in joined
     # The single-domain form must not also appear.
     assert "permissions-profile" not in joined.replace("multi-domain-profile", "")
+    # The System Data domain flag is SMS-specific (unconfirmed on live MDS gear);
+    # the MDS login is left as a plain root login.
+    assert "--domain" not in cmds[0]
