@@ -10,16 +10,23 @@ from chkp_cpuse_orch import __version__
 from chkp_cpuse_orch.config import Config, Paths
 from chkp_cpuse_orch.credentials import MASTER_KEY_ENV
 from chkp_cpuse_orch.errors import AuthError, ConfigError
-from chkp_cpuse_orch.store import utcnow
+from chkp_cpuse_orch.store import Store, utcnow
 from chkp_cpuse_orch.web.app import create_app
 from chkp_cpuse_orch.web.auth import (
+    BASIC_AUTH_DISABLE_ENV,
+    BASIC_AUTH_PASSWORD_ENV,
+    BASIC_AUTH_USER_ENV,
     LDAP_REQUIRED_GROUP_ENV,
     LDAP_URL_ENV,
     SESSION_COOKIE_NAME,
+    SESSION_COOKIE_SECURE_ENV,
     AuthSettings,
+    BasicAuthenticator,
     LDAPAuthenticator,
     hash_token,
+    load_active_auth_settings,
     load_auth_settings,
+    load_basic_auth_settings,
     new_session_token,
 )
 
@@ -108,7 +115,12 @@ def test_login_grants_access_and_me(tmp_path: Path) -> None:
         assert c.post("/api/auth/login", json={"username": USER, "password": PW}).status_code == 200
         assert c.get("/api/status").status_code == 200
         me = c.get("/api/auth/me").json()
-        assert me == {"auth_enabled": True, "authenticated": True, "username": USER}
+        assert me == {
+            "auth_enabled": True,
+            "authenticated": True,
+            "username": USER,
+            "backend": "ldap",  # FakeAuthenticator isn't a BasicAuthenticator
+        }
 
 
 def test_logout_ends_the_session(tmp_path: Path) -> None:
@@ -241,3 +253,201 @@ def test_session_tokens_are_unique_and_hashed() -> None:
     assert a != b
     assert hash_token(a) == hash_token(a) != a
     assert len(hash_token(a)) == 64  # sha256 hex
+
+
+# -- basic auth: settings + backend precedence -------------------------------------
+# conftest.py's autouse fixture sets BASIC_AUTH_DISABLE=true for every test (so
+# pre-existing tests keep assuming "no authenticator -> auth off"); these tests
+# re-enable it explicitly to exercise the default-on backend.
+
+
+def test_basic_auth_is_on_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(BASIC_AUTH_DISABLE_ENV, raising=False)
+    settings = load_basic_auth_settings({})
+    assert settings is not None
+    assert settings.username == "admin"
+    assert load_active_auth_settings({}) is not None  # same, via the combined loader
+
+
+def test_basic_auth_disable_env_turns_it_off() -> None:
+    assert load_basic_auth_settings({BASIC_AUTH_DISABLE_ENV: "true"}) is None
+    assert load_active_auth_settings({BASIC_AUTH_DISABLE_ENV: "true"}) is None
+
+
+def test_ldap_takes_priority_over_basic_auth_when_both_configured() -> None:
+    env = {
+        LDAP_URL_ENV: "ldap://test",
+        LDAP_REQUIRED_GROUP_ENV: "cn=admins",
+        "CHKP_CPUSE_LDAP_USER_DN_TEMPLATE": "{username}",
+        BASIC_AUTH_DISABLE_ENV: "false",
+    }
+    assert isinstance(load_active_auth_settings(env), AuthSettings)
+
+
+# -- basic auth: authenticator logic (pure, no HTTP) -------------------------------
+
+
+def test_basic_authenticator_default_credentials(tmp_path: Path) -> None:
+    store = Store(tmp_path / "auth.db")
+    settings = load_basic_auth_settings({})
+    assert settings is not None
+    auth = BasicAuthenticator(store, settings)
+    user = auth.authenticate("admin", "admin")
+    assert user.username == "admin"
+    with pytest.raises(AuthError):
+        auth.authenticate("admin", "wrong")
+    with pytest.raises(AuthError):
+        auth.authenticate("someone-else", "admin")
+    with pytest.raises(AuthError):
+        auth.authenticate("admin", "")
+
+
+def test_basic_authenticator_change_password_persists_across_restart(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "auth.db"
+    settings = load_basic_auth_settings({})
+    assert settings is not None
+
+    store = Store(db_path)
+    auth = BasicAuthenticator(store, settings)
+    auth.change_password("admin", "new password")
+    assert auth.authenticate("admin", "new password").username == "admin"
+    with pytest.raises(AuthError):
+        auth.authenticate("admin", "admin")  # old default no longer works
+
+    # A fresh authenticator built from the same store/settings (as after a
+    # restart) must pick up the persisted hash, not the env-var default.
+    restarted = BasicAuthenticator(Store(db_path), settings)
+    assert restarted.authenticate("admin", "new password").username == "admin"
+    with pytest.raises(AuthError):
+        restarted.authenticate("admin", "admin")
+
+
+def test_basic_authenticator_change_password_wrong_current(tmp_path: Path) -> None:
+    store = Store(tmp_path / "auth.db")
+    settings = load_basic_auth_settings({})
+    assert settings is not None
+    auth = BasicAuthenticator(store, settings)
+    with pytest.raises(AuthError):
+        auth.change_password("not the current password", "new password")
+    assert auth.authenticate("admin", "admin").username == "admin"  # unchanged
+
+
+# -- basic auth: end-to-end over HTTP ----------------------------------------------
+
+
+def _app_basic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> object:
+    """The real default-on backend, not a fake — exercises load_active_auth_settings
+    end to end. Caller must have re-enabled it (conftest disables it by default).
+    Cookie defaults to Secure, which TestClient's plain-http scheme won't round-trip
+    — same reason the LDAP tests' SETTINGS fixture sets cookie_secure=False."""
+    monkeypatch.setenv(SESSION_COOKIE_SECURE_ENV, "false")
+    return create_app(_config(tmp_path))
+
+
+def test_default_basic_auth_login_and_credential_storage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(BASIC_AUTH_DISABLE_ENV, raising=False)
+    with TestClient(_app_basic(tmp_path, monkeypatch)) as c:
+        assert c.get("/api/status").status_code == 401  # on by default, no login yet
+        assert c.post(
+            "/api/auth/login", json={"username": "admin", "password": "admin"}
+        ).status_code == 200
+        me = c.get("/api/auth/me").json()
+        assert me == {
+            "auth_enabled": True,
+            "authenticated": True,
+            "username": "admin",
+            "backend": "basic",
+        }
+        # Basic auth "counts as auth" for credential storage, same as LDAP.
+        c.post("/api/environments", json={"name": "corp"})
+        assert (
+            c.post("/api/environments/corp/credential-storage", json={"enabled": True}).status_code
+            == 200
+        )
+
+
+def test_basic_auth_custom_credentials(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(BASIC_AUTH_DISABLE_ENV, raising=False)
+    monkeypatch.setenv(BASIC_AUTH_USER_ENV, "svc-cpuse")
+    monkeypatch.setenv(BASIC_AUTH_PASSWORD_ENV, "s3cret-enough")
+    with TestClient(_app_basic(tmp_path, monkeypatch)) as c:
+        assert (
+            c.post(
+                "/api/auth/login", json={"username": "admin", "password": "admin"}
+            ).status_code
+            == 401
+        )
+        assert (
+            c.post(
+                "/api/auth/login",
+                json={"username": "svc-cpuse", "password": "s3cret-enough"},
+            ).status_code
+            == 200
+        )
+
+
+def test_basic_auth_disable_env_runs_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # conftest's autouse fixture already sets this — asserted explicitly here.
+    with TestClient(_app_basic(tmp_path, monkeypatch)) as c:
+        status = c.get("/api/status").json()
+        assert status["auth_enabled"] is False
+
+
+def test_change_password_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(BASIC_AUTH_DISABLE_ENV, raising=False)
+    with TestClient(_app_basic(tmp_path, monkeypatch)) as c:
+        c.post("/api/auth/login", json={"username": "admin", "password": "admin"})
+        assert (
+            c.post(
+                "/api/auth/password",
+                json={"current_password": "admin", "new_password": "a new password"},
+            ).status_code
+            == 200
+        )
+        c.post("/api/auth/logout")
+        assert (
+            c.post(
+                "/api/auth/login", json={"username": "admin", "password": "admin"}
+            ).status_code
+            == 401
+        )
+        assert (
+            c.post(
+                "/api/auth/login",
+                json={"username": "admin", "password": "a new password"},
+            ).status_code
+            == 200
+        )
+
+
+def test_change_password_wrong_current_password(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(BASIC_AUTH_DISABLE_ENV, raising=False)
+    with TestClient(_app_basic(tmp_path, monkeypatch)) as c:
+        c.post("/api/auth/login", json={"username": "admin", "password": "admin"})
+        assert (
+            c.post(
+                "/api/auth/password",
+                json={"current_password": "not it", "new_password": "a new password"},
+            ).status_code
+            == 400
+        )
+
+
+def test_change_password_rejected_under_ldap(tmp_path: Path) -> None:
+    with TestClient(_app(tmp_path, _fake())) as c:
+        _login(c)
+        assert (
+            c.post(
+                "/api/auth/password",
+                json={"current_password": PW, "new_password": "a new password"},
+            ).status_code
+            == 400
+        )

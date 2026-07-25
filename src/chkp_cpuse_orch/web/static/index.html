@@ -25,11 +25,12 @@
     <h1>Check Point Patch Management</h1>
     <!-- right-aligned header cluster: session controls, then the env picker -->
     <div id="header-right">
-      <!-- Signed-in user + logout; shown only when LDAP auth is enabled. Sits
-           inline, left of the picker. Logout also clears any credentials cached
-           in this tab (see app.js). -->
+      <!-- Signed-in user + logout; shown only when auth is enabled. Sits inline,
+           left of the picker. The username opens the User Settings modal
+           (password change; basic-auth only — see app.js initAuth). Logout also
+           clears any credentials cached in this tab (see app.js). -->
       <div id="session-row" class="hidden">
-        <span id="session-user"></span>
+        <button id="session-user" class="link-btn"></button>
         <button id="logout-btn" class="small secondary">Log out</button>
       </div>
       <!-- environment picker: top-right, same line as the title -->
@@ -86,9 +87,9 @@
 
     <section id="provision">
       <!-- Collapsed by default once there's nothing left to set up: storage
-           disabled (no default set makes sense), or storage enabled AND a
-           default credential set already exists. Left open when storage is
-           enabled but there's no default yet, since bootstrapping is likely
+           disabled (no credentials make sense), or storage enabled AND at
+           least one credential already exists. Left open when storage is
+           enabled but no credential exists yet, since bootstrapping is likely
            still needed. Computed once per environment load/switch by
            updateProvisionCollapse() in app.js, not re-forced on every
            credential-set refresh, so it never overrides a manual toggle.
@@ -226,6 +227,14 @@
         retention window</strong> (30 days by default) unless you tick
         <strong>Keep</strong> to store them indefinitely.
       </p>
+      <p class="hint">
+        <strong>Upload to Mgmt</strong>, below, is a separate step: it pushes an
+        already-stored package into the current environment's primary management
+        server's own package repository via the Management API, so it's available
+        there for policy installs and hotfix imports from SmartConsole or CDT. It
+        runs as a background job (large-file transfer + server-side import) — track
+        it on the <strong>Jobs</strong> tab.
+      </p>
       <form id="upload-form">
         <input type="file" id="upload-file" required>
         <button type="submit" id="upload-btn">Upload</button>
@@ -313,8 +322,13 @@
           <button type="button" id="fw-refresh-all-btn" class="small">Refresh all</button>
         </div>
         <p class="hint">
-          Standalone gateways or cluster members, patched directly over SSH — distinct
-          from CDT's bulk fleet push on the Gateways tab. Add them manually or discover
+          Direct CPUSE patching here — one host at a time over SSH — is best suited to
+          management servers and a small number of gateways: standalone gateways or
+          cluster members. Gateways can also be patched from SmartConsole or Web
+          SmartConsole — see
+          <a href="https://support.checkpoint.com/results/sk/sk170314" target="_blank" rel="noopener">sk170314</a>.
+          For large numbers of gateways, use the <strong>Gateways</strong> tab (CDT bulk
+          fleet push, planned for version 2). Add firewalls manually or discover
           them from a Primary SMS/MDS. The detected state shown below (last row per
           firewall) is cached — click <strong>Refresh</strong> on a firewall, or
           <strong>Refresh all</strong> above, to query it live over SSH.
@@ -457,6 +471,28 @@
 
 </main>
 
+<!-- ============ User Settings modal (opened by clicking the username) ======= -->
+<!-- Basic-auth only (see app.js initAuth) — LDAP passwords are directory-managed,
+     so the header's username isn't clickable in that case. -->
+<div id="user-settings-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="user-settings-title">
+  <div class="modal-card narrow">
+    <div class="modal-head">
+      <h2 id="user-settings-title">User settings</h2>
+      <button id="user-settings-close" class="small" title="Close">✕</button>
+    </div>
+    <form id="user-settings-form" class="stacked">
+      <label>Current password<input type="password" id="us-current-password" autocomplete="current-password" required></label>
+      <label>New password<input type="password" id="us-new-password" autocomplete="new-password" minlength="8" required></label>
+      <label>Confirm new password<input type="password" id="us-confirm-password" autocomplete="new-password" minlength="8" required></label>
+      <p id="user-settings-error" class="login-error hidden" role="alert"></p>
+      <div class="cred-modal-actions">
+        <button type="submit">Change password</button>
+        <button type="button" id="user-settings-cancel" class="secondary">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <!-- ============ First-run welcome modal ===================================== -->
 <!-- Shown on a brand-new deployment: exactly one environment ("default")
      with no servers, credentials, or packages yet. Offers renaming the default
@@ -509,10 +545,6 @@
     <ul id="env-manage-list"><!-- tpl-env-manage-row instances --></ul>
     <form id="env-add-form">
       <input type="text" id="env-add-name" placeholder="new environment name (e.g. Corp HQ)" required>
-      <label class="env-add-mds">
-        <input type="checkbox" id="env-add-is-mds">
-        Multi-Domain (MDS) environment
-      </label>
       <button type="submit">Create</button>
     </form>
   </div>
@@ -835,7 +867,7 @@
     <span id="footer-version" class="muted"></span>
   </div>
   <div class="footer-notes muted">
-    <span>Written by Claude under the direction of humans. Deploy, <strong>test</strong>, and use this tool with appropriate caution.</span>
+    <span>Written by Claude under the direction of humans. Even with a whole mess of robots doing the work, we still manage to introduce human error. Deploy, <strong>test</strong>, and use this tool with appropriate caution.</span>
     <span>Ideas? <a class="footer-link" href="https://github.com/jburanen/chkp-cpuse-orch/issues/new?labels=enhancement" target="_blank" rel="noopener">Submit an issue</a> at Github with the Enhancement label.</span>
   </div>
 </footer>
@@ -989,7 +1021,7 @@
       </label>
     </td>
     <td class="pkg-actions" rowspan="2">
-      <button class="btn-push-repo small" title="Upload to the current environment's primary management server's package repository">Upload to repo</button>
+      <button class="btn-push-repo small" title="Upload to the current environment's primary management server's package repository">Upload to Mgmt</button>
       <button class="btn-delete small danger">Delete</button>
     </td>
   </tr>

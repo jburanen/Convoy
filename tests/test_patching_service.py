@@ -387,6 +387,21 @@ def _low_df(mount: str) -> str:
     )
 
 
+def _df_with_available_kb(mount: str, available_kb: int) -> str:
+    return (
+        "Filesystem     1024-blocks     Used  Available Capacity Mounted on\n"
+        f"/dev/sda1        999999999     1000  {available_kb}       1% {mount}"
+    )
+
+
+# A bigger fake package than PKG — needed to land free space between the
+# 1.5x-package-size override floor and a path's full requirement, which df's
+# integer-KB granularity can't express against PKG's 23 bytes.
+_BIG_PKG = "big_jhf.tgz"
+_BIG_PKG_CONTENT = b"x" * 100_000
+_BIG_PKG_SHA1 = hashlib.sha1(_BIG_PKG_CONTENT).hexdigest()
+
+
 def test_import_job_fails_if_var_log_has_insufficient_space(
     service: PatchingService, store: Store, transport: FakeTransport
 ) -> None:
@@ -434,6 +449,74 @@ def test_import_job_logs_disk_space_ok_when_sufficient(
     messages = " | ".join(e.message for e in store.events(job.id))
     assert "disk space OK on /var/log" in messages
     assert "disk space OK on /" in messages
+
+
+def test_import_job_offers_override_for_a_soft_shortfall(
+    service: PatchingService, store: Store, transport: FakeTransport, packages: PackageStore
+) -> None:
+    packages.add_stream(_BIG_PKG, io.BytesIO(_BIG_PKG_CONTENT))
+    # 100_000-byte package: /var/log needs 300_000 (3x), the override floor is
+    # 150_000 (1.5x) — 200KB (204_800 bytes) sits between the two: short of
+    # the requirement but still override-eligible.
+    transport.responses["df -Pk /var/log"] = _df_with_available_kb("/var/log", 200)
+    transport.responses["df -Pk /"] = _PLENTY_DF
+    job = service.submit_import("default", "mgmt-01", _BIG_PKG)  # no force_low_space
+    _run(service)
+
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.FAILED
+    assert finished.error is not None
+    assert "PreCheckError" in finished.error
+    assert "can be overridden" in finished.error
+    assert transport.puts == []
+
+
+def test_import_job_succeeds_with_force_low_space_override(
+    service: PatchingService, store: Store, transport: FakeTransport, packages: PackageStore
+) -> None:
+    packages.add_stream(_BIG_PKG, io.BytesIO(_BIG_PKG_CONTENT))
+    transport.responses["sha1sum"] = f"{_BIG_PKG_SHA1}  /var/log/upload/{_BIG_PKG}"
+    transport.responses["show installer packages imported"] = f"{_BIG_PKG}      Imported"
+    transport.responses["df -Pk /var/log"] = _df_with_available_kb("/var/log", 200)
+    transport.responses["df -Pk /"] = _PLENTY_DF
+    job = service.submit_import("default", "mgmt-01", _BIG_PKG, force_low_space=True)
+    _run(service)
+
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.SUCCEEDED, finished.error
+    messages = " | ".join(e.message for e in store.events(job.id))
+    assert "proceeding anyway" in messages
+
+
+def test_import_job_never_overrides_below_the_hard_floor(
+    service: PatchingService, store: Store, transport: FakeTransport, packages: PackageStore
+) -> None:
+    packages.add_stream(_BIG_PKG, io.BytesIO(_BIG_PKG_CONTENT))
+    # 100KB (102_400 bytes) available is below the 150_000-byte override
+    # floor — force_low_space must not save this.
+    transport.responses["df -Pk /var/log"] = _df_with_available_kb("/var/log", 100)
+    transport.responses["df -Pk /"] = _PLENTY_DF
+    job = service.submit_import("default", "mgmt-01", _BIG_PKG, force_low_space=True)
+    _run(service)
+
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.FAILED
+    assert finished.error is not None
+    assert "cannot be overridden" in finished.error
+    assert transport.puts == []
+
+
+def test_check_import_disk_space_reports_ok_and_shortfalls(
+    service: PatchingService, transport: FakeTransport, packages: PackageStore
+) -> None:
+    packages.add_stream(_BIG_PKG, io.BytesIO(_BIG_PKG_CONTENT))
+    transport.responses["df -Pk /var/log"] = _df_with_available_kb("/var/log", 200)
+    transport.responses["df -Pk /"] = _PLENTY_DF
+    checks = {c.path: c for c in service.check_import_disk_space("default", "mgmt-01", _BIG_PKG)}
+    assert checks["/var/log"].ok is False
+    assert checks["/var/log"].override_eligible is True
+    assert checks["/"].ok is True
+    assert transport.puts == []  # read-only precheck — never uploads anything
 
 
 def test_import_job_fails_closed_on_size_mismatch(

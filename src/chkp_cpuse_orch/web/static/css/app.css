@@ -297,21 +297,13 @@ section h2 { margin: 0 0 0.75rem; font-size: 1.15rem; }
    collapsed — untouched native <details> behavior for any non-summary child,
    unaffected by this. */
 #provision-details, #servers-details, #firewalls-details { position: relative; }
-/* Collapsed panels only show the summary line, so the section's normal
-   bottom padding (sized for a full body) reads as excess air below it —
-   tighten just that side to match. Top padding is never touched, in either
-   state, so the header/summary line's vertical position never shifts on
-   screen when toggling (operator-reported: expanding/collapsing was visibly
-   bumping the header up/down). Scoped to these three panel ids specifically
-   — a bare `section:has(> details)` also matches the Jobs tab's Filters
-   <details>, which is likewise a direct child of its <section>, and would
-   wrongly shift the Jobs header too even though that section always shows
-   a table below the filters regardless of their open state. */
-section:has(> #provision-details:not([open])),
-section:has(> #servers-details:not([open])),
-section:has(> #firewalls-details:not([open])) {
-  padding-bottom: 0.6rem;
-}
+/* Collapsed panels only show the summary line, sitting in the section's
+   plain padding box (1rem top and bottom — see the `section` rule above),
+   so the whitespace above and below the header text is even by default; no
+   override needed here. Top padding is never touched in either state, so
+   the header/summary line's vertical position never shifts on screen when
+   toggling (operator-reported: expanding/collapsing was visibly bumping the
+   header up/down). */
 #provision-details:not([open]) > summary,
 #servers-details:not([open]) > summary,
 #firewalls-details:not([open]) > summary {
@@ -759,8 +751,6 @@ tr.srv-row.fw-cluster-member td { padding-bottom: 0.225rem; }
    the placeholder example is fully readable. */
 #env-add-name { flex: 1; min-width: 0; }
 
-.env-add-mds { display: flex; align-items: center; gap: 0.35rem; font-size: 0.9rem; white-space: nowrap; }
-
 #env-manage-list { list-style: none; margin: 0 0 0.75rem; padding: 0; }
 .env-manage-row {
   display: flex;
@@ -881,3 +871,11 @@ tr.srv-row.fw-cluster-member td { padding-bottom: 0.225rem; }
   color: var(--muted);
 }
 #session-row.hidden { display: none; }
+/* LDAP passwords are directory-managed — the username isn't clickable there, so
+   it reads as plain text instead of the basic-auth link-btn look. */
+#session-user.static {
+  color: inherit;
+  text-decoration: none;
+  cursor: default;
+  pointer-events: none;
+}

@@ -31,7 +31,11 @@ undiscoverable — the operator won't know the knob exists.
   `CHKP_CPUSE_LDAP_USER_FILTER`, `CHKP_CPUSE_LDAP_USER_DN_TEMPLATE`,
   `CHKP_CPUSE_LDAP_MEMBER_OF_ATTR`, `CHKP_CPUSE_LDAP_START_TLS`,
   `CHKP_CPUSE_LDAP_TLS_VERIFY`, `CHKP_CPUSE_LDAP_CA_CERT`,
-  `CHKP_CPUSE_SESSION_IDLE_MINUTES`, `CHKP_CPUSE_SESSION_COOKIE_SECURE`.
+  `CHKP_CPUSE_SESSION_IDLE_MINUTES`, `CHKP_CPUSE_SESSION_COOKIE_SECURE`, and the
+  basic-auth trio (default backend, on unless LDAP is configured or disabled):
+  `BASIC_AUTH_USER`, `BASIC_AUTH_PASSWORD` (both default `admin`),
+  `BASIC_AUTH_DISABLE`. Deliberately **not** `CHKP_CPUSE_`-prefixed — matches the
+  literal names requested when this backend was added (2026-07-24).
 - Per-host SSH credentials are NOT env vars anymore: they live in the encrypted
   DB-backed `CredentialStore`, added via the web UI. The inventory `secret_ref`
   field and `config.resolve_secret()` are legacy/unused by the resolution path —

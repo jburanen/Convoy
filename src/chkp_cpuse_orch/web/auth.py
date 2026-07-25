@@ -1,19 +1,25 @@
-"""Web authentication — LDAP/Active Directory login behind a small backend-agnostic
-interface, plus session-token helpers.
+"""Web authentication — LDAP/Active Directory or local basic-auth login behind a
+small backend-agnostic interface, plus session-token helpers.
 
 Configured entirely from the environment (see ``.env.example``). Presence of
-``CHKP_CPUSE_LDAP_URL`` **and** ``CHKP_CPUSE_LDAP_REQUIRED_GROUP`` enables auth; when
-either is absent, ``load_auth_settings`` returns ``None`` and the web app runs open
-(auth-optional — but credential storage is then forbidden; see web/app.py). A URL set
-with an incomplete rest-of-config fails loudly, never silently open.
+``CHKP_CPUSE_LDAP_URL`` **and** ``CHKP_CPUSE_LDAP_REQUIRED_GROUP`` enables LDAP auth.
+When LDAP isn't configured, a local basic-auth backend is used instead —
+**on by default** (``BASIC_AUTH_USER``/``BASIC_AUTH_PASSWORD``, default
+``admin``/``admin``) unless ``BASIC_AUTH_DISABLE`` is set. Only when LDAP is
+unconfigured *and* basic auth is disabled does ``load_active_auth_settings`` return
+``None`` and the web app run fully open (auth-optional — but credential storage is
+then forbidden; see web/app.py). An LDAP URL set with an incomplete rest-of-config
+fails loudly, never silently open.
 
-The ``Authenticator`` protocol keeps the design open to other backends (local
-basic-auth, etc.) landing behind the same session layer later. ``LDAPAuthenticator``
-implements search-then-bind against AD or any LDAP directory and gates access on
-direct ``memberOf`` membership of a configured group.
+The ``Authenticator`` protocol keeps the design open to multiple backends behind the
+same session layer. ``LDAPAuthenticator`` implements search-then-bind against AD or
+any LDAP directory and gates access on direct ``memberOf`` membership of a configured
+group. ``BasicAuthenticator`` checks a single configured username/password (the
+password is changeable at runtime via ``/api/auth/password`` and persisted — as an
+argon2 hash — in the ``meta`` table, overriding the env-var default).
 
 Only non-secret settings and transient in-memory secrets live here; session tokens
-are stored hashed (see store.py).
+(and the basic-auth password hash, once changed) are stored hashed (see store.py).
 """
 
 from __future__ import annotations
@@ -25,6 +31,8 @@ import ssl
 from datetime import timedelta
 from typing import Any, Protocol
 
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError
 from pydantic import BaseModel, Field
 
 from ..errors import AuthError, ConfigError
@@ -49,6 +57,16 @@ LDAP_CA_CERT_ENV = "CHKP_CPUSE_LDAP_CA_CERT"
 SESSION_IDLE_MINUTES_ENV = "CHKP_CPUSE_SESSION_IDLE_MINUTES"
 SESSION_COOKIE_SECURE_ENV = "CHKP_CPUSE_SESSION_COOKIE_SECURE"
 
+# Local basic-auth backend — the default when LDAP isn't configured.
+BASIC_AUTH_USER_ENV = "BASIC_AUTH_USER"
+BASIC_AUTH_PASSWORD_ENV = "BASIC_AUTH_PASSWORD"
+BASIC_AUTH_DISABLE_ENV = "BASIC_AUTH_DISABLE"
+DEFAULT_BASIC_AUTH_USER = "admin"
+DEFAULT_BASIC_AUTH_PASSWORD = "admin"
+# meta table key (store.py) for a password changed at runtime via the UI; overrides
+# the env-var default without needing a restart.
+BASIC_AUTH_PASSWORD_HASH_META_KEY = "basic_auth_password_hash"
+
 # Default user filter targets Active Directory; override for other directories
 # (e.g. "(uid={username})" for OpenLDAP/posix).
 DEFAULT_USER_FILTER = "(sAMAccountName={username})"
@@ -71,6 +89,14 @@ class Authenticator(Protocol):
     message is safe to log but never disclosed verbatim to the client."""
 
     def authenticate(self, username: str, password: str) -> AuthenticatedUser: ...
+
+
+class SessionSettings(Protocol):
+    """The subset of a backend's settings ``AuthManager`` needs for session/cookie
+    behaviour — implemented by both ``AuthSettings`` (LDAP) and ``BasicAuthSettings``."""
+
+    idle_minutes: int
+    cookie_secure: bool
 
 
 class AuthSettings(BaseModel):
@@ -105,6 +131,63 @@ def _env_bool(env: dict[str, str], name: str, default: bool) -> bool:
     if raw is None or raw == "":
         return default
     return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _load_idle_minutes(env: dict[str, str]) -> int:
+    idle_raw = env.get(SESSION_IDLE_MINUTES_ENV)
+    try:
+        return int(idle_raw) if idle_raw else DEFAULT_IDLE_MINUTES
+    except ValueError as exc:
+        raise ConfigError(
+            f"{SESSION_IDLE_MINUTES_ENV} must be an integer, got {idle_raw!r}"
+        ) from exc
+
+
+class BasicAuthSettings(BaseModel):
+    """A single local username/password, plus the same session settings LDAP uses.
+
+    ``password_hash`` is the argon2 hash of the env-var-configured (or default)
+    password — computed once at load time. ``BasicAuthenticator`` prefers a
+    DB-persisted hash (set via a runtime password change) over this one.
+    """
+
+    username: str
+    password_hash: str
+    idle_minutes: int = Field(default=DEFAULT_IDLE_MINUTES, ge=1)
+    cookie_secure: bool = True
+
+
+def load_basic_auth_settings(
+    environ: os._Environ[str] | dict[str, str] | None = None,
+) -> BasicAuthSettings | None:
+    """Build local basic-auth settings from the environment, or ``None`` when
+    ``BASIC_AUTH_DISABLE`` is set. Unset ``BASIC_AUTH_USER``/``BASIC_AUTH_PASSWORD``
+    default to ``admin``/``admin`` — this backend is **on by default** so a fresh
+    deployment isn't left wide open; operators are expected to change the password
+    (or configure LDAP, or set ``BASIC_AUTH_DISABLE``) promptly."""
+    env = dict(os.environ if environ is None else environ)
+    if _env_bool(env, BASIC_AUTH_DISABLE_ENV, False):
+        return None
+    username = (env.get(BASIC_AUTH_USER_ENV) or DEFAULT_BASIC_AUTH_USER).strip()
+    password = env.get(BASIC_AUTH_PASSWORD_ENV) or DEFAULT_BASIC_AUTH_PASSWORD
+    return BasicAuthSettings(
+        username=username,
+        password_hash=PasswordHasher().hash(password),
+        idle_minutes=_load_idle_minutes(env),
+        cookie_secure=_env_bool(env, SESSION_COOKIE_SECURE_ENV, True),
+    )
+
+
+def load_active_auth_settings(
+    environ: os._Environ[str] | dict[str, str] | None = None,
+) -> AuthSettings | BasicAuthSettings | None:
+    """Resolve whichever backend is active: LDAP takes priority when configured;
+    otherwise local basic-auth, unless disabled; otherwise ``None`` (fully open —
+    and credential storage is then forbidden, see web/app.py)."""
+    ldap_settings = load_auth_settings(environ)
+    if ldap_settings is not None:
+        return ldap_settings
+    return load_basic_auth_settings(environ)
 
 
 def load_auth_settings(
@@ -149,13 +232,7 @@ def load_auth_settings(
             f"({LDAP_BIND_DN_ENV} + {LDAP_USER_BASE_DN_ENV}) or {LDAP_USER_DN_TEMPLATE_ENV}"
         )
 
-    idle_raw = env.get(SESSION_IDLE_MINUTES_ENV)
-    try:
-        idle = int(idle_raw) if idle_raw else DEFAULT_IDLE_MINUTES
-    except ValueError as exc:
-        raise ConfigError(
-            f"{SESSION_IDLE_MINUTES_ENV} must be an integer, got {idle_raw!r}"
-        ) from exc
+    idle = _load_idle_minutes(env)
 
     return AuthSettings(
         url=url,
@@ -193,7 +270,9 @@ class AuthManager:
     settings that drive cookie/idle behaviour. The single object the web layer
     holds when authentication is enabled (``app.state.auth``)."""
 
-    def __init__(self, store: Store, authenticator: Authenticator, settings: AuthSettings) -> None:
+    def __init__(
+        self, store: Store, authenticator: Authenticator, settings: SessionSettings
+    ) -> None:
         self._store = store
         self._authenticator = authenticator
         self.settings = settings
@@ -201,6 +280,23 @@ class AuthManager:
     @property
     def idle(self) -> timedelta:
         return timedelta(minutes=self.settings.idle_minutes)
+
+    @property
+    def backend(self) -> str:
+        """``"basic"`` when the local username/password backend is active, else
+        ``"ldap"`` — the UI uses this to decide whether to offer a password-change
+        control (only basic-auth passwords are ours to change)."""
+        return "basic" if isinstance(self._authenticator, BasicAuthenticator) else "ldap"
+
+    def change_password(self, username: str, current_password: str, new_password: str) -> None:
+        """Change the basic-auth password. Raises ``AuthError`` when this backend
+        isn't basic-auth, the username doesn't match, or ``current_password`` is
+        wrong."""
+        if not isinstance(self._authenticator, BasicAuthenticator):
+            raise AuthError("password changes are only supported with basic auth")
+        if username != self._authenticator.settings.username:
+            raise AuthError(f"unknown user {username!r}")
+        self._authenticator.change_password(current_password, new_password)
 
     def login(self, username: str, password: str) -> tuple[str, AuthenticatedUser]:
         """Authenticate and open a session. Raises ``AuthError`` on any failure.
@@ -388,3 +484,43 @@ def _display(entry: Any) -> str | None:
         if values:
             return str(values[0])
     return None
+
+
+# -- basic-auth backend -------------------------------------------------------------
+
+
+class BasicAuthenticator:
+    """A single configured username/password — the default backend when LDAP isn't
+    configured. The password is changeable at runtime (the User Settings modal,
+    basic-auth only): a change is verified against the current password, then hashed
+    and persisted to the ``meta`` table so it survives a restart, overriding the
+    env-var default from then on."""
+
+    def __init__(self, store: Store, settings: BasicAuthSettings) -> None:
+        self._store = store
+        self.settings = settings
+        self._hasher = PasswordHasher()
+        stored_hash = store.get_meta(BASIC_AUTH_PASSWORD_HASH_META_KEY)
+        self._password_hash = stored_hash or settings.password_hash
+
+    def authenticate(self, username: str, password: str) -> AuthenticatedUser:
+        if not password:
+            raise AuthError("empty password")
+        if username != self.settings.username:
+            raise AuthError(f"unknown user {username!r}")
+        try:
+            self._hasher.verify(self._password_hash, password)
+        except VerifyMismatchError as exc:
+            raise AuthError("invalid password") from exc
+        return AuthenticatedUser(username=username, display_name=username, dn=username)
+
+    def change_password(self, current_password: str, new_password: str) -> None:
+        if not current_password:
+            raise AuthError("empty password")
+        try:
+            self._hasher.verify(self._password_hash, current_password)
+        except VerifyMismatchError as exc:
+            raise AuthError("current password is incorrect") from exc
+        new_hash = self._hasher.hash(new_password)
+        self._store.set_meta(BASIC_AUTH_PASSWORD_HASH_META_KEY, new_hash)
+        self._password_hash = new_hash
