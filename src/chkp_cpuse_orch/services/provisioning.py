@@ -99,10 +99,14 @@ def render_mgmt_api_commands(
     """Expert-mode commands that create a Management API administrator (API-key auth)
     on ONE Security Management Server / MDS.
 
-    All mutations share a single ``mgmt_cli`` session so the ``add administrator``
-    is actually published; ``-r true`` logs in as root on the box (no password).
-    The generated API key is printed once in the ``add administrator`` JSON output —
-    the operator copies it into the Credentials section (kind: API key).
+    All mutations share a single ``mgmt_cli`` session so the ``add administrator`` /
+    ``add api-key`` are actually published; ``-r true`` logs in as root on the box
+    (no password). ``add administrator ... authentication-method "api key"`` only
+    sets the auth *method* — it does not itself issue a key. The key value is
+    generated (and printed once, in its JSON output) by the separate
+    ``add api-key admin-name <name>`` command (CLI reference: ``add-api-key`` v2.1),
+    run in the same session so it can see the not-yet-published administrator.
+    The operator copies that key into the Credentials section (kind: API key).
 
     A Multi-Domain Server has no single-domain ``permissions-profile`` object of
     its own — a *global* administrator (one this tool's estate-wide discovery
@@ -123,19 +127,18 @@ def render_mgmt_api_commands(
     return [
         f"mgmt_cli login -r true > {sid}",
         f"mgmt_cli -s {sid} add administrator name {username} "
-        f'authentication-method "api key" {profile_param} "{permissions_profile}" '
-        "--format json",
+        f'authentication-method "api key" {profile_param} "{permissions_profile}"',
+        f"mgmt_cli -s {sid} add api-key admin-name {username} --format json",
         f"mgmt_cli -s {sid} publish",
         f"mgmt_cli -s {sid} logout",
         f"rm -f {sid}",
-        "api restart",
     ]
 
 
 MGMT_API_NOTES = [
-    NOTE_EMPHASIS + '`add administrator … authentication-method "api key"` prints the '
-    "API key in its JSON output. Copy it ONCE (it cannot be retrieved later), then Edit "
-    "the credential entry added below and paste it as the API key.",
+    NOTE_EMPHASIS + "`add api-key` prints the API key in its JSON output. Copy it ONCE "
+    "(it cannot be retrieved later), then Edit the credential entry added below and "
+    "paste it as the API key.",
 ]
 
 MDS_API_NOTE = (

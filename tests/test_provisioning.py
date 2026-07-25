@@ -72,8 +72,13 @@ def test_mgmt_api_commands_single_session_and_api_key() -> None:
     assert cmds[0].startswith("mgmt_cli login -r true > ")
     assert 'authentication-method "api key"' in joined
     assert 'permissions-profile "Super User"' in joined
+    # The administrator only sets the auth method; the key itself comes from a
+    # separate `add api-key` call so it can be printed in its own JSON output.
+    assert "add api-key admin-name svc-patch --format json" in joined
     assert any(c.endswith("publish") for c in cmds)
-    assert cmds[-1] == "api restart"
+    assert cmds[-1].startswith("rm -f ")
+    # No restart: not needed for an administrator/api-key add to take effect.
+    assert not any("restart" in c for c in cmds)
     # Every mutating call reuses the one session file (so the add is published).
     session_calls = [c for c in cmds if c.startswith("mgmt_cli -s ")]
     assert len({c.split()[2] for c in session_calls}) == 1
