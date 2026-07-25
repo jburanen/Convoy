@@ -887,6 +887,45 @@ def test_import_flow_end_to_end(client: TestClient, transport: FakeTransport) ->
     assert transport.puts[0][1] == "/var/log/upload/jhf.tgz"
 
 
+def test_bulk_import_starts_a_job_for_every_selected_server(
+    client: TestClient, transport: FakeTransport
+) -> None:
+    """Reproduces the app.js bulk-import flow (select multiple rows -> Upload
+    and import) for two management servers: disk-space precheck then import,
+    one host at a time, exactly as bulkImport()'s sequential loop does.
+    Regression guard for an operator report that only the first selected
+    server's job was ever queued."""
+    _add_ssh_credential(client, "mgmt-01")
+    job = _add_server(client, "default", name="mgmt-02", address="192.0.2.11", role="management")
+    assert job["status"] == "succeeded", job["error"]
+    _assign_set(client, "mgmt-02")
+    _upload_package(client)
+
+    job_ids = []
+    for host in ("mgmt-01", "mgmt-02"):
+        precheck = client.post(
+            f"/api/env/default/servers/{host}/import/disk-space", json={"package": "jhf.tgz"}
+        )
+        assert precheck.status_code == 200, precheck.text
+        assert all(c["ok"] for c in precheck.json())
+
+        resp = client.post(
+            f"/api/env/default/servers/{host}/import",
+            json={"package": "jhf.tgz", "force_low_space": False},
+        )
+        assert resp.status_code == 202, resp.text
+        job_ids.append(resp.json()["id"])
+
+    assert len(job_ids) == 2
+    assert len(set(job_ids)) == 2  # two distinct jobs, not the same one twice
+    for job_id in job_ids:
+        finished = _wait_for_job(client, job_id)
+        assert finished["status"] == "succeeded", finished["error"]
+
+    targets = {j["target"] for j in client.get("/api/jobs?limit=0").json()}
+    assert {"mgmt-01", "mgmt-02"} <= targets
+
+
 def test_recheck_import_route_resolves_timed_out_job(
     client: TestClient, transport: FakeTransport
 ) -> None:

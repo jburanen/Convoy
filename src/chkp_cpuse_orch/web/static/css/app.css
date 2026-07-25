@@ -253,14 +253,14 @@ section h2 { margin: 0 0 0.75rem; font-size: 1.15rem; }
 /* Collapsible panel whose <summary> IS the section header — same visual weight
    as a plain section h2, just clickable. Its own action button(s)/hint/form
    live in the details body, so they hide along with everything else when
-   collapsed. Shared by #provision-details (Provisioning/Bootstrap, collapsed
-   by default), #servers-details (CPUSE/Management Servers, expanded by
-   default via its "open" attribute), and #firewalls-details (CPUSE/Firewalls,
-   also expanded by default) — same UI factors, different default open state,
-   which lives on the element, not this CSS. */
-#provision-details > summary,
-#servers-details > summary,
-#firewalls-details > summary {
+   collapsed. Apply `.collapsible-panel` to any <details> that should look and
+   behave this way (currently #provision-details and #connect-primary-details
+   on the Provisioning tab — collapsed by default — and #servers-details/
+   #firewalls-details on the Management tab — expanded by default via their
+   "open" attribute). Same UI factors regardless of which panel; the default
+   open state lives on the element itself, not this CSS. Reuse this class for
+   any future collapsible panel instead of styling a new one from scratch. */
+.collapsible-panel > summary {
   display: flex;
   align-items: center;
   cursor: pointer;
@@ -273,18 +273,12 @@ section h2 { margin: 0 0 0.75rem; font-size: 1.15rem; }
   /* Drop the default left disclosure marker — we render our own below. */
   list-style: none;
 }
-#provision-details > summary::-webkit-details-marker,
-#servers-details > summary::-webkit-details-marker,
-#firewalls-details > summary::-webkit-details-marker { display: none; }
-#provision-details > summary h2,
-#servers-details > summary h2,
-#firewalls-details > summary h2 { margin: 0; }
+.collapsible-panel > summary::-webkit-details-marker { display: none; }
+.collapsible-panel > summary h2 { margin: 0; }
 /* Custom triangle: a fixed-width column exactly matching the gutter reclaimed
    above, so text-align centers the glyph between the panel's left border and
    the header text. Right-pointing collapsed, down open. */
-#provision-details > summary::before,
-#servers-details > summary::before,
-#firewalls-details > summary::before {
+.collapsible-panel > summary::before {
   content: "▸";
   width: 1.25rem;
   flex: none;
@@ -292,21 +286,18 @@ section h2 { margin: 0 0 0.75rem; font-size: 1.15rem; }
   color: var(--muted);
   font-size: 1.15rem; /* match the header h2 — crowds the 1.25rem gutter a bit, fine for now */
 }
-#provision-details[open] > summary::before,
-#servers-details[open] > summary::before,
-#firewalls-details[open] > summary::before { content: "▾"; }
+.collapsible-panel[open] > summary::before { content: "▾"; }
 
 /* Puts the panel's action button(s) back on the same visual row as the header
    title. They can't live inside <summary> itself — HTML's content model
    disallows interactive content there, and a click would also toggle the
    panel — so instead this overlays the header row via absolute positioning.
-   #provision-details/#servers-details/#firewalls-details is the positioning
-   context; the fixed height matches section h2's rendered line height
-   (1.15rem font-size × the body's 1.5 line-height) so align-items: center
-   lines the button up with the title's vertical center. Still hidden when
-   collapsed — untouched native <details> behavior for any non-summary child,
-   unaffected by this. */
-#provision-details, #servers-details, #firewalls-details { position: relative; }
+   .collapsible-panel is the positioning context; the fixed height matches
+   section h2's rendered line height (1.15rem font-size × the body's 1.5
+   line-height) so align-items: center lines the button up with the title's
+   vertical center. Still hidden when collapsed — untouched native <details>
+   behavior for any non-summary child, unaffected by this. */
+.collapsible-panel { position: relative; }
 /* Collapsed panels only show the summary line, sitting in the section's
    plain padding box (1rem top and bottom — see the `section` rule above),
    so the whitespace above and below the header text is even by default; no
@@ -314,14 +305,10 @@ section h2 { margin: 0 0 0.75rem; font-size: 1.15rem; }
    the header/summary line's vertical position never shifts on screen when
    toggling (operator-reported: expanding/collapsing was visibly bumping the
    header up/down). */
-#provision-details:not([open]) > summary,
-#servers-details:not([open]) > summary,
-#firewalls-details:not([open]) > summary {
+.collapsible-panel:not([open]) > summary {
   margin-bottom: 0;
 }
-#provision-details > .section-head-actions,
-#servers-details > .section-head-actions,
-#firewalls-details > .section-head-actions {
+.collapsible-panel > .section-head-actions {
   position: absolute;
   top: 0;
   right: 0;
@@ -696,10 +683,13 @@ tr.srv-row.fw-cluster-member td { padding-bottom: 0.225rem; }
 #provision-form { flex-direction: column; align-items: stretch; }
 .field-grid {
   display: grid;
-  grid-template-columns: 2fr 2fr 2fr 1fr; /* credential name, username, password, uid */
+  grid-template-columns: 2fr 2fr 2fr 1fr; /* e.g. Connect to Primary: name, address, role, port */
   gap: 0.25rem 0.6rem;
   align-items: end;
 }
+/* Bootstrap panel's grid has one fewer column — this tool always provisions
+   uid 0 (built-in adminRole accounts), so there's no UID field to make room for. */
+#provision-form .field-grid { grid-template-columns: 2fr 2fr 2fr; }
 .field-grid label {
   font-size: 0.8rem;
   font-weight: 600;
