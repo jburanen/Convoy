@@ -83,8 +83,17 @@ by default; the operator must deliberately opt out.
 - **Auth is optional**, not mandatory — but as of 2026-07-24 that requires an
   explicit `BASIC_AUTH_DISABLE` (with LDAP also unconfigured), not just doing
   nothing.
-- Cookie is `HttpOnly`, `SameSite=Strict`, `Secure` per `SESSION_COOKIE_SECURE`
-  (set false only for plain-HTTP dev / TestClient).
+- Cookie is `HttpOnly`, `SameSite=Strict`, `Secure` per `SESSION_COOKIE_SECURE` —
+  which itself defaults to `_default_cookie_secure(env)`: true only when native TLS
+  (`CHKP_CPUSE_SSL_CERTFILE`/`KEYFILE`) is configured, false otherwise (2026-07-25;
+  an explicit `SESSION_COOKIE_SECURE` always overrides the guess). **Why:** a
+  `Secure` cookie set over plain HTTP is silently dropped by the browser — login
+  "succeeds" (server sets it) but every request after looks unauthenticated,
+  bouncing straight back to the login page with no visible error (hit on a
+  TLS-less dev host — no error surfaces because the *login* request itself
+  returned 200; it's the *next* request that 401s). Set it `true` explicitly when
+  TLS is terminated by a reverse proxy instead (native certs correctly unset here,
+  but the browser only ever sees https).
 - Idle timeout is enforced **server-side** (the client timer is UX only). Logout,
   idle, and any 401 clear the tab's cached credentials.
 - Password changes are **basic-auth only** — `AuthManager.change_password` raises

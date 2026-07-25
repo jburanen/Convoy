@@ -18,6 +18,8 @@ from chkp_cpuse_orch.web.auth import (
     BASIC_AUTH_USER_ENV,
     LDAP_REQUIRED_GROUP_ENV,
     LDAP_URL_ENV,
+    NATIVE_TLS_CERTFILE_ENV,
+    NATIVE_TLS_KEYFILE_ENV,
     SESSION_COOKIE_NAME,
     SESSION_COOKIE_SECURE_ENV,
     AuthSettings,
@@ -225,6 +227,58 @@ def test_load_auth_settings_service_account(tmp_path: Path) -> None:
     assert settings.start_tls is True
     assert settings.idle_minutes == 15
     assert settings.cookie_secure is False
+
+
+# -- session cookie Secure default (2026-07-25) ------------------------------------
+# A Secure cookie set over plain HTTP is silently dropped by the browser — login
+# "succeeds" server-side but every request after that looks unauthenticated. The
+# default now tracks whether native TLS is actually configured; an explicit
+# CHKP_CPUSE_SESSION_COOKIE_SECURE always overrides the guess either way.
+
+
+def test_cookie_secure_defaults_false_without_native_tls() -> None:
+    basic = load_basic_auth_settings({})
+    assert basic is not None
+    assert basic.cookie_secure is False
+
+    ldap = load_auth_settings(
+        {
+            LDAP_URL_ENV: "ldap://test",
+            LDAP_REQUIRED_GROUP_ENV: "cn=g",
+            "CHKP_CPUSE_LDAP_USER_DN_TEMPLATE": "{username}",
+        }
+    )
+    assert ldap is not None
+    assert ldap.cookie_secure is False
+
+
+def test_cookie_secure_defaults_true_with_native_tls_configured() -> None:
+    tls_env = {
+        NATIVE_TLS_CERTFILE_ENV: "/data/certs/fullchain.pem",
+        NATIVE_TLS_KEYFILE_ENV: "/data/certs/privkey.pem",
+    }
+    basic = load_basic_auth_settings(tls_env)
+    assert basic is not None
+    assert basic.cookie_secure is True
+
+
+def test_cookie_secure_explicit_value_always_wins() -> None:
+    # Native TLS configured, but explicitly forced off.
+    forced_off = load_basic_auth_settings(
+        {
+            NATIVE_TLS_CERTFILE_ENV: "/data/certs/fullchain.pem",
+            NATIVE_TLS_KEYFILE_ENV: "/data/certs/privkey.pem",
+            SESSION_COOKIE_SECURE_ENV: "false",
+        }
+    )
+    assert forced_off is not None
+    assert forced_off.cookie_secure is False
+
+    # No native TLS (e.g. a reverse proxy terminates it instead), but explicitly
+    # forced on.
+    forced_on = load_basic_auth_settings({SESSION_COOKIE_SECURE_ENV: "true"})
+    assert forced_on is not None
+    assert forced_on.cookie_secure is True
 
 
 # -- LDAP group gating (pure logic, no directory) ----------------------------------

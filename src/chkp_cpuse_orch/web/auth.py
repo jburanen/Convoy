@@ -56,6 +56,11 @@ LDAP_TLS_VERIFY_ENV = "CHKP_CPUSE_LDAP_TLS_VERIFY"
 LDAP_CA_CERT_ENV = "CHKP_CPUSE_LDAP_CA_CERT"
 SESSION_IDLE_MINUTES_ENV = "CHKP_CPUSE_SESSION_IDLE_MINUTES"
 SESSION_COOKIE_SECURE_ENV = "CHKP_CPUSE_SESSION_COOKIE_SECURE"
+# Native HTTPS (web/__main__.py) — read here (as plain strings, not imported, to
+# avoid pulling in uvicorn just to check two env vars) only to pick
+# SESSION_COOKIE_SECURE_ENV's default; an explicit value for that var always wins.
+NATIVE_TLS_CERTFILE_ENV = "CHKP_CPUSE_SSL_CERTFILE"
+NATIVE_TLS_KEYFILE_ENV = "CHKP_CPUSE_SSL_KEYFILE"
 
 # Local basic-auth backend — the default when LDAP isn't configured.
 BASIC_AUTH_USER_ENV = "BASIC_AUTH_USER"
@@ -143,6 +148,18 @@ def _load_idle_minutes(env: dict[str, str]) -> int:
         ) from exc
 
 
+def _default_cookie_secure(env: dict[str, str]) -> bool:
+    """Secure-by-default only when native TLS (CHKP_CPUSE_SSL_CERTFILE/KEYFILE) is
+    actually configured. A ``Secure`` cookie set over plain HTTP is silently
+    dropped by the browser — login "succeeds" (the server sets it) but every
+    request after that looks unauthenticated, bouncing straight back to the login
+    page with no visible error (observed 2026-07-25 on a TLS-less dev host). Behind
+    a reverse proxy that terminates TLS (native certs correctly unset here, but the
+    browser only ever sees https), set CHKP_CPUSE_SESSION_COOKIE_SECURE=true
+    explicitly — it always overrides this guess."""
+    return bool(env.get(NATIVE_TLS_CERTFILE_ENV)) and bool(env.get(NATIVE_TLS_KEYFILE_ENV))
+
+
 class BasicAuthSettings(BaseModel):
     """A single local username/password, plus the same session settings LDAP uses.
 
@@ -174,7 +191,7 @@ def load_basic_auth_settings(
         username=username,
         password_hash=PasswordHasher().hash(password),
         idle_minutes=_load_idle_minutes(env),
-        cookie_secure=_env_bool(env, SESSION_COOKIE_SECURE_ENV, True),
+        cookie_secure=_env_bool(env, SESSION_COOKIE_SECURE_ENV, _default_cookie_secure(env)),
     )
 
 
@@ -247,7 +264,7 @@ def load_auth_settings(
         tls_verify=_env_bool(env, LDAP_TLS_VERIFY_ENV, True),
         ca_cert=env.get(LDAP_CA_CERT_ENV) or None,
         idle_minutes=idle,
-        cookie_secure=_env_bool(env, SESSION_COOKIE_SECURE_ENV, True),
+        cookie_secure=_env_bool(env, SESSION_COOKIE_SECURE_ENV, _default_cookie_secure(env)),
     )
 
 
