@@ -23,25 +23,30 @@
 
 <header>
   <div id="header-top">
-    <h1>Convoy</h1>
-    <!-- right-aligned header cluster: session controls, then the env picker -->
-    <div id="header-right">
-      <!-- Signed-in user + logout; shown only when auth is enabled. Sits inline,
-           left of the picker. The username opens the User Settings modal
-           (password change; basic-auth only — see app.js initAuth). Logout also
-           clears any credentials cached in this tab (see app.js). -->
-      <div id="session-row" class="hidden">
-        <button id="session-user" class="link-btn"></button>
-        <button id="logout-btn" class="small secondary">Log out</button>
+    <div id="header-title">
+      <img src="/favicon.svg" alt="" id="header-logo" width="40" height="40">
+      <div>
+        <h1>Convoy</h1>
+        <p class="subtitle">CPUSE and CDT patch orchestration for on-prem SMS and MDS deployments</p>
       </div>
+    </div>
+    <!-- right-aligned header cluster: env picker, then session controls below it -->
+    <div id="header-right">
       <!-- environment picker: top-right, same line as the title -->
       <div id="env-row">
         <label class="muted" for="env-picker">Environment:</label>
         <select id="env-picker"><!-- filled from /api/environments --></select>
       </div>
+      <!-- Signed-in user + logout; shown only when auth is enabled. Sits below
+           the picker. The username opens the User Settings modal (password
+           change; basic-auth only — see app.js initAuth). Logout also clears
+           any credentials cached in this tab (see app.js). -->
+      <div id="session-row" class="hidden">
+        <button id="session-user" class="link-btn"></button>
+        <button id="logout-btn" class="small secondary">Log out</button>
+      </div>
     </div>
   </div>
-  <p class="subtitle">CPUSE and CDT patch orchestration for on-prem SMS and MDS deployments</p>
   <div id="status-chips">
     <!-- filled by refreshStatus(); shows a warning chip if credentials are locked -->
   </div>
