@@ -1279,6 +1279,7 @@ document.getElementById("provision-form").addEventListener("submit", async (ev) 
           return Number.isNaN(n) ? 0 : n;
         })(),
         mgmt_api: document.getElementById("prov-api").checked,
+        is_mds: !!envIsMds[currentEnv],
       }),
     });
     passwordInput.value = ""; // plaintext leaves the page as soon as possible

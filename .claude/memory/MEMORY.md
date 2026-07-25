@@ -25,3 +25,4 @@ Load this at the start of each session; read a linked file when its hook looks r
 - [MDS domain per firewall](mds-domain-per-firewall.md) — FirewallRow.mds_domain tracks each firewall's Domain/CMA so post-hoc API lookups can log in correctly on MDS
 - [Config path resolution](config-path-resolution.md) — relative paths.* anchor to config.yaml's own directory, not the process CWD
 - [deploy.sh --reset flag](deploy-reset-flag.md) — dev-only full wipe: `./data` (DB + packages) and `.env`, then restores default config.yaml
+- [Mgmt API bootstrap MDS profile](mgmt-api-bootstrap-mds-profile.md) — MDS admin uses `multi-domain-permissions-profile`, not `permissions-profile`
