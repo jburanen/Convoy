@@ -571,7 +571,8 @@ document.addEventListener("keydown", (ev) => {
   closeEnvModal();
   closeCredAddModal();
   closeDiscoverModal();
-  closePrimaryModal();
+  closeConnectPrimaryConfirmModal();
+  closeApiKeyRevealModal();
   closeServerModal();
   closeUninstallModal();
   hideWelcome(); // soft close — the welcome dialog returns next load if still fresh
@@ -705,31 +706,21 @@ document.getElementById("server-modal").addEventListener("click", (ev) => {
   if (ev.target.id === "server-modal") closeServerModal(); // backdrop closes
 });
 
-/* ---------- 1c-primary. connect to primary (empty-inventory modal) ---------- */
-
-async function openPrimaryModal() {
-  if (!currentEnv) { toast("Create an environment first (picker → New Environment…)."); return; }
-  document.getElementById("primary-form").reset();
-  await populatePrimaryCredSelect();
-  document.getElementById("primary-modal").classList.remove("hidden");
-  document.getElementById("pm-name").focus();
-}
-function closePrimaryModal() {
-  document.getElementById("primary-modal").classList.add("hidden");
-}
+/* ---------- 1c-primary. connect to primary (inline panel + confirm/reveal modals) ---------- */
 
 // Storage-enabled environments pick an SSH identity from a stored credential
 // set (no free-text username — the set's ssh_username drives it); storage-
 // disabled environments have no sets to pick from, so they type a username.
-async function populatePrimaryCredSelect() {
+// Called from loadCredentialSets() so the select stays in sync with the
+// Credentials table (this panel is always inline, never opened on demand).
+function populateConnectPrimaryCredSelect() {
   const enabled = storageEnabled();
-  document.getElementById("pm-user-label").classList.toggle("hidden", enabled);
-  document.getElementById("pm-cred-label").classList.toggle("hidden", !enabled);
+  document.getElementById("cp-user-label").classList.toggle("hidden", enabled);
+  document.getElementById("cp-cred-label").classList.toggle("hidden", !enabled);
   if (!enabled) return;
-  const select = document.getElementById("pm-cred-select");
+  const select = document.getElementById("cp-cred-select");
   select.querySelectorAll("option:not(:first-child)").forEach((o) => o.remove());
-  const sets = await fetchCredentialSets();
-  for (const set of sets) {
+  for (const set of credentialSets) {
     const opt = document.createElement("option");
     opt.value = set.name;
     opt.textContent = set.name;
@@ -738,44 +729,141 @@ async function populatePrimaryCredSelect() {
   }
 }
 
-document.getElementById("primary-form").addEventListener("submit", async (ev) => {
+function connectPrimaryStatus(message, cls) {
+  const box = document.getElementById("cp-status");
+  box.textContent = message;
+  box.classList.remove("prov-note-warn", "prov-note-err", "prov-note-ok");
+  if (cls) box.classList.add(`prov-note-${cls}`);
+  box.classList.toggle("hidden", !message);
+}
+
+// Set by the form submit (after a successful preview fetch), read by the
+// confirm modal's Run button — the two-step "preview then confirm" flow this
+// repo's dry-run-first convention calls for before mutating a management
+// server over SSH.
+let _connectPrimaryPayload = null;
+
+document.getElementById("connect-primary-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
-  if (!currentEnv) return;
-  const name = document.getElementById("pm-name").value.trim();
-  const credSelect = document.getElementById("pm-cred-select");
-  const credSet = storageEnabled() ? credSelect.value : null;
+  if (!currentEnv) { toast("Create an environment first (picker → New Environment…)."); return; }
+  const name = document.getElementById("cp-name").value.trim();
+  const address = document.getElementById("cp-address").value.trim();
+  if (!name || !address) { toast("Name and address are required."); return; }
+  const credSelect = document.getElementById("cp-cred-select");
+  const credSet = storageEnabled() ? credSelect.value || null : null;
   const sshUser = storageEnabled()
     ? credSelect.selectedOptions[0]?.dataset.sshUser || "admin"
-    : document.getElementById("pm-user").value.trim() || "admin";
+    : document.getElementById("cp-user").value.trim() || "admin";
+  _connectPrimaryPayload = {
+    name,
+    address,
+    role: document.getElementById("cp-role").value,
+    ssh_user: sshUser,
+    ssh_port: Number(document.getElementById("cp-port").value) || 22,
+    credential_set: credSet,
+  };
   try {
-    // Runs as a prov.add job (services/prov_ops.py) — "queued, not done".
-    const job = await addServer({
-      name,
-      address: document.getElementById("pm-address").value.trim(),
-      role: document.getElementById("pm-role").value,
-      ssh_user: sshUser,
-      ssh_port: Number(document.getElementById("pm-port").value) || 22,
-      // Only when actually picked — otherwise omitted, leaving the
-      // environment-default-on-create assignment alone (previous behavior).
-      credential_set: credSet || undefined,
-    });
-    lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if it finishes fast
-    closePrimaryModal();
-    await Promise.all([loadJobs(), loadServers(), refreshStatus()]);
-    // Discovery reads the servers list straight from the DB (list_servers) —
-    // unlike the reloads above, a stale read here isn't just cosmetic, it's a
-    // wrong "no primary to discover from" toast for what is very often a
-    // brand-new environment's *first and only* server. Wait for the add job
-    // to actually land before opening it.
-    await waitForJobDone(job.id);
-    openDiscoverModal(name);
-  } catch (e) { toast("Save failed: " + e.message); }
+    const preview = await api(
+      `/api/environments/${encodeURIComponent(currentEnv)}/connect-primary/preview` +
+        `?username=${encodeURIComponent(sshUser)}`,
+    );
+    document.getElementById("connect-primary-confirm-target").textContent = `${name} (${address})`;
+    document.getElementById("connect-primary-confirm-output").textContent = preview.commands.join("\n");
+    const notesBox = document.getElementById("connect-primary-confirm-notes");
+    notesBox.replaceChildren();
+    for (const n of preview.notes || []) {
+      const p = document.createElement("p");
+      const warn = n.startsWith(PROV_NOTE_EMPHASIS);
+      p.textContent = warn ? n.slice(PROV_NOTE_EMPHASIS.length) : n;
+      if (warn) p.classList.add("prov-note-warn");
+      notesBox.appendChild(p);
+    }
+    notesBox.classList.toggle("hidden", !notesBox.childElementCount);
+    document.getElementById("connect-primary-confirm-modal").classList.remove("hidden");
+  } catch (e) {
+    toast("Could not render command preview: " + e.message);
+  }
 });
 
-document.getElementById("primary-close").addEventListener("click", closePrimaryModal);
-document.getElementById("primary-cancel").addEventListener("click", closePrimaryModal);
-document.getElementById("primary-modal").addEventListener("click", (ev) => {
-  if (ev.target.id === "primary-modal") closePrimaryModal(); // backdrop closes
+function closeConnectPrimaryConfirmModal() {
+  document.getElementById("connect-primary-confirm-modal").classList.add("hidden");
+}
+document.getElementById("connect-primary-confirm-close").addEventListener("click", closeConnectPrimaryConfirmModal);
+document.getElementById("connect-primary-confirm-cancel").addEventListener("click", closeConnectPrimaryConfirmModal);
+document.getElementById("connect-primary-confirm-modal").addEventListener("click", (ev) => {
+  if (ev.target.id === "connect-primary-confirm-modal") closeConnectPrimaryConfirmModal();
+});
+
+document.getElementById("connect-primary-confirm-run").addEventListener("click", async () => {
+  if (!_connectPrimaryPayload || !currentEnv) return;
+  const payload = _connectPrimaryPayload;
+  _connectPrimaryPayload = null;
+  closeConnectPrimaryConfirmModal();
+  const btn = document.getElementById("connect-primary-btn");
+  btn.disabled = true;
+  connectPrimaryStatus(`Connecting to ${payload.name}…`);
+  try {
+    const job = await api(`/api/environments/${encodeURIComponent(currentEnv)}/connect-primary`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if it finishes fast
+    await Promise.all([loadJobs(), loadServers(), refreshStatus()]);
+    // A real correctness dependency (not just cosmetic), same rationale as
+    // discovery's own waitForJobDone use: the reveal-key fetch right below
+    // only makes sense once the job has actually finished. SSH + several
+    // mgmt_cli round-trips can take a while, so this gets a longer budget
+    // than the 5s default.
+    const finished = await waitForJobDone(job.id, { timeoutMs: 30000 });
+    if (!finished) {
+      connectPrimaryStatus("Still running — check the Jobs tab for progress.", "warn");
+      return;
+    }
+    await Promise.all([loadJobs(), loadServers(), loadCredentialSets(), refreshStatus()]);
+    if (finished.status !== "succeeded") {
+      connectPrimaryStatus(
+        `Connect to Primary failed: ${finished.error || "see the Jobs tab for details"}`,
+        "err",
+      );
+      return;
+    }
+    connectPrimaryStatus("Connected — Management API access provisioned.", "ok");
+    const reveal = await api(`/api/jobs/${encodeURIComponent(job.id)}/reveal-api-key`);
+    if (reveal.api_key) openApiKeyRevealModal(reveal.api_key, payload.credential_set);
+    // Explicit collapse right at the success moment this workflow step asks
+    // for — updateProvisionCollapse() itself only runs on env load/switch, by
+    // design, so it wouldn't otherwise react to finishing this just now.
+    if (hasProvisionedPrimary) {
+      document.getElementById("provision-details").open = false;
+      document.getElementById("connect-primary-details").open = false;
+    }
+  } catch (e) {
+    connectPrimaryStatus("Connect to Primary failed: " + e.message, "err");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+function openApiKeyRevealModal(apiKey, credentialSetName) {
+  document.getElementById("api-key-reveal-output").textContent = apiKey;
+  const saved = document.getElementById("api-key-reveal-saved");
+  if (credentialSetName) {
+    saved.textContent = `Also saved to credential set "${credentialSetName}".`;
+    saved.classList.remove("hidden");
+  } else {
+    saved.classList.add("hidden");
+  }
+  document.getElementById("api-key-reveal-modal").classList.remove("hidden");
+}
+function closeApiKeyRevealModal() {
+  document.getElementById("api-key-reveal-modal").classList.add("hidden");
+  document.getElementById("api-key-reveal-output").textContent = ""; // don't linger in the DOM
+}
+document.getElementById("api-key-reveal-close").addEventListener("click", closeApiKeyRevealModal);
+document.getElementById("api-key-reveal-done").addEventListener("click", closeApiKeyRevealModal);
+document.getElementById("api-key-reveal-modal").addEventListener("click", (ev) => {
+  if (ev.target.id === "api-key-reveal-modal") closeApiKeyRevealModal();
 });
 
 /* ---------- 1c. discover servers ---------- */
@@ -959,12 +1047,10 @@ document.getElementById("discover-import").addEventListener("click", async () =>
   }
 });
 
-// Dual-purpose button: with no servers it opens the Connect-to-Primary modal;
-// once a primary exists it runs discovery (re-runnable anytime).
-document.getElementById("discover-btn").addEventListener("click", () => {
-  if (inventoryHasServers) openDiscoverModal();
-  else openPrimaryModal();
-});
+// Hidden until hasProvisionedPrimary (see updateServersInfoControls) — the
+// primary itself is now added via the Connect to Primary panel above, not a
+// modal reached from here.
+document.getElementById("discover-btn").addEventListener("click", () => openDiscoverModal());
 document.getElementById("discover-close").addEventListener("click", closeDiscoverModal);
 document.getElementById("discover-cancel").addEventListener("click", closeDiscoverModal);
 document.getElementById("discover-modal").addEventListener("click", (ev) => {
@@ -1080,14 +1166,12 @@ function addChip(box, text, cls) {
 const PROV_NOTE_EMPHASIS = "[!] ";
 
 // Render the explanatory notes as normal text (not comments in the code output),
-// each group into the notes box that sits directly above the command block it
-// describes. `credStatus` reports how saving the bootstrap credential set went.
+// into the notes box that sits directly above the clish command block.
+// `credStatus` reports how saving the bootstrap credential set went.
 function renderProvNotes(resp, credStatus) {
   const clishBox = document.getElementById("prov-clish-notes");
-  const expertBox = document.getElementById("prov-expert-notes");
   const credBox = document.getElementById("prov-cred-status");
   clishBox.replaceChildren();
-  expertBox.replaceChildren();
   credBox.replaceChildren();
   const group = (box, title, notes) => {
     if (!notes || !notes.length) return;
@@ -1110,24 +1194,20 @@ function renderProvNotes(resp, credStatus) {
     box.appendChild(ul);
   };
   group(clishBox, "SSH / Gaia access — run in clish on each management server", resp.notes);
-  group(expertBox, "Management API access — run in expert mode on the management server", resp.api_notes);
   // The saved-credential status is a panel-wide outcome, so it goes at the very
-  // bottom, below both output boxes.
+  // bottom, below the output box.
   if (credStatus) {
-    const hasApi = resp.api_commands && resp.api_commands.length;
     if (credStatus.ok) {
-      const msg = hasApi
-        ? `Saved credential set “${credStatus.name}” to the Credentials table below — ` +
-          "Edit it to paste the API key after you generate one."
-        : `Saved credential set “${credStatus.name}” to the Credentials table below.`;
-      group(credBox, "Credentials", [msg]);
+      group(credBox, "Credentials", [
+        `Saved credential set “${credStatus.name}” to the Credentials table below — ` +
+          "pick it in step 2 (Connect to Primary) once you've applied these commands.",
+      ]);
     } else {
       group(credBox, "Credentials", [PROV_NOTE_EMPHASIS +
         `Credentials not saved (${credStatus.reason}). Add them in the Credentials table.`]);
     }
   }
   clishBox.classList.toggle("hidden", !clishBox.childElementCount);
-  expertBox.classList.toggle("hidden", !expertBox.childElementCount);
   credBox.classList.toggle("hidden", !credBox.childElementCount);
 }
 
@@ -1236,8 +1316,7 @@ async function saveBootstrapCredential(setName, username, password) {
 // button to its "Generate commands" state.
 function resetProvForm() {
   document.getElementById("provision-form").reset();
-  for (const id of ["prov-clish-notes", "prov-expert-notes",
-                    "prov-clish-wrap", "prov-expert-wrap", "prov-cred-status"]) {
+  for (const id of ["prov-clish-notes", "prov-clish-wrap", "prov-cred-status"]) {
     document.getElementById(id).classList.add("hidden");
   }
   const btn = document.getElementById("prov-generate");
@@ -1278,22 +1357,15 @@ document.getElementById("provision-form").addEventListener("submit", async (ev) 
           const n = Number(raw);
           return Number.isNaN(n) ? 0 : n;
         })(),
-        mgmt_api: document.getElementById("prov-api").checked,
-        is_mds: !!envIsMds[currentEnv],
       }),
     });
     passwordInput.value = ""; // plaintext leaves the page as soon as possible
     // Save the same credentials to the table so the operator needn't re-enter them.
     const credStatus = await saveBootstrapCredential(credName, username, password);
     renderProvNotes(resp, credStatus);
-    // Commands only (no comment lines) — clish and expert in separate boxes.
+    // Commands only (no comment lines).
     document.getElementById("prov-clish-output").textContent = resp.commands.join("\n");
     document.getElementById("prov-clish-wrap").classList.remove("hidden");
-    const hasApi = resp.api_commands && resp.api_commands.length;
-    if (hasApi) {
-      document.getElementById("prov-expert-output").textContent = resp.api_commands.join("\n");
-    }
-    document.getElementById("prov-expert-wrap").classList.toggle("hidden", !hasApi);
     const btn = document.getElementById("prov-generate");
     btn.textContent = "Reset";
     btn.classList.add("danger");
@@ -1377,18 +1449,18 @@ function sortByRole(servers) {
   });
 }
 
-// Whether the current environment has at least one management server. Drives the
-// Provisioning panel's button (Connect-to-Primary vs Discover) and whether the
-// "Manually add a server" button is shown.
-let inventoryHasServers = false;
+// Whether the environment's primary management server is fully provisioned:
+// present in inventory AND (storage-enabled environments only — see
+// loadServers) its assigned credential set already has a working API key.
+// Drives whether "Discover servers"/"Manually add a server" are shown, and
+// (via updateProvisionCollapse) the Bootstrap/Connect-to-Primary panels'
+// default collapse state.
+let hasProvisionedPrimary = false;
 
-function updateServersInfoControls(hasServers) {
-  inventoryHasServers = hasServers;
-  document.getElementById("discover-btn").textContent =
-    hasServers ? "Discover servers" : "Connect to Primary SMS/MDS";
-  // "Manually add a server" appears only once a primary exists; the first
-  // server is added via the Connect-to-Primary modal.
-  document.getElementById("add-server-btn").classList.toggle("hidden", !hasServers);
+function updateServersInfoControls(provisioned) {
+  hasProvisionedPrimary = provisioned;
+  document.getElementById("discover-btn").classList.toggle("hidden", !provisioned);
+  document.getElementById("add-server-btn").classList.toggle("hidden", !provisioned);
 }
 
 // host name -> "pending" | "running", for hosts (management servers and
@@ -1462,12 +1534,17 @@ async function loadServers() {
   }
 
   // Patching view (assigned set per server) + editable inventory + the
-  // package catalog (for the bulk-import picker above the table) + which
-  // hosts already have a job in flight (blocks starting another).
-  const [servers, editable, packages] = await Promise.all([
+  // package catalog (for the bulk-import picker above the table) + credential
+  // sets (to check the primary's API-key status) + which hosts already have a
+  // job in flight (blocks starting another). Fetched here directly (not read
+  // off the shared `credentialSets` global) since this can run concurrently
+  // with loadCredentialSets() (see selectEnvironment) and a stale read would
+  // wrongly gate the Discover/Add-a-server buttons.
+  const [servers, editable, packages, sets] = await Promise.all([
     api(envUrl("/servers")),
     api(`/api/environments/${encodeURIComponent(currentEnv)}/servers`),
     api("/api/packages"),
+    fetchCredentialSets(),
   ]);
   await refreshActiveJobTargets();
   const assignedByName = new Map(servers.map((s) => [s.name, s.credential_set]));
@@ -1533,10 +1610,20 @@ async function loadServers() {
   }
 
   if (!editable.length) {
-    emptyRow(infoTbody, 7, "No management servers yet — click Connect to Primary SMS/MDS above.");
+    emptyRow(infoTbody, 7, "No management servers yet — complete Connect to Primary above.");
     emptyRow(tbody, 5, "No management servers yet — add them on the Provisioning tab.");
   }
-  updateServersInfoControls(editable.length > 0);
+  // Primary must both exist and (storage-enabled environments only — there's
+  // no durable "already provisioned" signal without a stored credential set)
+  // have a working API key on its assigned credential set.
+  const primary = editable.find((s) => s.role === "primary_sms" || s.role === "primary_mds");
+  let provisioned = !!primary;
+  if (primary && storageEnabled()) {
+    const setName = assignedByName.get(primary.name);
+    const set = setName ? sets.find((s) => s.name === setName) : null;
+    provisioned = !!set?.has_api;
+  }
+  updateServersInfoControls(provisioned);
   updateSelectAllState(); // rows were just rebuilt — reset to "none selected"
 
   chooseDefaultTab(servers.length);
@@ -2938,7 +3025,11 @@ async function loadCredentialSets() {
   const enabled = storageEnabled();
   document.getElementById("cred-storage-notice").classList.toggle("hidden", enabled);
   document.getElementById("cred-add-btn").classList.toggle("hidden", !enabled);
-  if (!currentEnv || !enabled) { credentialSets = []; return; }
+  if (!currentEnv || !enabled) {
+    credentialSets = [];
+    populateConnectPrimaryCredSelect();
+    return;
+  }
   credentialSets = await fetchCredentialSets();
   const tick = (b) => (b ? "✓" : "—");
   for (const set of credentialSets) {
@@ -2970,19 +3061,20 @@ async function loadCredentialSets() {
     });
     tbody.appendChild(row);
   }
+  populateConnectPrimaryCredSelect();
 }
 
-// Sets the Bootstrap panel's default open/closed state for the current
-// environment: collapsed once there's nothing left to set up (storage
-// disabled, or storage enabled with at least one credential already
-// added), left open otherwise since bootstrapping is likely still needed.
-// Called once per environment load/switch — never on every credential-set
-// refresh, so it doesn't yank the panel shut/open out from under an
-// operator who's actively working in it.
+// Sets the Bootstrap/Connect-to-Primary panels' default open/closed state for
+// the current environment: collapsed once hasProvisionedPrimary is true (see
+// loadServers/updateServersInfoControls), left open otherwise since
+// bootstrapping is likely still needed. Called once per environment load/
+// switch — never on every credential-set refresh — so it doesn't yank the
+// panels shut/open out from under an operator who's actively working in
+// them; the explicit collapse right after a successful Connect to Primary
+// run (see the confirm modal's Run handler) covers that moment instead.
 function updateProvisionCollapse() {
-  const hasCredential = credentialSets.length > 0;
-  const collapse = !storageEnabled() || hasCredential;
-  document.getElementById("provision-details").open = !collapse;
+  document.getElementById("provision-details").open = !hasProvisionedPrimary;
+  document.getElementById("connect-primary-details").open = !hasProvisionedPrimary;
 }
 
 // Whether the credential modal is editing an existing set (vs. adding a new one).
@@ -3096,6 +3188,12 @@ const CRED_JOB_KINDS = ["cred.add", "cred.edit", "cred.delete"];
 // directed, 2026-07-23) — so a finished prov.* job just reloads both tables;
 // it's cheap and simpler than tracking which entity type each job touched.
 const PROV_JOB_KINDS = ["prov.add", "prov.edit", "prov.delete"];
+// Connect to Primary (services/connect_primary.py) touches both the servers
+// table (adds/updates the primary) and a credential set (the captured API
+// key) — its own call site (the confirm modal's Run handler) already reloads
+// both directly; this is the same "other tab/session" fallback as
+// CRED_JOB_KINDS above.
+const CONNECT_PRIMARY_JOB_KIND = "prov.connect_primary";
 const lastJobStatus = new Map();
 const TERMINAL_JOB_STATUSES = ["succeeded", "failed", "cancelled", "interrupted", "timed_out"];
 
@@ -3485,6 +3583,10 @@ async function pollJobs() {
       if (justFinished && PKGS_JOB_KINDS.includes(job.kind)) reloadPackages = true;
       if (justFinished && CRED_JOB_KINDS.includes(job.kind)) reloadCredentials = true;
       if (justFinished && PROV_JOB_KINDS.includes(job.kind)) reloadProv = true;
+      if (justFinished && job.kind === CONNECT_PRIMARY_JOB_KIND) {
+        reloadProv = true;
+        reloadCredentials = true;
+      }
       lastJobStatus.set(job.id, job.status);
     }
     const currentIds = new Set(jobs.map((j) => j.id));

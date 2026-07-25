@@ -706,14 +706,6 @@ tr.srv-row.fw-cluster-member td { padding-bottom: 0.225rem; }
   color: var(--muted);
 }
 .field-grid input { width: 100%; box-sizing: border-box; }
-.prov-api-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  color: var(--muted);
-  font-size: 0.9rem;
-}
-.prov-api-toggle input { margin: 0; }
 
 /* Provisioning explanatory notes as normal text, each block sitting directly
    above the command output box it describes. */
@@ -723,6 +715,8 @@ tr.srv-row.fw-cluster-member td { padding-bottom: 0.225rem; }
 .prov-note-list { margin: 0; padding-left: 1.2rem; }
 .prov-note-list li { margin: 0.15rem 0; }
 .prov-note-warn { color: var(--warn); font-weight: 600; } /* capture-the-API-key call-out */
+.prov-note-err { color: var(--danger); font-weight: 600; }
+.prov-note-ok { color: var(--ok); font-weight: 600; }
 
 /* Credential row actions: Make default + Edit + Delete side by side. */
 .cs-actions { white-space: nowrap; }

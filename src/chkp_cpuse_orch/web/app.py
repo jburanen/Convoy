@@ -61,6 +61,7 @@ from ..packages import PackageStore
 from ..reporting import configure_logging, get_logger, resolve_log_level
 from ..services.cdt_ops import CDTService
 from ..services.common import ClientFactory, EnvironmentRegistry
+from ..services.connect_primary import PrimaryConnectService
 from ..services.cred_ops import CredentialJobService
 from ..services.discovery import DiscoveryService, MgmtClientFactory
 from ..services.environments import EnvironmentManager
@@ -300,18 +301,14 @@ class ChangePasswordIn(BaseModel):
 
 
 class ProvisionRequest(BaseModel):
+    """Renders the Gaia service-account clish commands only — Management API
+    provisioning is now a separate, automated step (see ConnectPrimaryIn /
+    PrimaryConnectService); this endpoint never itself reads or writes the
+    store."""
+
     username: str
     password: str = Field(min_length=1)  # only hashed, never stored or echoed
     uid: int = DEFAULT_UID
-    # Also emit the expert-mode commands that grant this account Management API
-    # access (an API-key admin) — needed for estate auto-discovery.
-    mgmt_api: bool = True
-    # Whether the target environment is Multi-Domain (MDS) — selects the
-    # `multi-domain-permissions-profile` administrator form instead of the
-    # single-domain `permissions-profile` one. Mirrors `environments.is_mds`;
-    # the client already knows this for the current environment and sends it,
-    # since this endpoint renders commands only and never itself reads the store.
-    is_mds: bool = False
 
 
 class EnvironmentIn(BaseModel):
@@ -344,6 +341,20 @@ class EnvServerIn(BaseModel):
     # server before the add/edit job itself had run. Omit the field entirely
     # to leave any existing assignment (or the environment-default-on-create
     # logic in EnvironmentManager.add_server) alone — see services/prov_ops.py.
+    credential_set: str | None = None
+
+
+class ConnectPrimaryIn(OperationCredentials):
+    name: str
+    address: str
+    role: str = "primary_sms"  # primary_sms or primary_mds only
+    ssh_user: str = "admin"
+    ssh_port: int = 22
+    # Name of a stored credential set (storage-enabled environments only) —
+    # its ssh_username also becomes the Management API administrator's name.
+    # None for storage-disabled environments, which instead supply
+    # `credentials` (OperationCredentials) for the one-off SSH connection and
+    # never get the captured key auto-saved anywhere durable.
     credential_set: str | None = None
 
 
@@ -496,6 +507,14 @@ def create_app(
         prov_jobs = ProvisioningJobService(
             store=store, env_manager=env_manager, firewall_manager=firewall_manager, runner=runner
         )
+        primary_connect = PrimaryConnectService(
+            registry=registry,
+            env_manager=env_manager,
+            credentials=credentials,
+            vault=vault,
+            runner=runner,
+            store=store,
+        )
         discovery = DiscoveryService(registry=registry, mgmt_client_factory=mgmt_client_factory)
         pkg_repo = PackageRepoService(
             registry=registry,
@@ -521,6 +540,7 @@ def create_app(
         app.state.pkgs_jobs = pkgs_jobs
         app.state.cred_jobs = cred_jobs
         app.state.prov_jobs = prov_jobs
+        app.state.primary_connect = primary_connect
         app.state.discovery = discovery
         app.state.pkg_repo = pkg_repo
 
@@ -642,6 +662,11 @@ def _cred_jobs(request: Request) -> CredentialJobService:
 
 def _prov_jobs(request: Request) -> ProvisioningJobService:
     service: ProvisioningJobService = request.app.state.prov_jobs
+    return service
+
+
+def _primary_connect(request: Request) -> PrimaryConnectService:
+    service: PrimaryConnectService = request.app.state.primary_connect
     return service
 
 
@@ -1063,18 +1088,52 @@ def _register_routes(app: FastAPI) -> None:
     def provision(body: ProvisionRequest) -> dict[str, list[str]]:
         try:
             commands = render_gaia_user_commands(body.username, body.password, uid=body.uid)
-            api_commands = (
-                render_mgmt_api_commands(body.username, is_mds=body.is_mds) if body.mgmt_api else []
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        return {"commands": commands, "notes": PROVISIONING_NOTES}
+
+    # -- connect to primary (SSH-executed Management API provisioning) --------
+
+    @app.get("/api/environments/{env}/connect-primary/preview")
+    def connect_primary_preview(env: str, username: str, request: Request) -> dict[str, Any]:
+        """Renders the full "assume-fresh" Management API command sequence for
+        the operator to review before Connect to Primary actually runs it over
+        SSH (see PrimaryConnectService) — no SSH involved here."""
+        _require_env(request, env)
+        is_mds = _registry(request).get(env).is_mds
+        try:
+            commands = render_mgmt_api_commands(username, is_mds=is_mds)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        notes = [*MGMT_API_NOTES, MDS_API_NOTE] if is_mds else MGMT_API_NOTES
+        return {"commands": commands, "notes": notes}
+
+    @app.post("/api/environments/{env}/connect-primary", status_code=202)
+    def connect_primary(env: str, body: ConnectPrimaryIn, request: Request) -> JobRecord:
+        _require_env(request, env)
+        is_mds = _registry(request).get(env).is_mds
+        try:
+            return _primary_connect(request).submit_connect_primary(
+                env,
+                name=body.name,
+                address=body.address,
+                role=body.role,
+                ssh_user=body.ssh_user,
+                ssh_port=body.ssh_port,
+                credential_set=body.credential_set,
+                is_mds=is_mds,
+                credentials=_build_credentials(body.credentials, body.name, env),
+                triggered_by=_current_user(request),
             )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
-        api_notes = [*MGMT_API_NOTES, MDS_API_NOTE] if body.is_mds else MGMT_API_NOTES
-        return {
-            "commands": commands,
-            "notes": PROVISIONING_NOTES,
-            "api_commands": api_commands,
-            "api_notes": api_notes if body.mgmt_api else [],
-        }
+
+    @app.get("/api/jobs/{job_id}/reveal-api-key")
+    def reveal_api_key(job_id: str, request: Request) -> dict[str, str | None]:
+        """Pop-once read of a connect-primary job's captured API key — returns
+        null on a second call, an unknown job id, or a job that isn't a
+        connect-primary job. Never logged; see PrimaryConnectService."""
+        return {"api_key": _primary_connect(request).reveal_api_key(job_id)}
 
     # -- servers (environment-scoped) ------------------------------------------
 
