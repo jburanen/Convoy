@@ -26,3 +26,4 @@ Load this at the start of each session; read a linked file when its hook looks r
 - [Config path resolution](config-path-resolution.md) — relative paths.* anchor to config.yaml's own directory, not the process CWD
 - [deploy.sh --reset flag](deploy-reset-flag.md) — dev-only full wipe: `./data` (DB + packages) and `.env`, then restores default config.yaml
 - [Mgmt API bootstrap MDS profile](mgmt-api-bootstrap-mds-profile.md) — MDS admin uses `multi-domain-profile "Multi-Domain Super User"`, not `permissions-profile "Super User"`
+- [Mgmt API add-api-key command](mgmt-api-add-api-key-command.md) — key comes from a separate `add api-key admin-name` call, not `add administrator`; no `api restart` needed
