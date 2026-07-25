@@ -9,7 +9,12 @@ CPUSE mechanics below don't care which kind of Gaia host they're talking to:
 - **import**        — checks free disk space on `/var/log` (3x the package
   size) and `/` (2x) before doing anything else — `df -Pk`, fails the job
   closed with PreCheckError if either falls short (operator-specified,
-  2026-07-23) — then SFTPs the package to a temp path on the host, verifies its
+  2026-07-23). A shortfall down to 1.5x the package's own size can be
+  overridden by the operator — the UI runs check_import_disk_space as a
+  synchronous precheck, offers an override when eligible, and the job itself
+  re-verifies rather than trusting the flag blindly; below 1.5x there is no
+  override, ever (operator-specified, 2026-07-24) — then SFTPs the package to
+  a temp path on the host, verifies its
   sha1 on the host itself (catches a corrupted/truncated transfer before
   `installer import` ever touches it), `installer import local`, then remove
   the temp copy. `installer import local` returns before CPUSE has actually
@@ -94,6 +99,7 @@ __all__ = [
     "JOB_IMPORT_CLOUD",
     "JOB_INSTALL",
     "ClientFactory",
+    "DiskSpaceCheck",
     "EnvironmentRegistry",
     "HostConnector",
     "PatchingService",
@@ -114,6 +120,12 @@ _INSTALL_LOG_MAX_BYTES = 2 * 1024 * 1024
 # enough for CPUSE's bookkeeping during import.
 _DISK_CHECK_PATHS = (("/var/log", 3), ("/", 2))
 
+# Below this fraction of the package's own size, a disk-space shortfall can
+# never be overridden — regardless of which path/multiplier triggered it
+# (operator-specified, 2026-07-24). Above it but still short of the full
+# requirement, the UI may offer the operator a way to proceed anyway.
+_MIN_OVERRIDE_MULTIPLIER = 1.5
+
 
 def _fmt_bytes(n: int) -> str:
     """Human-readable byte count for pre-check error/log messages."""
@@ -133,6 +145,20 @@ class DetectedState:
     agent_build: str = ""
     packages: list[PackageState] = field(default_factory=list)
     cluster: ClusterMemberState | None = None
+
+
+@dataclass
+class DiskSpaceCheck:
+    """One required path's disk-space precheck result, measured against the
+    package's own size. ``override_eligible`` is only meaningful when ``ok``
+    is False — see _MIN_OVERRIDE_MULTIPLIER."""
+
+    path: str
+    multiplier: int
+    available: int
+    required: int
+    ok: bool
+    override_eligible: bool
 
 
 class PatchingService:
@@ -217,6 +243,30 @@ class PatchingService:
         finally:
             client.close()
 
+    def check_import_disk_space(
+        self,
+        environment: str,
+        host_name: str,
+        package_filename: str,
+        *,
+        credentials: CredentialBundle | None = None,
+    ) -> list[DiskSpaceCheck]:
+        """Synchronous, read-only precheck the UI runs before submit_import:
+        same thresholds as the job's own gate (_check_disk_space), but no
+        upload and no CPUSE interaction — lets the operator see a shortfall
+        and choose to override before the real (background) job ever queues.
+        Blocking (SSH) — call via ``asyncio.to_thread`` from async contexts."""
+        connector = self.registry.get(environment)
+        host = connector.patchable_host(host_name)
+        creds = connector.require_credentials(host, credentials)
+        local_path = self._packages.path_for(package_filename)
+        local_size = local_path.stat().st_size
+        client = connector.connect(host, creds)
+        try:
+            return self._disk_space_report(client, local_size)
+        finally:
+            client.close()
+
     def _cache_state(
         self,
         environment: str,
@@ -273,10 +323,16 @@ class PatchingService:
         host_name: str,
         package_filename: str,
         *,
+        force_low_space: bool = False,
         credentials: CredentialBundle | None = None,
         triggered_by: str | None = None,
     ) -> JobRecord:
-        """Enqueue: SFTP the stored package to the host + `installer import local`."""
+        """Enqueue: SFTP the stored package to the host + `installer import local`.
+        ``force_low_space`` carries an operator's override past a disk-space
+        shortfall the UI's precheck already showed them (see
+        check_import_disk_space) — it's re-verified, not trusted blindly: the
+        job's own _check_disk_space still fails closed below
+        _MIN_OVERRIDE_MULTIPLIER, no override can cross that floor."""
         connector = self.registry.get(environment)
         host = connector.patchable_host(host_name)
         self._ensure_host_free(environment, host_name)
@@ -287,7 +343,7 @@ class PatchingService:
             connector,
             host,
             JOB_IMPORT,
-            params={"package": package_filename},
+            params={"package": package_filename, "force_low_space": force_low_space},
             credentials=credentials,
             triggered_by=triggered_by,
         )
@@ -365,6 +421,7 @@ class PatchingService:
         connector = self.registry.get(ctx.job.environment)
         host = connector.patchable_host(ctx.job.target or "")
         package = str(ctx.job.params["package"])
+        force_low_space = bool(ctx.job.params.get("force_low_space", False))
         local_path = self._packages.path_for(package)
         local_size = local_path.stat().st_size
         expected_sha1 = self._packages.get(package).sha1
@@ -374,7 +431,7 @@ class PatchingService:
         creds = job_run_credentials(connector, self._vault, ctx.job)
         client = connector.connect(host, creds)
         try:
-            self._check_disk_space(client, local_size, ctx)
+            self._check_disk_space(client, local_size, ctx, override=force_low_space)
 
             ctx.log(f"uploading {package} ({local_size} bytes) to {host.name}:{remote_path}")
             reporter = ProgressReporter(ctx, local_size)
@@ -442,24 +499,63 @@ class PatchingService:
         except CPUSEError as exc:
             ctx.log(f"could not refresh detected state: {exc}", level="warning")
 
-    def _check_disk_space(self, client: Transport, local_size: int, ctx: JobContext) -> None:
-        """Fail fast — before ever uploading — if the target doesn't have
-        enough free space to import this package. Raises PreCheckError
-        (never touches CPUSE state) if either requirement isn't met."""
+    def _disk_space_report(self, client: Transport, local_size: int) -> list[DiskSpaceCheck]:
+        """Measures free space on every required path against ``local_size``
+        (the package's own size) — no upload, no CPUSE interaction. Shared by
+        the synchronous UI precheck (check_import_disk_space) and the job's
+        own fail-fast gate (_check_disk_space) so both apply identical
+        thresholds."""
+        hard_floor = int(local_size * _MIN_OVERRIDE_MULTIPLIER)
+        report = []
         for path, multiplier in _DISK_CHECK_PATHS:
             available = self._free_bytes(client, path)
             required = local_size * multiplier
-            if available < required:
-                raise PreCheckError(
-                    f"not enough free space on {path} to import this package: "
-                    f"{_fmt_bytes(available)} available, {_fmt_bytes(required)} required "
-                    f"({multiplier}x the {_fmt_bytes(local_size)} package size) — free up "
-                    f"space on {path} and try again"
+            ok = available >= required
+            report.append(
+                DiskSpaceCheck(
+                    path=path,
+                    multiplier=multiplier,
+                    available=available,
+                    required=required,
+                    ok=ok,
+                    override_eligible=(not ok) and available >= hard_floor,
                 )
-            ctx.log(
-                f"disk space OK on {path}: {_fmt_bytes(available)} available "
-                f"(need {_fmt_bytes(required)}, {multiplier}x the package size)"
             )
+        return report
+
+    def _check_disk_space(
+        self, client: Transport, local_size: int, ctx: JobContext, *, override: bool = False
+    ) -> None:
+        """Fail fast — before ever uploading — if the target doesn't have
+        enough free space to import this package. A shortfall down to
+        _MIN_OVERRIDE_MULTIPLIER (1.5x the package's own size) can be passed
+        with ``override=True`` (the UI's precheck-then-confirm flow, see
+        check_import_disk_space); below that floor there is no override —
+        this always raises. Raises PreCheckError (never touches CPUSE state)
+        whenever it fails closed."""
+        for check in self._disk_space_report(client, local_size):
+            if check.ok:
+                ctx.log(
+                    f"disk space OK on {check.path}: {_fmt_bytes(check.available)} available "
+                    f"(need {_fmt_bytes(check.required)}, {check.multiplier}x the package size)"
+                )
+                continue
+            base = (
+                f"not enough free space on {check.path} to import this package: "
+                f"{_fmt_bytes(check.available)} available, {_fmt_bytes(check.required)} "
+                f"required ({check.multiplier}x the {_fmt_bytes(local_size)} package size)"
+            )
+            if not check.override_eligible:
+                raise PreCheckError(
+                    f"{base} — below {_MIN_OVERRIDE_MULTIPLIER}x the package size, so this "
+                    "cannot be overridden — free up space and try again"
+                )
+            if not override:
+                raise PreCheckError(
+                    f"{base} — still at least {_MIN_OVERRIDE_MULTIPLIER}x the package size, "
+                    "so this can be overridden if you choose to proceed anyway"
+                )
+            ctx.log(f"{base} — proceeding anyway (operator override confirmed)", level="warning")
 
     def _free_bytes(self, client: Transport, path: str) -> int:
         """Available space on ``path``, via `df -Pk` (POSIX output format —

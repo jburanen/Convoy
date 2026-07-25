@@ -55,11 +55,23 @@ class EnvironmentManager:
         registry: EnvironmentRegistry,
         credentials: CredentialStore | None,
         client_factory: ClientFactory | None = None,
+        *,
+        auth_enabled: bool = True,
     ) -> None:
         self._store = store
         self._registry = registry
         self._credentials = credentials
         self._client_factory = client_factory
+        # Whether an authenticator (LDAP) is actually configured for this run —
+        # storing credentials on disk requires it, same as the master key,
+        # for every environment including one seeded from config.yaml with
+        # credential_storage_enabled=True (see rebuild() and the module-level
+        # comment on seed_from_config). Fixed for the process lifetime: auth
+        # config is resolved once at startup and doesn't change without a
+        # restart. Defaults True so tests exercising this class directly
+        # (without auth in the picture) keep their prior behavior; create_app
+        # is the one caller that passes the real value.
+        self._auth_enabled = auth_enabled
 
     # -- startup ----------------------------------------------------------------
 
@@ -73,6 +85,9 @@ class EnvironmentManager:
             inventory = Inventory.load(env_def.inventory) if env_def.inventory.is_file() else None
             # Config-seeded environments preserve the pre-feature behaviour of
             # storing credentials; only UI-created environments default to off.
+            # This is a stored *preference*, not a guarantee — rebuild() still
+            # ANDs it with auth being configured, so a seeded environment is no
+            # more able to use storage without auth than a UI-created one.
             # MDS-ness is inferred from the seeded inventory (an operator setting
             # up a fresh environment via the UI declares it explicitly instead).
             is_mds = inventory is not None and any(
@@ -98,7 +113,14 @@ class EnvironmentManager:
         """Rebuild the live registry from the database (call after any change).
         Management servers and firewalls are merged into one host list per
         environment — HostConnector gates which is which by role, so a single
-        Inventory/connector serves both (see services/common.py)."""
+        Inventory/connector serves both (see services/common.py).
+
+        A connector's *effective* credential_storage_enabled is the DB flag
+        AND auth being configured — never the DB flag alone. Same prerequisite
+        for every environment, including one seeded from config.yaml with the
+        flag already on (see seed_from_config): without auth, storage is
+        unusable there exactly as it is for a UI-created environment that
+        never got past set_credential_storage's own auth check."""
         connectors: dict[str, HostConnector] = {}
         for env in self._store.list_environments():
             hosts = [_host_from_row(r) for r in self._store.list_env_hosts(env.name)]
@@ -109,7 +131,7 @@ class EnvironmentManager:
                 self._credentials,
                 self._client_factory,
                 environment=env.name,
-                credential_storage_enabled=env.credential_storage_enabled,
+                credential_storage_enabled=env.credential_storage_enabled and self._auth_enabled,
                 is_mds=env.is_mds,
             )
         self._registry.rebuild(connectors)

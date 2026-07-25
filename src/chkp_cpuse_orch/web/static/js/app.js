@@ -96,10 +96,18 @@ async function initAuth() {
   if (!authEnabled) return;
   if (cfg.idle_minutes > 0) _idleMs = cfg.idle_minutes * 60 * 1000;
 
+  const sessionUserBtn = document.getElementById("session-user");
   try {
     const me = await api("/api/auth/me");
     if (me.username) {
-      document.getElementById("session-user").textContent = `Signed in as ${me.username}`;
+      sessionUserBtn.textContent = `Signed in as ${me.username}`;
+    }
+    // Only basic-auth passwords are ours to change — LDAP is directory-managed.
+    // The username reads as plain text (see .static in app.css) unless clickable.
+    if (me.backend === "basic") {
+      sessionUserBtn.addEventListener("click", openUserSettingsModal);
+    } else {
+      sessionUserBtn.classList.add("static");
     }
   } catch { /* header label is best-effort */ }
   document.getElementById("session-row").classList.remove("hidden");
@@ -111,6 +119,51 @@ async function initAuth() {
   }
   resetIdleTimer();
 }
+
+// User Settings modal (basic-auth only): change the signed-in user's password.
+function openUserSettingsModal() {
+  const modal = document.getElementById("user-settings-modal");
+  document.getElementById("user-settings-form").reset();
+  document.getElementById("user-settings-error").classList.add("hidden");
+  modal.classList.remove("hidden");
+  document.getElementById("us-current-password").focus();
+}
+
+function closeUserSettingsModal() {
+  document.getElementById("user-settings-modal").classList.add("hidden");
+  document.getElementById("user-settings-form").reset(); // plaintext leaves the DOM
+}
+
+document.getElementById("user-settings-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const errorBox = document.getElementById("user-settings-error");
+  errorBox.classList.add("hidden");
+  const current = document.getElementById("us-current-password").value;
+  const next = document.getElementById("us-new-password").value;
+  const confirm = document.getElementById("us-confirm-password").value;
+  if (next !== confirm) {
+    errorBox.textContent = "New password and confirmation don't match.";
+    errorBox.classList.remove("hidden");
+    return;
+  }
+  try {
+    await api("/api/auth/password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ current_password: current, new_password: next }),
+    });
+    closeUserSettingsModal();
+    toast("Password changed.");
+  } catch (e) {
+    errorBox.textContent = e.message;
+    errorBox.classList.remove("hidden");
+  }
+});
+document.getElementById("user-settings-cancel").addEventListener("click", closeUserSettingsModal);
+document.getElementById("user-settings-close").addEventListener("click", closeUserSettingsModal);
+document.getElementById("user-settings-modal").addEventListener("click", (ev) => {
+  if (ev.target.id === "user-settings-modal") closeUserSettingsModal(); // backdrop click cancels
+});
 
 /* ---------- 1a. environments ---------- */
 
@@ -526,15 +579,13 @@ document.addEventListener("keydown", (ev) => {
 document.getElementById("env-add-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const input = document.getElementById("env-add-name");
-  const mdsInput = document.getElementById("env-add-is-mds");
   try {
     const created = await api("/api/environments", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: input.value, is_mds: mdsInput.checked }),
+      body: JSON.stringify({ name: input.value }),
     });
     input.value = "";
-    mdsInput.checked = false;
     closeEnvModal();
     await loadEnvironments();
     await selectEnvironment(created.name); // server-normalized (trimmed) name
@@ -595,6 +646,7 @@ async function openAddServerModal() {
   document.getElementById("sm-name").disabled = false;
   document.getElementById("server-modal-title").textContent = "Add server";
   document.getElementById("server-modal-submit").textContent = "Add server";
+  populateRoleSelect(document.getElementById("sm-role"), !!envIsMds[currentEnv]);
   await populateServerCredSelect();
   document.getElementById("server-modal").classList.remove("hidden");
   document.getElementById("sm-name").focus();
@@ -603,7 +655,7 @@ async function openEditServerModal(srv, assignedSetName) {
   document.getElementById("sm-name").value = srv.name;
   document.getElementById("sm-name").disabled = true;
   document.getElementById("sm-address").value = srv.address;
-  document.getElementById("sm-role").value = srv.role;
+  populateRoleSelect(document.getElementById("sm-role"), !!envIsMds[currentEnv], srv.role);
   document.getElementById("sm-user").value = srv.ssh_user;
   document.getElementById("sm-port").value = srv.ssh_port;
   document.getElementById("server-modal-title").textContent = `Edit ${srv.name}`;
@@ -841,7 +893,7 @@ function renderDiscoverResults(result) {
     const note = row.querySelector(".disc-note");
     name.value = s.name;
     address.value = s.address;
-    roleSel.value = s.role;
+    populateRoleSelect(roleSel, !!envIsMds[currentEnv], s.role);
     let noteText = s.note || "";
     if (s.already_in_inventory) {
       noteText = "already in inventory";
@@ -1280,6 +1332,28 @@ const ROLE_LABELS = {
 };
 const roleLabel = (role) => ROLE_LABELS[role] ?? role;
 
+// Role choices offered when adding/editing a management server, filtered by
+// the environment's SMS-vs-MDS kind (an environment is always entirely one
+// or the other — see envIsMds/loadEnvironments). SmartEvent applies to both.
+const SMS_SERVER_ROLES = ["primary_sms", "secondary_sms", "log_server", "smartevent"];
+const MDS_SERVER_ROLES = ["primary_mds", "secondary_mds", "mlm", "smartevent"];
+
+// Rebuilds a role <select>'s options for the given SMS/MDS kind. If `selected`
+// isn't one of that kind's roles (e.g. a legacy management/mds row being
+// edited), it's kept as an extra leading option so saving doesn't silently
+// change it.
+function populateRoleSelect(select, isMds, selected) {
+  const roles = isMds ? MDS_SERVER_ROLES : SMS_SERVER_ROLES;
+  const values = selected && !roles.includes(selected) ? [selected, ...roles] : roles;
+  select.replaceChildren(...values.map((role) => {
+    const opt = document.createElement("option");
+    opt.value = role;
+    opt.textContent = roleLabel(role);
+    return opt;
+  }));
+  select.value = selected ?? roles[0];
+}
+
 // Management tab's server ordering: primaries first, then secondaries, then
 // log-plane roles, then SmartEvent last. Legacy management/mds rows are
 // equivalent to a primary (see ROLE_LABELS) so they sort into that tier too.
@@ -1681,6 +1755,58 @@ async function bulkImport(btn, getTargets, perServer) {
   }
 }
 
+// Human-readable byte count, matching the backend's _fmt_bytes style — used
+// in the disk-space precheck's confirm()/toast messages.
+function fmtBytes(n) {
+  let size = n;
+  for (const unit of ["B", "KB", "MB", "GB"]) {
+    if (size < 1024) return unit === "B" ? `${size.toFixed(0)} B` : `${size.toFixed(1)} ${unit}`;
+    size /= 1024;
+  }
+  return `${size.toFixed(1)} TB`;
+}
+
+// Runs the server-side disk-space precheck (PatchingService.
+// check_import_disk_space) before an import job is submitted, and — when
+// the shortfall is eligible (still >=1.5x the package's own size) — offers
+// the operator a confirm() to proceed anyway. Below that floor there is no
+// override; the check_import_disk_space docstring in patching.py is the
+// source of truth for why. Returns { proceed, force }: proceed=false means
+// don't submit the import at all; force=true must be sent back as
+// force_low_space so the job's own re-check lets it through.
+async function checkDiskSpaceBeforeImport(kind, name, pkg, extra) {
+  let checks;
+  try {
+    checks = await api(envUrl(`/${kind}/${encodeURIComponent(name)}/import/disk-space`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ package: pkg, ...extra }),
+    });
+  } catch (e) {
+    toast(`Disk space check for ${name} failed: ${e.message}`);
+    return { proceed: false, force: false };
+  }
+  const short = checks.filter((c) => !c.ok);
+  if (!short.length) return { proceed: true, force: false };
+  const lines = short.map(
+    (c) =>
+      `${c.path}: ${fmtBytes(c.available)} available, ${fmtBytes(c.required)} required ` +
+      `(${c.multiplier}x the package size)`
+  );
+  if (short.some((c) => !c.override_eligible)) {
+    toast(
+      `Not enough disk space on ${name} to import — below 1.5x the package size, cannot ` +
+      `override:\n${lines.join("\n")}`
+    );
+    return { proceed: false, force: false };
+  }
+  const sure = confirm(
+    `${name} is short on disk space for this import, but still has at least 1.5x the ` +
+    `package size free:\n\n${lines.join("\n")}\n\nProceed with the import anyway?`
+  );
+  return { proceed: sure, force: sure };
+}
+
 document.getElementById("bulk-import-btn").addEventListener("click", () => {
   const btn = document.getElementById("bulk-import-btn");
   const pkg = document.getElementById("bulk-import-package").value;
@@ -1688,10 +1814,12 @@ document.getElementById("bulk-import-btn").addEventListener("click", () => {
   bulkImport(btn, selectedServerNames, async (name) => {
     const extra = await operationCredentials(name, "import a package");
     if (extra === null) return; // credential prompt cancelled for this host
+    const { proceed, force } = await checkDiskSpaceBeforeImport("servers", name, pkg, extra);
+    if (!proceed) return;
     const job = await api(envUrl(`/servers/${encodeURIComponent(name)}/import`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ package: pkg, ...extra }),
+      body: JSON.stringify({ package: pkg, force_low_space: force, ...extra }),
     });
     lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if it finishes fast
   });
@@ -1883,10 +2011,12 @@ document.getElementById("fw-bulk-import-btn").addEventListener("click", () => {
   bulkImport(btn, selectedFirewallNames, async (name) => {
     const extra = await operationCredentials(name, "import a package");
     if (extra === null) return;
+    const { proceed, force } = await checkDiskSpaceBeforeImport("firewalls", name, pkg, extra);
+    if (!proceed) return;
     const job = await api(envUrl(`/firewalls/${encodeURIComponent(name)}/import`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ package: pkg, ...extra }),
+      body: JSON.stringify({ package: pkg, force_low_space: force, ...extra }),
     });
     lastJobStatus.set(job.id, job.status);
   });
@@ -2733,14 +2863,14 @@ async function loadCredentialSets() {
 
 // Sets the Bootstrap panel's default open/closed state for the current
 // environment: collapsed once there's nothing left to set up (storage
-// disabled, or storage enabled with a default credential set already
-// picked), left open otherwise since bootstrapping is likely still needed.
+// disabled, or storage enabled with at least one credential already
+// added), left open otherwise since bootstrapping is likely still needed.
 // Called once per environment load/switch — never on every credential-set
 // refresh, so it doesn't yank the panel shut/open out from under an
 // operator who's actively working in it.
 function updateProvisionCollapse() {
-  const hasDefault = credentialSets.some((s) => s.is_default);
-  const collapse = !storageEnabled() || hasDefault;
+  const hasCredential = credentialSets.length > 0;
+  const collapse = !storageEnabled() || hasCredential;
   document.getElementById("provision-details").open = !collapse;
 }
 

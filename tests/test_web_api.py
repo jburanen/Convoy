@@ -741,6 +741,37 @@ def test_locked_credential_store_returns_503(
         assert c.get("/api/status").json()["credentials_unlocked"] is False
 
 
+def test_seeded_environment_storage_still_requires_auth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """config.yaml-seeded environments (e.g. "default") get
+    credential_storage_enabled=True in the DB unconditionally (see
+    EnvironmentManager.seed_from_config) — that's a stored preference, not a
+    guarantee. With the master key set but no authenticator configured, that
+    preference must NOT translate into usable storage: same prerequisite
+    (master key + auth) as a UI-created environment, which starts with
+    storage off and can't be flipped on without auth either (see
+    _enable_storage's use elsewhere)."""
+    monkeypatch.setenv(MASTER_KEY_ENV, "api test master key")
+    app = create_app(_config(tmp_path))  # no authenticator passed -> auth off
+    with TestClient(app) as c:
+        status = c.get("/api/status").json()
+        assert status["auth_enabled"] is False
+        assert status["credentials_unlocked"] is True
+
+        envs = {e["name"]: e for e in c.get("/api/environments").json()}
+        assert envs["default"]["credential_storage_enabled"] is False
+
+        # Trying to actually store a credential set is blocked exactly like it
+        # would be for a fresh environment that never had storage seeded on.
+        resp = c.put(
+            "/api/env/default/credentials",
+            json={"name": "primary", "ssh_username": "admin", "ssh_password": "pw"},
+        )
+        assert resp.status_code == 409
+        assert "authentication" in resp.json()["detail"]
+
+
 # -- packages ---------------------------------------------------------------------
 
 

@@ -82,8 +82,10 @@ from .auth import (
     Authenticator,
     AuthManager,
     AuthSettings,
+    BasicAuthenticator,
+    BasicAuthSettings,
     LDAPAuthenticator,
-    load_auth_settings,
+    load_active_auth_settings,
 )
 
 logger = get_logger(__name__)
@@ -217,6 +219,11 @@ class OperationCredentials(BaseModel):
 
 class ImportRequest(OperationCredentials):
     package: str  # filename in the package store
+    # Set after the UI's disk-space precheck (see PatchingService.
+    # check_import_disk_space) showed a shortfall eligible for override
+    # (still >=1.5x the package's own size) and the operator chose to
+    # proceed anyway. Ignored by the precheck endpoint itself.
+    force_low_space: bool = False
 
 
 class ImportCloudRequest(OperationCredentials):
@@ -277,6 +284,13 @@ class CredentialStorageIn(BaseModel):
 class LoginIn(BaseModel):
     username: str = Field(min_length=1)
     password: str = Field(min_length=1)
+
+
+class ChangePasswordIn(BaseModel):
+    """Basic-auth only (see AuthManager.change_password) — 400 under LDAP."""
+
+    current_password: str = Field(min_length=1)
+    new_password: str = Field(min_length=8)
 
 
 class ProvisionRequest(BaseModel):
@@ -393,16 +407,20 @@ def create_app(
             app.state.credentials_error = str(exc)
 
         # Authentication. When a fake authenticator is injected (tests), use it
-        # with the given (or a permissive default) settings. Otherwise resolve
-        # LDAP config from the environment: a valid config builds an LDAP backend,
-        # an absent one leaves auth off (auth-optional), and a half-finished one
-        # raises ConfigError from load_auth_settings and aborts startup.
+        # with the given (or a permissive default) settings. Otherwise resolve the
+        # active backend from the environment: LDAP takes priority when configured
+        # (a half-finished LDAP config raises ConfigError and aborts startup);
+        # otherwise local basic-auth, which is ON BY DEFAULT (BASIC_AUTH_USER/
+        # BASIC_AUTH_PASSWORD, default admin/admin) unless BASIC_AUTH_DISABLE is
+        # set — only then does auth end up fully off (auth-optional).
         auth: AuthManager | None = None
         active_auth = authenticator
-        settings = auth_settings
+        settings: AuthSettings | BasicAuthSettings | None = auth_settings
         if active_auth is None:
-            settings = load_auth_settings()
-            if settings is not None:
+            settings = load_active_auth_settings()
+            if isinstance(settings, BasicAuthSettings):
+                active_auth = BasicAuthenticator(store, settings)
+            elif settings is not None:
                 active_auth = LDAPAuthenticator(settings)
         if active_auth is not None:
             if settings is None:
@@ -418,22 +436,28 @@ def create_app(
         # once from config/inventory files, then the DB is authoritative (see
         # services/environments.py and .claude/memory/patching-web-design.md).
         registry = EnvironmentRegistry()
-        env_manager = EnvironmentManager(store, registry, credentials, client_factory)
+        env_manager = EnvironmentManager(
+            store, registry, credentials, client_factory, auth_enabled=auth is not None
+        )
         env_manager.seed_from_config(cfg)
         env_manager.rebuild()
         firewall_manager = FirewallManager(store, env_manager)
 
-        # Without authentication, persisting credentials is not permitted. Enabling
-        # storage is blocked at the API, but a pre-existing (e.g. config-seeded)
-        # environment may still have it on — warn loudly rather than silently
-        # exposing secrets. (Non-destructive: the operator decides how to remediate.)
+        # Without authentication, persisting credentials is not permitted — for
+        # every environment alike, including one seeded from config.yaml with
+        # the DB flag already on (see EnvironmentManager.rebuild, which ANDs
+        # that flag with auth_enabled when building each connector). So this
+        # is no longer "silently exposing secrets" the way it used to be —
+        # storage is genuinely unusable here — just a heads-up that the
+        # operator's stored preference isn't taking effect yet.
         if auth is None:
             open_envs = [e.name for e in store.list_environments() if e.credential_storage_enabled]
             if open_envs:
                 logger.warning(
-                    "credential storage enabled without authentication configured",
+                    "credential storage requested but authentication isn't configured — "
+                    "treating storage as disabled for these environments",
                     environments=open_envs,
-                    hint="configure LDAP auth (CHKP_CPUSE_LDAP_*) or disable storage for these",
+                    hint="configure LDAP auth (CHKP_CPUSE_LDAP_*) to enable it",
                 )
 
         # Purge a job's in-memory credentials the moment it reaches any terminal
@@ -691,6 +715,9 @@ def _register_routes(app: FastAPI) -> None:
             "auth_enabled": True,
             "authenticated": True,
             "username": getattr(request.state, "user", None),
+            # "basic" → the User Settings modal offers a password change; "ldap"
+            # → directory-managed, no change-password control.
+            "backend": auth.backend,
         }
 
     @app.post("/api/auth/login")
@@ -723,6 +750,24 @@ def _register_routes(app: FastAPI) -> None:
         if auth is not None and token:
             await run_in_threadpool(auth.logout, token)
         response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+        return {"ok": True}
+
+    @app.post("/api/auth/password")
+    async def auth_change_password(body: ChangePasswordIn, request: Request) -> dict[str, bool]:
+        """Change the basic-auth password (User Settings modal). Requires the
+        current password; 400 when auth is off or the backend is LDAP (directory-
+        managed, not ours to change)."""
+        auth = _auth(request)
+        if auth is None:
+            raise HTTPException(status_code=400, detail="authentication is not configured")
+        username = _current_user(request)
+        assert username is not None  # guarded by the auth middleware
+        try:
+            await run_in_threadpool(
+                auth.change_password, username, body.current_password, body.new_password
+            )
+        except AuthError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True}
 
     # -- environments (create/edit; DB-backed, UI-managed) ----------------------
@@ -1091,11 +1136,43 @@ def _register_routes(app: FastAPI) -> None:
                 env,
                 name,
                 body.package,
+                force_low_space=body.force_low_space,
                 credentials=_build_credentials(body.credentials, name, env),
                 triggered_by=_current_user(request),
             )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
+
+    @app.post("/api/env/{env}/servers/{name}/import/disk-space")
+    async def server_import_disk_space(
+        env: str, name: str, body: ImportRequest, request: Request
+    ) -> list[dict[str, Any]]:
+        """Synchronous precheck the UI runs before submit_import — same
+        disk-space thresholds as the job's own gate, but read-only: no
+        upload, no CPUSE interaction. Lets the operator see a shortfall and
+        choose to override before the real (background) job ever queues."""
+        service = _service(request)
+        try:
+            checks = await asyncio.to_thread(
+                service.check_import_disk_space,
+                env,
+                name,
+                body.package,
+                credentials=_build_credentials(body.credentials, name, env),
+            )
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        return [
+            {
+                "path": c.path,
+                "multiplier": c.multiplier,
+                "available": c.available,
+                "required": c.required,
+                "ok": c.ok,
+                "override_eligible": c.override_eligible,
+            }
+            for c in checks
+        ]
 
     @app.post("/api/env/{env}/servers/{name}/import-cloud", status_code=202)
     def server_import_cloud(
@@ -1273,11 +1350,41 @@ def _register_routes(app: FastAPI) -> None:
                 env,
                 name,
                 body.package,
+                force_low_space=body.force_low_space,
                 credentials=_build_credentials(body.credentials, name, env),
                 triggered_by=_current_user(request),
             )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
+
+    @app.post("/api/env/{env}/firewalls/{name}/import/disk-space")
+    async def firewall_import_disk_space(
+        env: str, name: str, body: ImportRequest, request: Request
+    ) -> list[dict[str, Any]]:
+        """Same precheck as server_import_disk_space, for firewalls — see
+        that endpoint's docstring."""
+        service = _service(request)
+        try:
+            checks = await asyncio.to_thread(
+                service.check_import_disk_space,
+                env,
+                name,
+                body.package,
+                credentials=_build_credentials(body.credentials, name, env),
+            )
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        return [
+            {
+                "path": c.path,
+                "multiplier": c.multiplier,
+                "available": c.available,
+                "required": c.required,
+                "ok": c.ok,
+                "override_eligible": c.override_eligible,
+            }
+            for c in checks
+        ]
 
     @app.post("/api/env/{env}/firewalls/{name}/import-cloud", status_code=202)
     def firewall_import_cloud(

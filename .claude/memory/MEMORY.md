@@ -14,7 +14,7 @@ Load this at the start of each session; read a linked file when its hook looks r
 - [Keep .env.example in sync](env-example-sync.md) — add every new runtime env var to the tracked example
 - [Optional credential storage](optional-credential-storage.md) — per-env toggle; disabled envs use in-memory-only per-job credentials
 - [Credential sets](credential-sets.md) — credentials are named login sets assigned to servers (migration v8), not per-host secrets
-- [Web UI authentication](web-auth.md) — LDAP/AD login, sessions, idle logout; no-auth ⇒ no credential storage
+- [Web UI authentication](web-auth.md) — basic-auth (default on, admin/admin) or LDAP/AD, sessions, idle logout; no-auth ⇒ no credential storage
 - [Git workflow](git-workflow.md) — work directly on main; no feature branches; bump `__version__` every batch, in the shipping commit
 - [Provisioning command order](provisioning-command-order.md) — RBA role assignment must precede the shell→bash switch
 - [MDS discovery command](mds-discovery-command.md) — locate MDSDIR via `/opt/CPmds-R*` glob, don't trust any pre-set env var over SSH exec; SmartEvent on MDS confirmed via API login domain="Global"
@@ -24,3 +24,4 @@ Load this at the start of each session; read a linked file when its hook looks r
 - [No SSH for cluster name](no-ssh-for-cluster-name.md) — cluster object name is Mgmt-API-only, ever; manual entry is the only valid fallback, never SSH/CLI
 - [MDS domain per firewall](mds-domain-per-firewall.md) — FirewallRow.mds_domain tracks each firewall's Domain/CMA so post-hoc API lookups can log in correctly on MDS
 - [Config path resolution](config-path-resolution.md) — relative paths.* anchor to config.yaml's own directory, not the process CWD
+- [deploy.sh --reset flag](deploy-reset-flag.md) — dev-only full wipe: `./data` (DB + packages) and `.env`, then restores default config.yaml

@@ -44,7 +44,8 @@ Supporting features, all in the UI:
 
 - **Bootstrapping.** Generates the clish commands to create the tool's service account on a primary management server, then discovery the remaining management servers and firewalls.
 - **Independent environments.** Separate management estates, each with its own inventory and its own credential namespace; package repo is shared.
-- **Encrypted credential store.** SSH/API/Expert credential store, encrypted at rest with argon2id; the master key is supplied at startup and never persisted.
+- **Web UI authentication.** On by default: a local admin/admin login (change the password from the User Settings modal, or disable it with `BASIC_AUTH_DISABLE`), or LDAP/Active Directory when configured (LDAP always takes priority). See `.env.example`.
+- **Encrypted credential store.** SSH/API/Expert credential store, encrypted at rest with argon2id; the master key is supplied at startup and never persisted. Storing credentials for *any* environment additionally requires authentication to be configured (basic auth or LDAP) — without it, every environment behaves as storage-disabled, regardless of its own setting.
 - **Package store.** Upload CPUSE packages for temporary or permanent storage; upload once, distribute to many.
 - **Background jobs.** Every import/install/CDT action runs as a persisted job with a live progress log, cancellation, and restart recovery.
 
@@ -62,15 +63,28 @@ cp examples/config.example.yaml data/config.yaml   # relative paths inside resol
 # Held in memory only; the app boots "locked" (credentials disabled) without it.
 export CHKP_CPUSE_MASTER_KEY='choose-a-strong-passphrase'
 
+# Run the container as the account that owns ./data, so it can write state into
+# the bind mount. Without these the container falls back to uid 1001 and — on
+# any host whose login user isn't 1001 — fails with "Permission denied:
+# /data/state" on first boot.
+export DEPLOY_UID=$(id -u) DEPLOY_GID=$(id -g)
+
 docker compose up -d --build
 # → http://<host>:8080  (GET /health for a probe)
 ```
+
+> Or just run `./scripts/deploy.sh`, which sets `DEPLOY_UID`/`DEPLOY_GID` for you
+> (and pulls, rebuilds, and health-checks). `./scripts/deploy.sh --reset` (dev
+> only) wipes `./data` and `.env` first — every environment, server, firewall,
+> credential, package, and job history entry, plus every runtime setting back
+> to its built-in default — then deploys clean. Prompts for confirmation
+> unless you also pass `-y`/`--yes`.
 
 First run seeds environments from `config.yaml` (+ any inventory files) into the
 database; after that the database is authoritative and environments are managed in
 the UI. On an empty inventory the UI opens on the **Provisioning** tab.
 
-## Develop / run locally
+## Deployment for development, testing
 
 ```bash
 python -m venv .venv && . .venv/Scripts/activate   # Windows; use bin/activate on *nix
@@ -128,6 +142,7 @@ implemented and unit-tested. Caveats:
 These gates define the major version releases - the milestones may change in the future but they will remain documented here. A milestone is not marked complete until it is tested and confirmed working by a human. There will not be a packaged release until v1.
 
 ✅ LDAP authentication  
+◻️ Basic auth (default on, admin/admin, changeable password)  
 ✅ Native TLS support  
 ✅ Test functionality behind Nginx/NPM  
 ◻️ Test firewall discovery in SMS/Smart Center environment  
@@ -148,18 +163,15 @@ These gates define the major version releases - the milestones may change in the
 ✨ Add logic to display a warning on mobile devices that the UI of this tool does not scale down well (by design) and you should use it on a larger display. 
 ✨ Make a favicon  
 ✨ Name the project  
-✨ Improve padding of collapsed section headers  
 
 #### Provisioning
-🤞 Filter role picker based on whether environment is labeled as MDS or not  
+done! 
 
 #### Packages
 🤞 Investigate if we can extract and display meta data like compatible major version from the package file  
 
 #### Direct Patching (CPUSE)
 ⏫ Add deployment agent upgrade option  
-✨ Update explanatory text at top of firewalls panel to talk about how direct patching is mostly for management servers and small numbers of gateways. gateways can also be patched from SmartConsole and Web SmartConsole (include a link). Large numbers of gateways can be patched with the CDT tab (future).  
-🤞 If the disk space is below threshold, offer the option to override unless disk space is less than actual pkg size. also provide links to disk space SKs  
 ⏫ Consider adding the ability to populate and uninstall installed packages  
 🤞 Some kind of sledgehammer to swing to release config/job lock from management server and firewalls if a job gets stranded/stuck  
 
@@ -169,4 +181,4 @@ These gates define the major version releases - the milestones may change in the
 
 > Not affiliated with or endorsed by Check Point Software Technologies. "Check Point", "CDT", and "CPUSE" refer to their products. Use only on infrastructure you are authorized to maintain.  
 >  
-> Written by Claude under the direction of humans. Deploy, <u>test</u>, and use this tool with appropriate caution. No guarantees or assurance of safety is made by the developers.
+> Written by Claude under the direction of humans. Deploy, <u>test</u>, and use this tool with appropriate caution. No guarantees or assurance of safety is made by the developers. Even with a whole bunch of robots doing the work, we still manage to introduce human error. 🤖
