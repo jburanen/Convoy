@@ -165,7 +165,10 @@ class PackageRepoService:
         domain = "Global" if connector.is_mds else None
         with self._mgmt_client_factory(host, read_only=False, domain=domain, **auth) as client:
             ctx.log("calling Management API add-repository-package")
-            task_id = client.add_repository_package(package, self._staging_dir, source="local")
+            # The API requires `path` to be a directory ending in "/" —
+            # reject otherwise ("must ... end with the forward slash").
+            repo_path = self._staging_dir if self._staging_dir.endswith("/") else self._staging_dir + "/"
+            task_id = client.add_repository_package(package, repo_path, source="local")
             ctx.log(f"repository task {task_id} submitted — polling for completion")
             self._poll_task(ctx, client, task_id)
 
