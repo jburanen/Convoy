@@ -93,6 +93,7 @@ def render_mgmt_api_commands(
     username: str,
     *,
     permissions_profile: str = DEFAULT_API_PROFILE,
+    is_mds: bool = False,
 ) -> list[str]:
     """Expert-mode commands that create a Management API administrator (API-key auth)
     on ONE Security Management Server / MDS.
@@ -101,6 +102,12 @@ def render_mgmt_api_commands(
     is actually published; ``-r true`` logs in as root on the box (no password).
     The generated API key is printed once in the ``add administrator`` JSON output —
     the operator copies it into the Credentials section (kind: API key).
+
+    A Multi-Domain Server has no single-domain ``permissions-profile`` object of
+    its own — a *global* administrator (one this tool's estate-wide discovery
+    needs) is granted via the separate ``multi-domain-permissions-profile``
+    parameter instead, even though the built-in profile is named the same
+    ("Super User") in both places.
     """
     if not _USERNAME_RE.fullmatch(username):
         raise ProvisioningError(
@@ -110,10 +117,11 @@ def render_mgmt_api_commands(
     if not _ROLE_RE.fullmatch(permissions_profile.replace(" ", "")):
         raise ProvisioningError(f"invalid permissions profile: {permissions_profile!r}")
     sid = _API_SESSION_FILE
+    profile_param = "multi-domain-permissions-profile" if is_mds else "permissions-profile"
     return [
         f"mgmt_cli login -r true > {sid}",
         f"mgmt_cli -s {sid} add administrator name {username} "
-        f'authentication-method "api key" permissions-profile "{permissions_profile}" '
+        f'authentication-method "api key" {profile_param} "{permissions_profile}" '
         "--format json",
         f"mgmt_cli -s {sid} publish",
         f"mgmt_cli -s {sid} logout",
@@ -127,3 +135,9 @@ MGMT_API_NOTES = [
     "API key in its JSON output. Copy it ONCE (it cannot be retrieved later), then Edit "
     "the credential entry added below and paste it as the API key.",
 ]
+
+MDS_API_NOTE = (
+    "This environment is Multi-Domain: the administrator is granted the "
+    '`multi-domain-permissions-profile "Super User"` (a global, all-Domains '
+    "profile), not the single-domain `permissions-profile` used on an SMS."
+)

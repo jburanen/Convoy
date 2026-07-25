@@ -84,3 +84,13 @@ def test_mgmt_api_commands_single_session_and_api_key() -> None:
 def test_mgmt_api_rejects_bad_username() -> None:
     with pytest.raises(ProvisioningError, match="invalid username"):
         render_mgmt_api_commands("Bad Name")
+
+
+def test_mgmt_api_commands_use_multi_domain_profile_for_mds() -> None:
+    cmds = render_mgmt_api_commands("svc-patch", is_mds=True)
+    joined = "\n".join(cmds)
+    assert 'multi-domain-permissions-profile "Super User"' in joined
+    # The single-domain form must not also appear (would be a stray substring
+    # match on "permissions-profile" since it's a suffix of the MDS param name).
+    assert "add administrator" in joined
+    assert ' permissions-profile "Super User"' not in joined

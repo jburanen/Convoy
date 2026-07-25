@@ -71,6 +71,7 @@ from ..services.pkgs_ops import PackageJobService
 from ..services.prov_ops import UNSET, ProvisioningJobService
 from ..services.provisioning import (
     DEFAULT_UID,
+    MDS_API_NOTE,
     MGMT_API_NOTES,
     PROVISIONING_NOTES,
     render_gaia_user_commands,
@@ -305,6 +306,12 @@ class ProvisionRequest(BaseModel):
     # Also emit the expert-mode commands that grant this account Management API
     # access (an API-key admin) — needed for estate auto-discovery.
     mgmt_api: bool = True
+    # Whether the target environment is Multi-Domain (MDS) — selects the
+    # `multi-domain-permissions-profile` administrator form instead of the
+    # single-domain `permissions-profile` one. Mirrors `environments.is_mds`;
+    # the client already knows this for the current environment and sends it,
+    # since this endpoint renders commands only and never itself reads the store.
+    is_mds: bool = False
 
 
 class EnvironmentIn(BaseModel):
@@ -1056,14 +1063,17 @@ def _register_routes(app: FastAPI) -> None:
     def provision(body: ProvisionRequest) -> dict[str, list[str]]:
         try:
             commands = render_gaia_user_commands(body.username, body.password, uid=body.uid)
-            api_commands = render_mgmt_api_commands(body.username) if body.mgmt_api else []
+            api_commands = (
+                render_mgmt_api_commands(body.username, is_mds=body.is_mds) if body.mgmt_api else []
+            )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
+        api_notes = [*MGMT_API_NOTES, MDS_API_NOTE] if body.is_mds else MGMT_API_NOTES
         return {
             "commands": commands,
             "notes": PROVISIONING_NOTES,
             "api_commands": api_commands,
-            "api_notes": MGMT_API_NOTES if body.mgmt_api else [],
+            "api_notes": api_notes if body.mgmt_api else [],
         }
 
     # -- servers (environment-scoped) ------------------------------------------
