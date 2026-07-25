@@ -187,6 +187,9 @@ class ServerStateRow(BaseModel):
     # Identifiers of packages that are imported but not yet installed — the
     # Management tab's Install picker options.
     installable: list[str] = Field(default_factory=list)
+    # Identifiers of packages currently installed on the host — the
+    # Management tab's Uninstall picker options (see store schema v21).
+    installed: list[str] = Field(default_factory=list)
     # Live ClusterXL role (e.g. "ACTIVE(!)", "STANDBY"), refreshed on every
     # check — see clusterxl.py. None if the host isn't a cluster member, or
     # hasn't been refreshed since this shipped. The cluster's *name* isn't
@@ -485,6 +488,15 @@ _MIGRATIONS: tuple[str, ...] = (
     # upsert_firewall add/edit.
     """
     ALTER TABLE firewalls ADD COLUMN mds_domain TEXT;
+    """,
+    # v21: cache which packages are currently installed on a host, alongside
+    # the already-cached "installable" (imported-but-not-installed) list — the
+    # Management/CPUSE tab's package pickers show both, grouped by type, and
+    # the Uninstall action needs to know which identifiers are valid targets.
+    # JSON list of package identifiers; '[]' for existing rows (unknown until
+    # next refresh) — same convention as installable (v12).
+    """
+    ALTER TABLE server_state ADD COLUMN installed TEXT NOT NULL DEFAULT '[]';
     """,
 )
 
@@ -920,12 +932,13 @@ class Store:
         with self._connect() as conn:
             conn.execute(
                 "INSERT INTO server_state (environment, host, version, jhf, agent_build,"
-                " checked_at, installable, cluster_role)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                " checked_at, installable, cluster_role, installed)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (environment, host) DO UPDATE SET"
                 " version = excluded.version, jhf = excluded.jhf,"
                 " agent_build = excluded.agent_build, checked_at = excluded.checked_at,"
-                " installable = excluded.installable, cluster_role = excluded.cluster_role",
+                " installable = excluded.installable, cluster_role = excluded.cluster_role,"
+                " installed = excluded.installed",
                 (
                     rec.environment,
                     rec.host,
@@ -935,6 +948,7 @@ class Store:
                     rec.checked_at.isoformat(),
                     json.dumps(rec.installable),
                     rec.cluster_role,
+                    json.dumps(rec.installed),
                 ),
             )
 
@@ -1344,6 +1358,7 @@ def _server_state_from_row(row: sqlite3.Row) -> ServerStateRow:
         checked_at=datetime.fromisoformat(row["checked_at"]),
         installable=json.loads(row["installable"]),
         cluster_role=row["cluster_role"],
+        installed=json.loads(row["installed"]),
     )
 
 
