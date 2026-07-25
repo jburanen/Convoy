@@ -49,80 +49,25 @@ Supporting features, all in the UI:
 - **Package store.** Upload CPUSE packages for temporary or permanent storage; upload once, distribute to many.
 - **Background jobs.** Every import/install/CDT action runs as a persisted job with a live progress log, cancellation, and restart recovery.
 
-## Run it (Docker)
+## 🚀 Run it (Docker Compose)
 
-The intended deployment. `docker compose` builds the image and serves the UI on
-`:8080`, with state on a bind-mounted `./data` volume.
+GA releases (beginning v1.0.0) will be a simple docker-compose.yml deployment model plus some environment variables. This project is currently under active early development and for now all deployments need to start with a git clone and the development deployment instructions:  
 
-```bash
-# On the host, in the deploy directory:
-mkdir -p data
-cp examples/config.example.yaml data/config.yaml   # relative paths inside resolve to this dir
-
-# Master key for the credential store — supply via env or a git-ignored .env.
-# Held in memory only; the app boots "locked" (credentials disabled) without it.
-export CHKP_CPUSE_MASTER_KEY='choose-a-strong-passphrase'
-
-# Run the container as the account that owns ./data, so it can write state into
-# the bind mount. Without these the container falls back to uid 1001 and — on
-# any host whose login user isn't 1001 — fails with "Permission denied:
-# /data/state" on first boot.
-export DEPLOY_UID=$(id -u) DEPLOY_GID=$(id -g)
-
-docker compose up -d --build
-# → http://<host>:8080  (GET /health for a probe)
-```
-
-> Or just run `./scripts/deploy.sh`, which sets `DEPLOY_UID`/`DEPLOY_GID` for you
-> (and pulls, rebuilds, and health-checks). `./scripts/deploy.sh --reset` (dev
-> only) wipes `./data` and `.env` first — every environment, server, firewall,
-> credential, package, and job history entry, plus every runtime setting back
-> to its built-in default — then deploys clean. Prompts for confirmation
-> unless you also pass `-y`/`--yes`.
+> ** FOR DEVELOPMENT DEPLOYMENTS**  
+> Run `./scripts/deploy.sh`, which sets `DEPLOY_UID`/`DEPLOY_GID` for you (and pulls, rebuilds, and health-checks). `./scripts/deploy.sh --reset` (dev only) wipes `./data` and `.env` first — every environment, server, firewall, credential, package, and job history entry, plus every runtime setting back to its built-in default — then deploys clean. Prompts for confirmation unless you also pass `-y`/`--yes`.
 
 First run seeds environments from `config.yaml` (+ any inventory files) into the
 database; after that the database is authoritative and environments are managed in
 the UI. On an empty inventory the UI opens on the **Provisioning** tab.
 
-## Deployment for development, testing
-
-```bash
-python -m venv .venv && . .venv/Scripts/activate   # Windows; use bin/activate on *nix
-pip install -e ".[dev,web]"
-
-# Web UI (reload for development):
-export CHKP_CPUSE_MASTER_KEY='choose-a-strong-passphrase'
-uvicorn chkp_cpuse_orch.web.app:app --reload --port 8080
-
-# Or, to also exercise optional native HTTPS (see .env.example):
-export CHKP_CPUSE_SSL_CERTFILE=./certs/fullchain.pem
-export CHKP_CPUSE_SSL_KEYFILE=./certs/privkey.pem
-python -m chkp_cpuse_orch.web
-
-# Secondary CLI (validation + dry-run planning):
-chkp-cpuse-orch validate -i inventory.yaml -c config.yaml
-chkp-cpuse-orch plan "Check_Point_R81.20_JHF_T99.tgz" -i inventory.yaml
-
-pytest
-ruff check . && ruff format .
-mypy src
-```
-
 ## Safety model
 
-This tool has the capability to alter or negatively impact your management servers 
-and firewalls, therefore there are project guidelines designed to limit your risk.
-These concepts are applied by both human and AI developers:
+This tool has the capability to alter or negatively impact your management servers and firewalls, therefore there are project guidelines designed to limit your risk. These concepts are applied by both human and AI developers:  
 
-- **Confirmation-gates** — installs (which can reboot) and CDT fleet
-  execute require an explicit operator confirmation.
-- **Cluster-aware ordering** — the CDT candidates order *is* the rollout order;
-  standby-first sequencing and blast-radius control live there.
-- **Detected state, not assumed** — the UI reflects live `show installer packages`,
-  uploads are checksum-verified, and free space is checked before import.
+- **Confirmation-gates** — installs (which can reboot) and CDT fleet execute require an explicit operator confirmation. Delete actions require explicit operator confirmation.
+- **Cluster-aware ordering** — the CDT candidates order *is* the rollout order; standby-first sequencing and blast-radius control live there.
+- **Detected state, not assumed** — the UI reflects live `show installer packages`, uploads are checksum-verified, and free space is checked before import.
 - **Auditable** — tool actions and job results are tracked on the Jobs tab.
-- **No deletes** - the tool deliberately does not offer the ability to remove packages 
-  from the CPUSE repository or the SmartConsole central repository and cannot delete credentials from firewalls or management servers. This stance may be revisited in future versions.
 
 > Prior to the v1 initial release a policy will be implemented to require code security review by an independent agentic analyst prior to release publication.
 
@@ -142,13 +87,13 @@ implemented and unit-tested. Caveats:
 These gates define the major version releases - the milestones may change in the future but they will remain documented here. A milestone is not marked complete until it is tested and confirmed working by a human. There will not be a packaged release until v1.
 
 ✅ LDAP authentication  
-◻️ Basic auth (default on, admin/admin, changeable password)  
+✅ Basic auth  
 ✅ Native TLS support  
 ✅ Test functionality behind Nginx/NPM  
 ◻️ Test firewall discovery in SMS/Smart Center environment  
 ✅ Test firewall discovery in MDS/Multi-Domain environment  
 ◻️ Test firewall cluster name discovery in SMS  
-◻️ Test firewall cluster name discovery in MDS  
+✅ Test firewall cluster name discovery in MDS  
 ✅ Test Gaia/Force Gateway patching via CPUSE  
 ◻️ Packaged deployment release that doesn't require git clone and --build  
 ◻️ Independent agentic code security review  
@@ -165,7 +110,7 @@ These gates define the major version releases - the milestones may change in the
 ✨ Name the project  
 
 #### Provisioning
-done! 
+Empty is a good sign!
 
 #### Packages
 🤞 Investigate if we can extract and display meta data like compatible major version from the package file  

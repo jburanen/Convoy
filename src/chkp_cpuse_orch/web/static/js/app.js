@@ -573,6 +573,7 @@ document.addEventListener("keydown", (ev) => {
   closeDiscoverModal();
   closePrimaryModal();
   closeServerModal();
+  closeUninstallModal();
   hideWelcome(); // soft close — the welcome dialog returns next load if still fresh
 });
 
@@ -1515,7 +1516,7 @@ async function loadServers() {
     row.querySelector(".srv-name").textContent = srv.name;
     row.querySelector(".srv-address").textContent = srv.address;
     row.querySelector(".srv-role").textContent = roleLabel(srv.role);
-    renderInstallSelect(row, srv.installable ?? [], srv.name);
+    renderInstallSelect(row, srv.installable ?? [], srv.installed ?? [], srv.name);
     row.querySelector(".skip-verify").checked = !!envSkipVerifyDefault[currentEnv];
 
     const stateRow = el("tpl-server-state-row");
@@ -1525,6 +1526,7 @@ async function loadServers() {
       .querySelector(".srv-refresh-link")
       .addEventListener("click", () => refreshState(srv.name, row, stateRow));
     row.querySelector(".btn-install").addEventListener("click", () => installPackage(srv.name, row));
+    row.querySelector(".btn-uninstall").addEventListener("click", () => openUninstallModal("server", srv.name, row));
     tbody.appendChild(row);
     tbody.appendChild(stateRow);
   }
@@ -1614,21 +1616,64 @@ function renderStateRow(stateRow, data) {
   return hasClusterLine;
 }
 
-// Options are the server's cached `installable` list (imported but not yet
-// installed) — refreshed alongside the summary row, never the full package
-// catalog, since installing something not yet on the host is Import's job
-// (not exposed on this page; see the Provisioning tab's Edit modal for
-// credential assignment and .claude/memory/patching-web-design.md for why
-// Import isn't here).
-function renderInstallSelect(row, installable, hostName) {
+// Options are the server's cached `installable` (imported, not yet installed)
+// and `installed` lists — refreshed alongside the summary row, never the
+// full package catalog, since importing something not yet on the host is
+// Import's job (not exposed on this page; see the Provisioning tab's Edit
+// modal for credential assignment and .claude/memory/patching-web-design.md
+// for why Import isn't here). Grouped into optgroups so an operator can tell
+// at a glance which action a given identifier will trigger — selecting one
+// from "Installed" swaps the Install button for a red Uninstall button (see
+// syncActionButtons) rather than exposing separate pickers per action.
+function renderInstallSelect(row, installable, installedPkgs, hostName) {
   const select = row.querySelector(".install-select");
-  const btn = row.querySelector(".btn-install");
-  const ready = installable.length > 0;
   const blocked = !!(hostName && activeJobTargets.has(hostName));
-  select.replaceChildren(new Option(ready ? "— package —" : "— none ready —", ""));
-  for (const id of installable) select.appendChild(new Option(id, id));
-  select.disabled = !ready || blocked;
-  btn.disabled = !ready || blocked;
+  const hasAny = installable.length > 0 || installedPkgs.length > 0;
+  select.replaceChildren(new Option(hasAny ? "— package —" : "— none ready —", ""));
+  if (installable.length) {
+    const group = document.createElement("optgroup");
+    group.label = "Imported — ready to install";
+    for (const id of installable) {
+      const opt = new Option(id, id);
+      opt.dataset.kind = "installable";
+      group.appendChild(opt);
+    }
+    select.appendChild(group);
+  }
+  if (installedPkgs.length) {
+    const group = document.createElement("optgroup");
+    group.label = "Installed";
+    for (const id of installedPkgs) {
+      const opt = new Option(id, id);
+      opt.dataset.kind = "installed";
+      group.appendChild(opt);
+    }
+    select.appendChild(group);
+  }
+  select.disabled = !hasAny || blocked;
+  // Reassigning .onchange (rather than addEventListener) is safe to call
+  // repeatedly — renderInstallSelect re-runs on the same row element every
+  // Refresh, and this avoids piling up duplicate listeners.
+  select.onchange = () => syncActionButtons(row);
+  syncActionButtons(row);
+}
+
+// Toggles which action button is visible/enabled for the row's currently
+// selected package: Install (green) for an "installable" pick, Uninstall
+// (red) for an "installed" one. "skip verify" only applies to installs.
+function syncActionButtons(row) {
+  const select = row.querySelector(".install-select");
+  const installBtn = row.querySelector(".btn-install");
+  const uninstallBtn = row.querySelector(".btn-uninstall");
+  const skipVerifyLabel = row.querySelector(".skip-verify-label");
+  const selected = select.selectedOptions[0];
+  const isUninstall = !!(selected && selected.dataset.kind === "installed");
+  installBtn.classList.toggle("hidden", isUninstall);
+  uninstallBtn.classList.toggle("hidden", !isUninstall);
+  if (skipVerifyLabel) skipVerifyLabel.classList.toggle("hidden", isUninstall);
+  const hasSelection = !!select.value;
+  installBtn.disabled = select.disabled || !hasSelection || isUninstall;
+  uninstallBtn.disabled = select.disabled || !hasSelection || !isUninstall;
 }
 
 async function refreshState(name, row, stateRow) {
@@ -1646,7 +1691,7 @@ async function refreshState(name, row, stateRow) {
       body: JSON.stringify(extra),
     });
     renderStateRow(stateRow, state);
-    renderInstallSelect(row, state.installable ?? [], name);
+    renderInstallSelect(row, state.installable ?? [], state.installed ?? [], name);
   } catch (e) {
     cacheEvictCreds(name); // a cached wrong/stale password re-prompts next time
     summary.textContent = "detect failed: " + e.message;
@@ -1700,6 +1745,70 @@ async function installPackage(name, row) {
     toast("Install failed to start: " + e.message);
   }
 }
+
+/* ---------- 3a-uninstall. uninstall confirmation modal (servers + firewalls) --- */
+
+// Uninstall is destructive (reverts the host to a prior version, may reboot
+// it) so it gets its own modal requiring the operator to type the exact
+// target host name, rather than installPackage's plain confirm() dialog.
+// Shared by both the Management tab's server rows and the Firewalls panel —
+// `kind` ("server" | "firewall") picks the API path.
+let uninstallModalCtx = null;
+
+function openUninstallModal(kind, name, row) {
+  const select = row.querySelector(".install-select");
+  const packageId = select.value;
+  if (!packageId) { toast("Choose a package first."); return; }
+  uninstallModalCtx = { kind, name, packageId };
+  document.getElementById("uninstall-modal-package").textContent = packageId;
+  document.getElementById("uninstall-modal-host").textContent = name;
+  document.getElementById("uninstall-modal-host-echo").textContent = name;
+  const input = document.getElementById("uninstall-modal-confirm-name");
+  input.value = "";
+  document.getElementById("uninstall-modal-submit").disabled = true;
+  document.getElementById("uninstall-modal").classList.remove("hidden");
+  input.focus();
+}
+
+function closeUninstallModal() {
+  document.getElementById("uninstall-modal").classList.add("hidden");
+  uninstallModalCtx = null;
+}
+
+document.getElementById("uninstall-modal-confirm-name").addEventListener("input", (ev) => {
+  document.getElementById("uninstall-modal-submit").disabled =
+    !(uninstallModalCtx && ev.target.value === uninstallModalCtx.name);
+});
+
+document.getElementById("uninstall-modal-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  if (!uninstallModalCtx) return;
+  const { kind, name, packageId } = uninstallModalCtx;
+  const submit = document.getElementById("uninstall-modal-submit");
+  submit.disabled = true;
+  const base = kind === "firewall" ? "firewalls" : "servers";
+  const extra = await operationCredentials(name, "uninstall a package");
+  if (extra === null) { submit.disabled = false; return; } // credential prompt cancelled
+  try {
+    await api(envUrl(`/${base}/${encodeURIComponent(name)}/uninstall`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ package_id: packageId, confirmed: true, ...extra }),
+    });
+    await loadJobs();
+    closeUninstallModal();
+  } catch (e) {
+    cacheEvictCreds(name);
+    toast("Uninstall failed to start: " + e.message);
+    submit.disabled = false;
+  }
+});
+
+document.getElementById("uninstall-modal-close").addEventListener("click", closeUninstallModal);
+document.getElementById("uninstall-modal-cancel").addEventListener("click", closeUninstallModal);
+document.getElementById("uninstall-modal").addEventListener("click", (ev) => {
+  if (ev.target.id === "uninstall-modal") closeUninstallModal(); // backdrop click cancels
+});
 
 /* ---------- 3a. bulk import (above the servers table) ---------- */
 
@@ -1880,7 +1989,7 @@ async function loadFirewalls() {
     row.querySelector(".fw-role").textContent = roleLabel(fw.role);
     row.querySelector(".fw-creds").textContent =
       (state && state.credential_set) || "none — not assigned";
-    renderInstallSelect(row, state?.installable ?? [], fw.name);
+    renderInstallSelect(row, state?.installable ?? [], state?.installed ?? [], fw.name);
     row.querySelector(".skip-verify").checked = !!envSkipVerifyDefault[currentEnv];
 
     const stateRow = el("tpl-firewall-state-row");
@@ -1891,6 +2000,7 @@ async function loadFirewalls() {
       .querySelector(".srv-refresh-link")
       .addEventListener("click", () => refreshFirewallState(fw.name, row, stateRow));
     row.querySelector(".btn-install").addEventListener("click", () => installFirewallPackage(fw.name, row));
+    row.querySelector(".btn-uninstall").addEventListener("click", () => openUninstallModal("firewall", fw.name, row));
     // The name itself is the row's only Edit trigger now — Remove lives inside
     // the modal it opens, rather than its own row button.
     row.querySelector(".fw-name-link").addEventListener("click", () => {
@@ -1927,7 +2037,7 @@ async function refreshFirewallState(name, row, stateRow) {
     });
     const hasClusterLine = renderStateRow(stateRow, state);
     row.classList.toggle("fw-cluster-member", hasClusterLine);
-    renderInstallSelect(row, state.installable ?? [], name);
+    renderInstallSelect(row, state.installable ?? [], state.installed ?? [], name);
   } catch (e) {
     cacheEvictCreds(name); // a cached wrong/stale password re-prompts next time
     summary.textContent = "detect failed: " + e.message;

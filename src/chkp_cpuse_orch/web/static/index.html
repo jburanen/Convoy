@@ -849,6 +849,36 @@
   </div>
 </div>
 
+<!-- ============ Uninstall confirmation modal (CPUSE / Management tabs) ====== -->
+<!-- Uninstall is destructive (reverts the host to a prior version, may reboot
+     it) so — unlike Install's confirm() dialog — this requires the operator to
+     type the exact target host name before the Uninstall button is enabled,
+     the same "type to confirm" pattern used for other high-blast-radius
+     actions elsewhere in the app. -->
+<div id="uninstall-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="uninstall-modal-title">
+  <div class="modal-card narrow">
+    <div class="modal-head">
+      <h2 id="uninstall-modal-title">Uninstall package</h2>
+      <button id="uninstall-modal-close" class="small" title="Close">✕</button>
+    </div>
+    <p class="hint">
+      Uninstalling <strong id="uninstall-modal-package"></strong> from
+      <strong id="uninstall-modal-host"></strong> may revert it to a prior version and
+      reboot it when it completes. Make sure this is inside a maintenance window and any
+      HA peer is healthy.
+    </p>
+    <form id="uninstall-modal-form">
+      <label>Type <strong id="uninstall-modal-host-echo"></strong> to confirm
+        <input type="text" id="uninstall-modal-confirm-name" autocomplete="off" required>
+      </label>
+      <div class="cred-modal-actions">
+        <button type="submit" id="uninstall-modal-submit" class="danger" disabled>Uninstall</button>
+        <button type="button" id="uninstall-modal-cancel" class="secondary">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <footer>
   <div class="footer-main">
   <a id="footer-repo" href="https://github.com/jburanen/chkp-cpuse-orch" target="_blank" rel="noopener">
@@ -867,7 +897,7 @@
     <span id="footer-version" class="muted"></span>
   </div>
   <div class="footer-notes muted">
-    <span>Written by Claude under the direction of humans. Even with a whole mess of robots doing the work, we still manage to introduce human error. Deploy, <strong>test</strong>, and use this tool with appropriate caution.</span>
+    <span>Written by Claude under the direction of humans. Deploy, <strong>test</strong>, and use this tool with appropriate caution.</span>
     <span>Ideas? <a class="footer-link" href="https://github.com/jburanen/chkp-cpuse-orch/issues/new?labels=enhancement" target="_blank" rel="noopener">Submit an issue</a> at Github with the Enhancement label.</span>
   </div>
 </footer>
@@ -924,6 +954,7 @@
           <input type="checkbox" class="skip-verify"> skip verify
         </label>
         <button class="btn-install small success">Install</button>
+        <button class="btn-uninstall small danger hidden">Uninstall</button>
       </div>
     </td>
   </tr>
@@ -962,6 +993,7 @@
           <input type="checkbox" class="skip-verify"> skip verify
         </label>
         <button class="btn-install small success">Install</button>
+        <button class="btn-uninstall small danger hidden">Uninstall</button>
       </div>
     </td>
   </tr>

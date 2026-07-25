@@ -579,9 +579,16 @@ tr.srv-row.fw-cluster-member td { padding-bottom: 0.225rem; }
    the Firewall column (.fw-name), which is unstyled body text. */
 #firewalls-table .mono { font-family: inherit; font-size: inherit; }
 /* The firewall name doubles as the row's Edit trigger (opens the edit modal) —
-   flush left like plain cell text, not indented like an inline "Refresh" link
-   that follows other text. */
-.fw-name-link { margin-left: 0; }
+   flush left like plain cell text (matching the Server column, .srv-name, which
+   is unstyled text with no button), not indented like an inline "Refresh" link
+   that follows other text. margin-left alone isn't enough: a <button>'s native
+   appearance carries a few px of built-in inset that padding:0/border:none don't
+   remove — appearance:none hands that spacing back to plain CSS. */
+.fw-name-link {
+  margin-left: 0;
+  -webkit-appearance: none;
+  appearance: none;
+}
 /* A flex wrapper *inside* the cell, not the <td> itself — display: flex
    directly on a table-cell risks it dropping out of column-width
    calculations in some browsers. */

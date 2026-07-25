@@ -236,6 +236,11 @@ class InstallRequest(OperationCredentials):
     verify_first: bool = True
 
 
+class UninstallRequest(OperationCredentials):
+    package_id: str  # CPUSE identifier as shown by detect (must be Installed)
+    confirmed: bool = False  # UI must send True after the operator types the host's name
+
+
 class RetentionRequest(BaseModel):
     pinned: bool  # True → keep indefinitely; False → apply the retention window
 
@@ -1083,6 +1088,7 @@ def _register_routes(app: FastAPI) -> None:
                         "agent_build": cached.agent_build if cached else None,
                         "checked_at": cached.checked_at.isoformat() if cached else None,
                         "installable": cached.installable if cached else [],
+                        "installed": cached.installed if cached else [],
                         "cluster_role": cached.cluster_role if cached else None,
                     }
                 )
@@ -1116,6 +1122,7 @@ def _register_routes(app: FastAPI) -> None:
             "jhf": cached.jhf,
             "checked_at": cached.checked_at.isoformat(),
             "installable": cached.installable,
+            "installed": cached.installed,
             "cluster_role": cached.cluster_role,
             "packages": [
                 {
@@ -1204,6 +1211,22 @@ def _register_routes(app: FastAPI) -> None:
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
+    @app.post("/api/env/{env}/servers/{name}/uninstall", status_code=202)
+    def server_uninstall(
+        env: str, name: str, body: UninstallRequest, request: Request
+    ) -> JobRecord:
+        try:
+            return _service(request).submit_uninstall(
+                env,
+                name,
+                body.package_id,
+                confirmed=body.confirmed,
+                credentials=_build_credentials(body.credentials, name, env),
+                triggered_by=_current_user(request),
+            )
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+
     # -- firewalls (patching view; same CPUSE mechanics as servers) --------------
     # These are thin wrappers around the exact same PatchingService methods used
     # above — CPUSE import/install doesn't care whether the target is a
@@ -1236,6 +1259,7 @@ def _register_routes(app: FastAPI) -> None:
                         "agent_build": cached.agent_build if cached else None,
                         "checked_at": cached.checked_at.isoformat() if cached else None,
                         "installable": cached.installable if cached else [],
+                        "installed": cached.installed if cached else [],
                         "cluster_role": cached.cluster_role if cached else None,
                         "cluster_name": fw_row.cluster_name if fw_row else None,
                         "mds_domain": fw_row.mds_domain if fw_row else None,
@@ -1266,6 +1290,7 @@ def _register_routes(app: FastAPI) -> None:
             "jhf": cached.jhf,
             "checked_at": cached.checked_at.isoformat(),
             "installable": cached.installable,
+            "installed": cached.installed,
             "cluster_role": cached.cluster_role,
             "cluster_name": fw_row.cluster_name if fw_row else None,
             "mds_domain": fw_row.mds_domain if fw_row else None,
@@ -1410,6 +1435,22 @@ def _register_routes(app: FastAPI) -> None:
                 body.package_id,
                 confirmed=body.confirmed,
                 verify_first=body.verify_first,
+                credentials=_build_credentials(body.credentials, name, env),
+                triggered_by=_current_user(request),
+            )
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+
+    @app.post("/api/env/{env}/firewalls/{name}/uninstall", status_code=202)
+    def firewall_uninstall(
+        env: str, name: str, body: UninstallRequest, request: Request
+    ) -> JobRecord:
+        try:
+            return _service(request).submit_uninstall(
+                env,
+                name,
+                body.package_id,
+                confirmed=body.confirmed,
                 credentials=_build_credentials(body.credentials, name, env),
                 triggered_by=_current_user(request),
             )

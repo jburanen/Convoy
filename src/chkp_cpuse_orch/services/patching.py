@@ -98,6 +98,7 @@ __all__ = [
     "JOB_IMPORT",
     "JOB_IMPORT_CLOUD",
     "JOB_INSTALL",
+    "JOB_UNINSTALL",
     "ClientFactory",
     "DiskSpaceCheck",
     "EnvironmentRegistry",
@@ -109,6 +110,7 @@ __all__ = [
 JOB_IMPORT = "cpuse.import"
 JOB_IMPORT_CLOUD = "cpuse.import_cloud"
 JOB_INSTALL = "cpuse.install"
+JOB_UNINSTALL = "cpuse.uninstall"
 
 # Generous cap on captured install-log content — CPUSE logs are normally KBs,
 # this just bounds a pathological case from bloating the DB / archive file.
@@ -203,6 +205,7 @@ class PatchingService:
         runner.register(JOB_IMPORT, self._import_job)
         runner.register(JOB_IMPORT_CLOUD, self._import_cloud_job)
         runner.register(JOB_INSTALL, self._install_job)
+        runner.register(JOB_UNINSTALL, self._uninstall_job)
 
     # -- queries -----------------------------------------------------------------
 
@@ -281,6 +284,7 @@ class PatchingService:
         right after a successful import, reusing the same open connection)."""
         summary = summarize_jumbo(packages)
         installable = [p.identifier for p in packages if p.is_imported and not p.is_installed]
+        installed = [p.identifier for p in packages if p.is_installed]
         self._store.upsert_server_state(
             ServerStateRow(
                 environment=environment,
@@ -291,6 +295,7 @@ class PatchingService:
                 checked_at=utcnow(),
                 installable=installable,
                 cluster_role=cluster.role if cluster else None,
+                installed=installed,
             )
         )
 
@@ -406,6 +411,40 @@ class PatchingService:
             triggered_by=triggered_by,
         )
 
+    def submit_uninstall(
+        self,
+        environment: str,
+        host_name: str,
+        package_id: str,
+        *,
+        confirmed: bool,
+        credentials: CredentialBundle | None = None,
+        triggered_by: str | None = None,
+    ) -> JobRecord:
+        """Enqueue an uninstall of a currently-installed package. ``confirmed``
+        must be True — uninstalling can revert the host to a prior version and
+        may reboot it, the same blast radius as install; the UI collects an
+        explicit operator confirmation (typing the host's name), never a
+        default."""
+        if not confirmed:
+            raise JobError(
+                "uninstall requires explicit confirmation — it may reboot the host and "
+                "reverts it to a prior version"
+            )
+        connector = self.registry.get(environment)
+        host = connector.patchable_host(host_name)
+        self._ensure_host_free(environment, host_name)
+        return submit_host_job(
+            self.runner,
+            self._vault,
+            connector,
+            host,
+            JOB_UNINSTALL,
+            params={"package_id": package_id},
+            credentials=credentials,
+            triggered_by=triggered_by,
+        )
+
     # -- job handlers (async wrappers over blocking SSH work) ----------------------
 
     async def _import_job(self, ctx: JobContext) -> None:
@@ -416,6 +455,9 @@ class PatchingService:
 
     async def _install_job(self, ctx: JobContext) -> None:
         await asyncio.to_thread(self._do_install, ctx)
+
+    async def _uninstall_job(self, ctx: JobContext) -> None:
+        await asyncio.to_thread(self._do_uninstall, ctx)
 
     def _do_import(self, ctx: JobContext) -> None:
         connector = self.registry.get(ctx.job.environment)
@@ -686,6 +728,110 @@ class PatchingService:
             ctx.log("detected state refreshed")
         except OrchestratorError as exc:
             ctx.log(f"could not refresh detected state: {exc}", level="warning")
+
+    def _do_uninstall(self, ctx: JobContext) -> None:
+        connector = self.registry.get(ctx.job.environment)
+        host = connector.patchable_host(ctx.job.target or "")
+        package_id = str(ctx.job.params["package_id"])
+
+        creds = job_run_credentials(connector, self._vault, ctx.job)
+        client = connector.connect(host, creds)
+        try:
+            cpuse = CPUSE(client, shell=self._shell)
+            ctx.raise_if_cancelled()  # last safe stop; uninstall may reboot the host
+            ctx.log(f"uninstalling {package_id} — host may reboot when this completes")
+            output = cpuse.uninstall(package_id)
+            if output:
+                ctx.log(f"installer uninstall output:\n{output}")
+            ctx.log(
+                "uninstall command returned — CPUSE processes it asynchronously, "
+                "confirming via `show installer packages` before declaring success"
+            )
+        finally:
+            client.close()
+
+        uninstalled, last_detail = self._wait_until_uninstalled(
+            connector, host, creds, package_id, ctx
+        )
+        if not uninstalled:
+            status = last_detail.status if last_detail else "unknown"
+            raise CPUSEError(
+                f"{package_id} still shows as Installed via `show installer packages` "
+                f"after waiting (last status: {status!r}) — check CPUSE state on the "
+                "host; the uninstall may have failed, still be in progress, or be "
+                "waiting on a reboot"
+            )
+        ctx.log(f"confirmed: {package_id} is no longer installed")
+
+        ctx.log("refreshing detected state (version/JHF/packages ready to install)")
+        try:
+            self.detect(ctx.job.environment, host.name, credentials=creds)
+            ctx.log("detected state refreshed")
+        except OrchestratorError as exc:
+            ctx.log(f"could not refresh detected state: {exc}", level="warning")
+
+    def _wait_until_uninstalled(
+        self,
+        connector: HostConnector,
+        host: Host,
+        creds: CredentialBundle | None,
+        package_id: str,
+        ctx: JobContext,
+    ) -> tuple[bool, PackageState | None]:
+        """Poll `show installer packages all` until package_id no longer shows
+        as Installed — absent from the list entirely counts too, since some
+        package types drop out of it once uninstalled rather than reverting
+        to Imported. Uses the list query (like _wait_until_imported) rather
+        than the single-package detail view (`show installer package <id>`,
+        as _wait_until_installed uses), since that command's own failure mode
+        for an unknown identifier is unconfirmed and this needs to tolerate
+        the id disappearing outright. Same reboot-tolerant reconnect behavior
+        as _wait_until_installed — a package whose install required a reboot
+        commonly needs one to revert too, so a dropped connection mid-poll
+        reconnects and keeps waiting instead of failing closed."""
+        client: Transport | None = None
+        last_detail: PackageState | None = None
+        last_logged_status: str | None = None
+        try:
+            for attempt in range(1, self._install_verify_attempts + 1):
+                will_continue = attempt < self._install_verify_attempts
+                try:
+                    if client is None:
+                        client = connector.connect(host, creds)
+                    packages = CPUSE(client, shell=self._shell).list_packages(PackageScope.ALL)
+                except TransportError as exc:
+                    ctx.log(
+                        f"lost contact checking uninstall status (expected mid-reboot): {exc}",
+                        level="warning",
+                    )
+                    client = None
+                    if will_continue:
+                        time.sleep(self._install_verify_delay)
+                    continue
+                except CPUSEError as exc:
+                    ctx.log(f"could not read uninstall status yet: {exc}", level="warning")
+                    if will_continue:
+                        time.sleep(self._install_verify_delay)
+                    continue
+
+                match = next((p for p in packages if p.identifier == package_id), None)
+                last_detail = match
+                if match is None or not match.is_installed:
+                    ctx.log(
+                        f"uninstall complete: {package_id!r} is now "
+                        f"{match.status if match else 'no longer listed'}"
+                    )
+                    return True, last_detail
+
+                if match.status != last_logged_status:
+                    ctx.log(f"status: {match.status}")
+                    last_logged_status = match.status
+                if will_continue:
+                    time.sleep(self._install_verify_delay)
+            return False, last_detail
+        finally:
+            if client is not None:
+                client.close()
 
     def _wait_until_installed(
         self,

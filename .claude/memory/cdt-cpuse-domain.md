@@ -117,6 +117,26 @@ CLI syntax — Check Point changes these across releases.)
     (`JobRecord.install_log`, store schema v13) once available, and the Jobs
     tab renders it as a permanent line under the job row — the same pattern
     as the package hash lines on the Packages tab.
+- **Uninstall wired up end-to-end** (2026-07-24, implemented but not yet
+  operator-confirmed against a real device): `CPUSE.uninstall()` existed as a
+  thin wrapper already but nothing above it called it. Added `JOB_UNINSTALL`
+  (`PatchingService.submit_uninstall`/`_do_uninstall`) plus
+  `POST /servers|firewalls/{name}/uninstall`. Confirmation polling
+  (`_wait_until_uninstalled`) deliberately polls `show installer packages
+  all` (like `_wait_until_imported`) rather than the single-item `show
+  installer package <id>` detail view `_wait_until_installed` uses — whether
+  `package_detail()` errors or returns something parseable once an id is
+  fully uninstalled (vs. reverting to "Imported") is unconfirmed, and the
+  list query tolerates the id disappearing outright (treated as success).
+  Same reboot-tolerant reconnect loop as `_wait_until_installed`, since
+  reverting an install that required a reboot commonly needs one too. The
+  server_state cache gained a parallel `installed` list (store schema v21,
+  alongside the existing `installable`) so the Management/CPUSE tab's
+  package picker can show both imported and installed packages, grouped by
+  type — picking an installed one swaps the Install button for a red
+  Uninstall button gated by a "type the host name to confirm" modal (higher
+  friction than Install's plain `confirm()`, since uninstall is more likely
+  to be a destructive mistake).
 - **Management servers are patched with CPUSE locally**, not via CDT.
 
 **CDT — Central Deployment Tool** (reference: sk111158; confirmed via docs MCP)
