@@ -10,14 +10,24 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Sign in — chkp-cpuse-orch</title>
+  <title>Sign in — Convoy</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/css/app.css">
 </head>
 <body>
 
 <main>
   <section id="login-card">
-    <h2>Check Point Patch Management</h2>
+    <!-- inline copy of favicon.svg so the login page stays a single request -->
+    <svg id="login-logo" viewBox="0 0 32 32" aria-hidden="true">
+      <path d="M16 1.5 27 5.5v8.2c0 8.1-4.7 13.9-11 16.8-6.3-2.9-11-8.7-11-16.8V5.5Z" fill="#0a6cbd"/>
+      <g transform="translate(9,9) scale(0.583)" fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="23 4 23 10 17 10"/>
+        <polyline points="1 20 1 14 7 14"/>
+        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+      </g>
+    </svg>
+    <h2>Convoy</h2>
     <!-- <p class="hint">Sign in with your directory account to continue.</p> -->
 
     <form id="login-form">

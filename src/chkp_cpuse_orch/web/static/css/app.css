@@ -226,6 +226,9 @@ section {
    header is a .section-head row with a button (which uses the same value). */
 section h2 { margin: 0 0 0.75rem; font-size: 1.15rem; }
 .hint { color: var(--muted); font-size: 0.9rem; margin-top: 0; }
+.sk-link,
+.sk-link:hover,
+.sk-link:visited { color: var(--text); }
 
 /* Panel header row: title left, an action button on the right edge, in line. */
 .section-head {
@@ -849,7 +852,11 @@ tr.srv-row.fw-cluster-member td { padding-bottom: 0.225rem; }
 #login-card {
   max-width: 22rem;
   margin: 3rem auto 0;
+  text-align: center;
 }
+#login-logo { display: block; width: 3rem; height: 3rem; margin: 0 auto 0.75rem; }
+#login-card .login-field,
+#login-card .login-error { text-align: left; }
 #login-form { flex-direction: column; align-items: stretch; }
 .login-field { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.9rem; }
 .login-field input { width: 100%; }
