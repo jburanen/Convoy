@@ -1,4 +1,4 @@
-# chkp-cpuse-orch
+# Convoy
 
 Orchestration layer for Check Point's **Central Deployment Tool (CDT)** and **CPUSE**. It coordinates deployment of patches and upgrades — hotfixes, Jumbo Hotfix Accumulators, and major-version upgrades — across fleets of Security Management Servers and Security Gateways, through a web interface.  
 
@@ -22,7 +22,7 @@ By design, this tool does NOT support patching:
 ❌ Firewalls defined as dynamic IP (DAIP)  *(code limitation)*  
 ❌ Spark firewalls managed by above on-prem environments  *(code limitation)*  
 
-This tool does not CURRENTLY support but may one day support:
+This tool does not CURRENTLY support but may one day support:  
 ⏳ Maestro  
 ⏳ ElasticXL  
 
@@ -57,7 +57,7 @@ First run seeds environments from `config.yaml` (+ any inventory files) into the
 database; after that the database is authoritative and environments are managed in
 the UI. On an empty inventory the UI opens on the **Provisioning** tab.
 
-## Safety model
+## 🛡️ Safety model
 
 This tool has the capability to alter or negatively impact your management servers and firewalls, therefore there are project guidelines designed to limit your risk. These concepts are applied by both human and AI developers:  
 
