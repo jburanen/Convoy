@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from chkp_cpuse_orch.config import Config, EnvironmentDef, Paths
 from chkp_cpuse_orch.credentials import MASTER_KEY_ENV
+from chkp_cpuse_orch.store import JobRecord, JobStatus
 from chkp_cpuse_orch.web.app import create_app
 from chkp_cpuse_orch.web.auth import AuthSettings
 
@@ -882,6 +883,71 @@ def test_import_flow_end_to_end(client: TestClient, transport: FakeTransport) ->
     events = client.get(f"/api/jobs/{job['id']}/events").json()
     assert any("confirmed: package is listed as imported" in e["message"] for e in events)
     assert transport.puts[0][1] == "/var/log/upload/jhf.tgz"
+
+
+def test_recheck_import_route_resolves_timed_out_job(
+    client: TestClient, transport: FakeTransport
+) -> None:
+    """Simulates the Jobs tab's "Check status" link without waiting out a
+    real 5-minute poll: inserts a TIMED_OUT cpuse.import job directly (same
+    shape submit_import would have produced), same as the server would once
+    _wait_until_imported gave up — then hits the route the "Check status"
+    link calls."""
+    _add_ssh_credential(client)
+    _upload_package(client)
+    store = client.app.state.store
+    job = JobRecord(
+        kind="cpuse.import",
+        target="mgmt-01",
+        environment="default",
+        params={"package": "jhf.tgz"},
+    )
+    store.insert_job(job)
+    store.finish_job(job.id, JobStatus.TIMED_OUT, error="gave up waiting")
+
+    resp = client.post(f"/api/jobs/{job.id}/recheck-import", json={})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "succeeded"
+
+    events = client.get(f"/api/jobs/{job.id}/events").json()
+    assert any("manual check: confirmed" in e["message"] for e in events)
+
+
+def test_recheck_import_route_leaves_job_timed_out_when_still_not_imported(
+    client: TestClient, transport: FakeTransport
+) -> None:
+    _add_ssh_credential(client)
+    _upload_package(client)
+    transport.responses["show installer packages imported"] = ""
+    store = client.app.state.store
+    job = JobRecord(
+        kind="cpuse.import",
+        target="mgmt-01",
+        environment="default",
+        params={"package": "jhf.tgz"},
+    )
+    store.insert_job(job)
+    store.finish_job(job.id, JobStatus.TIMED_OUT, error="gave up waiting")
+
+    resp = client.post(f"/api/jobs/{job.id}/recheck-import", json={})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "timed_out"
+
+
+def test_recheck_import_route_rejects_job_that_is_not_timed_out(
+    client: TestClient, transport: FakeTransport
+) -> None:
+    _add_ssh_credential(client)
+    _upload_package(client)
+
+    resp = client.post("/api/env/default/servers/mgmt-01/import", json={"package": "jhf.tgz"})
+    job = _wait_for_job(client, resp.json()["id"])
+    assert job["status"] == "succeeded", job["error"]
+
+    resp = client.post(f"/api/jobs/{job['id']}/recheck-import", json={})
+    assert resp.status_code == 400
+    assert "isn't timed out" in resp.json()["detail"]
 
 
 def test_import_cloud_flow_end_to_end(client: TestClient, transport: FakeTransport) -> None:

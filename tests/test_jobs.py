@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from chkp_cpuse_orch.errors import JobError
-from chkp_cpuse_orch.jobs import JobContext, JobRunner
+from chkp_cpuse_orch.jobs import JobContext, JobRunner, JobTimedOut
 from chkp_cpuse_orch.store import JobRecord, JobStatus, Store
 
 
@@ -71,6 +71,43 @@ def test_cooperative_cancel_between_steps(store: Store, runner: JobRunner) -> No
     messages = [e.message for e in store.events(job.id)]
     assert "never reached" not in messages
     assert "job cancelled" in messages
+
+
+def test_log_replace_overwrites_the_previous_line_instead_of_appending(
+    store: Store, runner: JobRunner
+) -> None:
+    async def handler(ctx: JobContext) -> None:
+        ctx.log("before")
+        seq = None
+        for attempt in range(1, 6):
+            event = ctx.log(f"still waiting (check {attempt}/5)", replace=seq)
+            seq = event.seq
+        ctx.log("after")
+
+    runner.register("chatty-poll", handler)
+    job = runner.submit("chatty-poll")
+    asyncio.run(runner.run_until_idle())
+
+    messages = [e.message for e in store.events(job.id)]
+    # 5 replace calls collapse to one line — not one line per attempt.
+    assert messages == ["before", "still waiting (check 5/5)", "after", "job succeeded"]
+
+
+def test_handler_raising_job_timed_out_marks_timed_out_not_failed(
+    store: Store, runner: JobRunner
+) -> None:
+    async def handler(ctx: JobContext) -> None:
+        raise JobTimedOut("gave up waiting for confirmation")
+
+    runner.register("slow", handler)
+    job = runner.submit("slow")
+    asyncio.run(runner.run_until_idle())
+
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.TIMED_OUT
+    assert finished.error == "gave up waiting for confirmation"
+    messages = [e.message for e in store.events(job.id)]
+    assert "job timed out: gave up waiting for confirmation" in messages
 
 
 def test_cancel_while_still_pending_never_runs(store: Store, runner: JobRunner) -> None:

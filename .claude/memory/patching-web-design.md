@@ -51,11 +51,40 @@ UI is the primary interface (see [[architecture]]); the CLI is secondary.
     /var/log/upload/"* — while our job still reported **succeeded**. Fix in
     `PatchingService._wait_until_imported`: after `import_local`, poll `show
     installer packages imported` (via `CPUSE.list_packages(PackageScope.IMPORTED)`)
-    until the package actually appears (default 60 attempts × 5s = 5 min) before
-    declaring success or touching the temp file; if it never shows up, the job
-    **fails** and the temp copy is left in place for manual investigation. Matches
-    by exact identifier or filename-stem substring (identifier format drifts across
-    Gaia versions — see `cpuse.parse_packages`).
+    until the package actually appears (default 30 attempts × 10s = 5 min) before
+    declaring success or touching the temp file. Matches by exact identifier or
+    filename-stem substring (identifier format drifts across Gaia versions — see
+    `cpuse.parse_packages`).
+  - **A timeout is TIMED_OUT, not FAILED** (operator-specified, 2026-07-25 — imports
+    "can sometimes take many minutes"). `JobStatus.TIMED_OUT` (new) + `JobTimedOut`
+    (jobs.py, caught in `JobRunner._run` alongside `JobCancelled`) exist because a
+    poll giving up isn't a verdict — CPUSE may still be working server-side. The temp
+    copy is left in place either way, same as before. The Jobs tab shows a "Check
+    status" text link (`button.link-btn`, reused from the per-row Refresh links) on
+    any TIMED_OUT `cpuse.import` row — `POST /api/jobs/{id}/recheck-import` →
+    `PatchingService.recheck_import`, one more live `show installer packages
+    imported` look reusing the same match logic (`_is_imported_now`, factored out of
+    `_wait_until_imported` for this). If it now shows up: resolves the job to
+    SUCCEEDED, cleans up the temp copy, refreshes cached state — same as the
+    automatic path would have. If not: stays TIMED_OUT, just logs the negative
+    check, operator can try again later. Route derives host/environment from the
+    job record itself (not the URL) since a TIMED_OUT job's in-memory credentials
+    are already purged by `JobRunner`'s `on_job_finished` — a storage-disabled
+    environment needs credentials re-supplied, so `operationCredentials()` gained an
+    optional third `env` param (defaulting to `currentEnv`) since the Jobs tab isn't
+    scoped to one environment the way every other credential-prompting action is.
+  - **Polling progress lines overwrite in place, not stack** (operator-specified,
+    2026-07-25 — a slow import polling every 10s for 5 minutes could leave ~30
+    near-identical "not yet listed as imported" lines to scroll through).
+    `Store.update_event(job_id, seq, message, level)` UPDATEs an existing
+    `job_events` row instead of inserting; `JobContext.log(msg, replace=seq)` uses
+    it when `replace` is given and now returns the `JobEvent` (previously `None`)
+    so callers can chain the next replacement off its `seq`. `_wait_until_imported`
+    tracks one `progress_seq` across its loop, so the "still waiting (check N/M)"
+    line updates itself each attempt instead of accumulating — the operator still
+    sees a live attempt counter and timestamp, just as one line. The Jobs tab needed
+    no frontend change: `refreshJobLogRow` already refetches and re-renders the full
+    event list every poll rather than appending incrementally.
 
 ## Decisions locked (2026-07-17)
 - **Gaia auth = both/mixed.** SSH key for the transport; admin **password** for

@@ -27,7 +27,16 @@ CPUSE mechanics below don't care which kind of Gaia host they're talking to:
   successful — matching by filename *or* by the version+Take pair read out
   of the package's own hf.config (see hfconfig.py), since CPUSE renders some
   package types (JHFs) as a human-readable string with no relation to the
-  uploaded filename (e.g. "R82.10 Jumbo Hotfix Accumulator Take 24").
+  uploaded filename (e.g. "R82.10 Jumbo Hotfix Accumulator Take 24"). If it
+  still hasn't shown up after `import_verify_attempts * import_verify_delay`
+  (default 30 * 10s = 5 minutes — this can genuinely take a while), the job
+  finishes as TIMED_OUT rather than FAILED: CPUSE may still be working, so
+  this isn't a verdict. The temp copy is left in place either way. The Jobs
+  tab offers a manual "Check status" recheck on a TIMED_OUT import job
+  (`PatchingService.recheck_import`) — one more live look at `show installer
+  packages imported`; if it now shows up, the job is resolved to SUCCEEDED,
+  the temp copy is cleaned up, and detected state is refreshed, same as the
+  automatic path. If not, the job stays TIMED_OUT for another try later.
 - **import_cloud**  — direct the host to fetch + import a package from Check
   Point's cloud repository by identifier; no local file involved
 - **install**        — optional `installer verify`, then `installer install`, then
@@ -82,7 +91,7 @@ from ..credentials import CredentialBundle, JobCredentialVault
 from ..errors import CPUSEError, JobError, OrchestratorError, PreCheckError, TransportError
 from ..hfconfig import HfConfig, extract_hf_config
 from ..inventory import Host
-from ..jobs import JobContext, JobRunner
+from ..jobs import JobContext, JobRunner, JobTimedOut
 from ..packages import PackageStore
 from ..store import JobRecord, JobStatus, ServerStateRow, Store, utcnow
 from .common import (
@@ -139,6 +148,33 @@ def _fmt_bytes(n: int) -> str:
     return f"{size:.1f} TB"
 
 
+def _is_imported_now(cpuse: CPUSE, package_filename: str, hf_config: HfConfig | None) -> bool:
+    """One live `show installer packages imported` look for the given
+    package. A candidate matches if *either* its identifier is (or contains
+    the stem of) the uploaded filename, *or* — since CPUSE renders some
+    package types (JHFs) as a human-readable string unrelated to the
+    filename, e.g. "R82.10 Jumbo Hotfix Accumulator Take 24" — its
+    identifier's own version+Take equal the ones recorded in the package's
+    hf.config. Either check alone can mismatch depending on the package
+    type, so both run and either is sufficient. Shared by
+    PatchingService._wait_until_imported (polling) and .recheck_import (a
+    single manual check after a timeout)."""
+    stem = package_filename.rsplit(".", 1)[0]
+    expect_version = hf_config.direct_base_version if hf_config else None
+    expect_take = hf_config.take_number if hf_config else None
+    for pkg in cpuse.list_packages(PackageScope.IMPORTED):
+        if pkg.identifier == package_filename or stem in pkg.identifier:
+            return True
+        if (
+            expect_version is not None
+            and expect_take is not None
+            and cpuse_extract_version(pkg.identifier) == expect_version
+            and cpuse_extract_take(pkg.identifier) == expect_take
+        ):
+            return True
+    return False
+
+
 @dataclass
 class DetectedState:
     """Live CPUSE state of one host, as the UI shows it."""
@@ -176,8 +212,8 @@ class PatchingService:
         store: Store,
         staging_dir: str = DEFAULT_STAGING_DIR,
         shell: GaiaShell = GaiaShell.EXPERT,
-        import_verify_attempts: int = 60,
-        import_verify_delay: float = 5.0,
+        import_verify_attempts: int = 30,
+        import_verify_delay: float = 10.0,
         install_verify_attempts: int = 30,
         install_verify_delay: float = 30.0,
         install_stall_seconds: float = 90.0,
@@ -191,7 +227,7 @@ class PatchingService:
         self._shell = shell
         # How long we're willing to poll `show installer packages imported`
         # for the just-uploaded package to actually show up, before giving up
-        # (60 * 5s = 5 minutes) — see the module docstring for why this exists.
+        # (30 * 10s = 5 minutes) — see the module docstring for why this exists.
         self._import_verify_attempts = import_verify_attempts
         self._import_verify_delay = import_verify_delay
         # Installs commonly take several minutes, so poll less often but for
@@ -505,10 +541,12 @@ class PatchingService:
             )
 
             if not self._wait_until_imported(cpuse, package, hf_config, ctx):
-                raise CPUSEError(
+                waited = self._import_verify_attempts * self._import_verify_delay
+                raise JobTimedOut(
                     f"{package} still isn't listed by `show installer packages imported` "
-                    f"after waiting — NOT removing the temp copy at {remote_path}; check "
-                    "CPUSE state on the host and re-import if needed"
+                    f"after waiting {waited:.0f}s — NOT removing the temp copy at "
+                    f"{remote_path}; CPUSE may still be processing it — use the Jobs tab's "
+                    "Check status link to recheck, or verify CPUSE state on the host directly"
                 )
             ctx.log("confirmed: package is listed as imported")
 
@@ -635,36 +673,87 @@ class PatchingService:
     def _wait_until_imported(
         self, cpuse: CPUSE, package_filename: str, hf_config: HfConfig | None, ctx: JobContext
     ) -> bool:
-        """Poll `show installer packages imported` for the just-uploaded file.
-        A candidate matches if *either* its identifier is (or contains the
-        stem of) the uploaded filename, *or* — since CPUSE renders some
-        package types (JHFs) as a human-readable string unrelated to the
-        filename, e.g. "R82.10 Jumbo Hotfix Accumulator Take 24" — its
-        identifier's own version+Take equal the ones recorded in the
-        package's hf.config. Either check alone can mismatch depending on
-        the package type, so both run and either is sufficient."""
-        stem = package_filename.rsplit(".", 1)[0]
-        expect_version = hf_config.direct_base_version if hf_config else None
-        expect_take = hf_config.take_number if hf_config else None
+        """Poll `show installer packages imported` for the just-uploaded file,
+        via ``_is_imported_now`` (also used by ``recheck_import`` for a single
+        manual check after a timeout). The "still waiting" line is
+        overwritten in place each attempt (``ctx.log(..., replace=...)``)
+        rather than appended — a slow import can take dozens of attempts,
+        and a hundred near-identical lines just buries the one that matters
+        under scrolling; the operator still sees the current attempt count
+        and a live timestamp, just as one line, not one per poll."""
+        progress_seq: int | None = None
         for attempt in range(1, self._import_verify_attempts + 1):
-            imported = cpuse.list_packages(PackageScope.IMPORTED)
-            for pkg in imported:
-                if pkg.identifier == package_filename or stem in pkg.identifier:
-                    return True
-                if (
-                    expect_version is not None
-                    and expect_take is not None
-                    and cpuse_extract_version(pkg.identifier) == expect_version
-                    and cpuse_extract_take(pkg.identifier) == expect_take
-                ):
-                    return True
+            if _is_imported_now(cpuse, package_filename, hf_config):
+                return True
             if attempt < self._import_verify_attempts:
-                ctx.log(
+                event = ctx.log(
                     f"not yet listed as imported (check {attempt}/{self._import_verify_attempts}) "
-                    "— waiting"
+                    "— waiting",
+                    replace=progress_seq,
                 )
+                progress_seq = event.seq
                 time.sleep(self._import_verify_delay)
         return False
+
+    def recheck_import(
+        self, job_id: str, *, credentials: CredentialBundle | None = None
+    ) -> JobRecord:
+        """Manual one-shot recheck for an import job the automatic poll gave
+        up on (TIMED_OUT) — the Jobs tab's "Check status" link. One more live
+        `show installer packages imported` look: if the package now shows up,
+        resolves the job to SUCCEEDED, removes the temp copy staged on the
+        host, and refreshes cached state, matching the automatic path in
+        _do_import. If it still doesn't, the job is left TIMED_OUT and the
+        negative result is just logged — the operator can try again later.
+        Blocking (SSH) — call via ``asyncio.to_thread`` from async contexts."""
+        job = self._store.get_job(job_id)
+        if job.kind != JOB_IMPORT:
+            raise JobError(f"job {job_id!r} is not an import job (kind: {job.kind})")
+        if job.status != JobStatus.TIMED_OUT:
+            raise JobError(
+                f"job {job_id!r} isn't timed out (status: {job.status.value}) — nothing to recheck"
+            )
+
+        connector = self.registry.get(job.environment)
+        host = connector.patchable_host(job.target or "")
+        creds = connector.require_credentials(host, credentials)
+        package = str(job.params["package"])
+        local_path = self._packages.path_for(package)
+        hf_config = extract_hf_config(local_path)
+        remote_path = posixpath.join(self._staging_dir, package)
+
+        client = connector.connect(host, creds)
+        try:
+            cpuse = CPUSE(client, shell=self._shell)
+            if not _is_imported_now(cpuse, package, hf_config):
+                self._store.append_event(job_id, "manual check: still not listed as imported")
+                return self._store.get_job(job_id)
+
+            self._store.append_event(
+                job_id, "manual check: confirmed package is listed as imported"
+            )
+            cleanup = client.run(f"rm -f {remote_path}")
+            if cleanup.ok:
+                self._store.append_event(job_id, f"removed temp copy {remote_path}")
+            else:
+                detail = cleanup.stderr.strip() or cleanup.stdout.strip()
+                self._store.append_event(
+                    job_id, f"could not remove temp copy {remote_path}: {detail}", level="warning"
+                )
+            try:
+                agent_build = cpuse.agent_build()
+                packages = cpuse.list_packages(PackageScope.ALL)
+                cluster = cpuse.cluster_state()
+                self._cache_state(job.environment, host.name, agent_build, packages, cluster)
+                self._store.append_event(job_id, "detected state refreshed")
+            except CPUSEError as exc:
+                self._store.append_event(
+                    job_id, f"could not refresh detected state: {exc}", level="warning"
+                )
+            self._store.finish_job(job_id, JobStatus.SUCCEEDED)
+            return self._store.get_job(job_id)
+        finally:
+            client.close()
 
     def _do_import_cloud(self, ctx: JobContext) -> None:
         connector = self.registry.get(ctx.job.environment)

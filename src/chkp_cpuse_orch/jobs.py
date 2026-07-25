@@ -22,13 +22,20 @@ from typing import Any
 
 from .errors import JobError
 from .reporting import get_logger
-from .store import JobRecord, JobStatus, Store
+from .store import JobEvent, JobRecord, JobStatus, Store
 
 logger = get_logger(__name__)
 
 
 class JobCancelled(Exception):
     """Raised inside a handler when cancellation was requested (control flow)."""
+
+
+class JobTimedOut(Exception):
+    """Raised inside a handler when a poll loop gave up waiting for a slow,
+    asynchronous confirmation without seeing an outright failure — finishes
+    the job as TIMED_OUT (not FAILED), leaving it eligible for a later manual
+    recheck (see services/patching.py's recheck_import)."""
 
 
 class JobContext:
@@ -38,10 +45,21 @@ class JobContext:
         self._store = store
         self.job = job
 
-    def log(self, message: str, level: str = "info") -> None:
-        """Record one progress line — persisted for the UI/audit, mirrored to logs."""
-        self._store.append_event(self.job.id, message, level=level)
+    def log(self, message: str, level: str = "info", *, replace: int | None = None) -> JobEvent:
+        """Record one progress line — persisted for the UI/audit, mirrored to
+        logs. Pass ``replace`` (the ``seq`` returned by a previous call) to
+        overwrite that line in place instead of appending a new one — for a
+        poll loop whose only real change between iterations is an attempt
+        counter, so the job log doesn't accumulate one line per attempt (see
+        PatchingService._wait_until_imported). Returns the event so the
+        caller can chain further replacements off its ``seq``."""
+        event = (
+            self._store.update_event(self.job.id, replace, message, level=level)
+            if replace is not None
+            else self._store.append_event(self.job.id, message, level=level)
+        )
         logger.info(message, job_id=self.job.id, kind=self.job.kind, target=self.job.target)
+        return event
 
     def raise_if_cancelled(self) -> None:
         """Call between steps; safe points are where a job may stop."""
@@ -168,6 +186,9 @@ class JobRunner:
             except JobCancelled:
                 self._store.finish_job(job.id, JobStatus.CANCELLED)
                 ctx.log("job cancelled", level="warning")
+            except JobTimedOut as exc:
+                self._store.finish_job(job.id, JobStatus.TIMED_OUT, error=str(exc))
+                ctx.log(f"job timed out: {exc}", level="warning")
             except Exception as exc:  # job boundary: record failure, don't crash the runner
                 error = f"{type(exc).__name__}: {exc}"
                 self._store.finish_job(job.id, JobStatus.FAILED, error=error)

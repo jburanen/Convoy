@@ -1811,6 +1811,28 @@ def _register_routes(app: FastAPI) -> None:
             raise _map_error(exc) from exc
         return {"status": "cancel requested"}
 
+    @app.post("/api/jobs/{job_id}/recheck-import")
+    async def recheck_import(
+        job_id: str, body: OperationCredentials, request: Request
+    ) -> JobRecord:
+        """Manual "Check status" recheck for a TIMED_OUT import job (Jobs
+        tab). The job record itself carries the environment/host to recheck
+        against — the operator only needs to (optionally) supply credentials
+        for a storage-disabled environment."""
+        store: Store = request.app.state.store
+        try:
+            job = store.get_job(job_id)
+        except StoreError as exc:
+            raise _map_error(exc) from exc
+        try:
+            return await asyncio.to_thread(
+                _service(request).recheck_import,
+                job_id,
+                credentials=_build_credentials(body.credentials, job.target or "", job.environment),
+            )
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+
     # -- static UI (mounted last so /api and /health win) -----------------------
     app.mount("/", StaticFiles(directory=_STATIC_DIR, html=True), name="static")
 
