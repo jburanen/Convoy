@@ -187,6 +187,43 @@ def test_events_append_and_resume_from_seq(store: Store) -> None:
     assert [e.seq for e in store.events(job.id, after_seq=e1.seq)] == [e2.seq]
 
 
+def test_update_event_overwrites_in_place(store: Store) -> None:
+    job = JobRecord(kind="a")
+    store.insert_job(job)
+    e1 = store.append_event(job.id, "one")
+    e2 = store.append_event(job.id, "two")
+
+    updated = store.update_event(job.id, e1.seq, "one (updated)", level="warning")
+
+    assert updated.seq == e1.seq  # same row, not a new one
+    assert updated.message == "one (updated)"
+    assert updated.level == "warning"
+    assert updated.ts >= e1.ts
+    all_events = store.events(job.id)
+    assert [e.message for e in all_events] == ["one (updated)", "two"]  # order unchanged
+    assert [e.seq for e in all_events] == [e1.seq, e2.seq]  # no new row inserted
+
+
+def test_update_event_unknown_seq_raises(store: Store) -> None:
+    job = JobRecord(kind="a")
+    store.insert_job(job)
+    with pytest.raises(StoreError):
+        store.update_event(job.id, 999999, "nope")
+
+
+def test_update_event_wrong_job_id_raises(store: Store) -> None:
+    """seq alone is globally unique, but the job_id must also match — an
+    event can't be repointed at a different job by guessing its seq."""
+    job_a = JobRecord(kind="a")
+    job_b = JobRecord(kind="b")
+    store.insert_job(job_a)
+    store.insert_job(job_b)
+    e1 = store.append_event(job_a.id, "one")
+
+    with pytest.raises(StoreError):
+        store.update_event(job_b.id, e1.seq, "hijacked")
+
+
 def test_credential_set_crud(store: Store) -> None:
     store.insert_environment("default", credential_storage_enabled=True)
     store.upsert_credential_set(

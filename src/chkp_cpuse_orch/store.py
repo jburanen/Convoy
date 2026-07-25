@@ -42,6 +42,13 @@ class JobStatus(StrEnum):
     # Was RUNNING when the process died (container restart mid-install).
     # Never resumed automatically — the operator re-checks host state first.
     INTERRUPTED = "interrupted"
+    # A poll loop gave up waiting for a slow, asynchronous CPUSE/CDT-side
+    # confirmation (e.g. `show installer packages imported`) without ever
+    # seeing a failure — the underlying operation may still be running or may
+    # since have finished server-side. Unlike FAILED, this is not a terminal
+    # verdict: the Jobs tab offers a manual recheck (see
+    # PatchingService.recheck_import) that can still resolve it to SUCCEEDED.
+    TIMED_OUT = "timed_out"
 
     @property
     def is_terminal(self) -> bool:
@@ -1208,6 +1215,24 @@ class Store:
             )
             seq = cur.lastrowid
         assert seq is not None
+        return JobEvent(seq=seq, job_id=job_id, ts=ts, level=level, message=message)
+
+    def update_event(self, job_id: str, seq: int, message: str, level: str = "info") -> JobEvent:
+        """Overwrite an existing event's timestamp/level/message in place,
+        rather than appending a new row — used by ``JobContext.log(...,
+        replace=seq)`` so a poll loop whose only real change between
+        iterations is an attempt counter (e.g. PatchingService.
+        _wait_until_imported) doesn't leave one near-identical line per
+        attempt in the job log; the operator still sees the latest attempt
+        number and a live timestamp, just not a hundred lines of history."""
+        ts = utcnow()
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE job_events SET ts = ?, level = ?, message = ? WHERE seq = ? AND job_id = ?",
+                (ts.isoformat(), level, message, seq, job_id),
+            )
+        if cur.rowcount == 0:
+            raise StoreError(f"job event not found: job {job_id!r} seq {seq}")
         return JobEvent(seq=seq, job_id=job_id, ts=ts, level=level, message=message)
 
     def events(self, job_id: str, after_seq: int = 0) -> list[JobEvent]:

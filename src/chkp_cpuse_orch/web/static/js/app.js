@@ -268,8 +268,8 @@ function closeCredModal(result) {
 // environment, { credentials: [...] } once collected (from cache or a prompt),
 // or null if the operator cancelled. On failure, callers evict via
 // cacheEvictCreds(host) so a stale cached password re-prompts next time.
-async function operationCredentials(host, purpose) {
-  if (storageEnabled()) return {};
+async function operationCredentials(host, purpose, env = currentEnv) {
+  if (storageEnabled(env)) return {};
   const cached = cacheGetCreds(host);
   if (cached) return { credentials: cached };
   const result = await promptCredentials(host, purpose);
@@ -3097,7 +3097,7 @@ const CRED_JOB_KINDS = ["cred.add", "cred.edit", "cred.delete"];
 // it's cheap and simpler than tracking which entity type each job touched.
 const PROV_JOB_KINDS = ["prov.add", "prov.edit", "prov.delete"];
 const lastJobStatus = new Map();
-const TERMINAL_JOB_STATUSES = ["succeeded", "failed", "cancelled", "interrupted"];
+const TERMINAL_JOB_STATUSES = ["succeeded", "failed", "cancelled", "interrupted", "timed_out"];
 
 // Polls a single job until it's terminal (or timeoutMs elapses). Used only
 // where the caller has a real, immediate correctness dependency on the job
@@ -3127,7 +3127,11 @@ function updateJobsBadge(jobs) {
 }
 
 function jobStatusClass(status) {
-  return status === "succeeded" ? "ok" : status === "running" || status === "pending" ? "warn" : "err";
+  if (status === "succeeded") return "ok";
+  // "warn", not "err" — running/pending are still in progress, and a timed-out
+  // import isn't a verdict (CPUSE may still be working); it may yet resolve to
+  // succeeded via the Jobs tab's "Check status" recheck.
+  return status === "running" || status === "pending" || status === "timed_out" ? "warn" : "err";
 }
 
 // Fills in one job row's cells/badge/cancel-button visibility. Never touches
@@ -3154,11 +3158,17 @@ function renderJobRow(row, job) {
   badge.className = "badge " + jobStatusClass(job.status); // reset, not add — status can change
   row.querySelector(".job-started").textContent = fmtTime(job.started_at ?? job.created_at);
   const errorCell = row.querySelector(".job-error");
-  errorCell.textContent =
+  const errorText = errorCell.querySelector(".job-error-text");
+  errorText.textContent =
     job.status === "succeeded" ? `Succeeded ${fmtTime(job.finished_at)}` : (job.error ?? "");
   errorCell.title = job.status === "succeeded" ? "" : (job.error ?? ""); // full text on hover even while truncated/collapsed
   row.querySelector(".btn-cancel").classList.toggle(
     "hidden", !(job.status === "pending" || job.status === "running"),
+  );
+  // Only a TIMED_OUT import job (see PatchingService.recheck_import) gets a
+  // manual recheck link — every other kind/status has nothing to recheck.
+  row.querySelector(".btn-recheck-import").classList.toggle(
+    "hidden", !(job.status === "timed_out" && job.kind === "cpuse.import"),
   );
 }
 
@@ -3208,6 +3218,35 @@ function wireJobRow(row, jobId) {
     try { await api(`/api/jobs/${jobId}/cancel`, { method: "POST" }); }
     catch (e) { toast("Cancel failed: " + e.message); }
     await loadJobs();
+  });
+  row.querySelector(".btn-recheck-import").addEventListener("click", async (ev) => {
+    ev.stopPropagation(); // don't also toggle the log row
+    const btn = ev.currentTarget;
+    // Read straight from the row's own rendered cells rather than threading
+    // the job object through — they're already the host/environment this
+    // job ran against (renderJobRow fills them from the same job record).
+    const host = row.querySelector(".job-target").textContent;
+    const env = row.querySelector(".job-env").textContent;
+    const extra = await operationCredentials(host, "check import status", env);
+    if (extra === null) return; // credential prompt cancelled
+    btn.disabled = true;
+    try {
+      const updated = await api(`/api/jobs/${jobId}/recheck-import`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(extra),
+      });
+      renderJobRow(row, updated);
+      toast(
+        updated.status === "succeeded"
+          ? "Confirmed — package is imported."
+          : "Still not listed as imported yet."
+      );
+    } catch (e) {
+      toast("Check status failed: " + e.message);
+    } finally {
+      btn.disabled = false;
+    }
   });
 }
 

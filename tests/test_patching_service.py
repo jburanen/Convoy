@@ -619,7 +619,46 @@ def test_import_job_cleanup_failure_is_a_warning_not_a_job_failure(
     )
 
 
-def test_import_job_fails_and_keeps_temp_copy_if_never_listed_as_imported(
+def test_import_job_collapses_repeated_not_yet_imported_lines_into_one(
+    store: Store, creds: CredentialStore, packages: PackageStore, inventory: Inventory
+) -> None:
+    """A slow import polls _wait_until_imported repeatedly before the package
+    finally shows up — the "not yet listed as imported" progress line must
+    overwrite itself each attempt (ctx.log(..., replace=...)) rather than
+    stack up one line per poll, so the job log doesn't fill with near-
+    identical lines an operator has to scroll through."""
+    transport = FakeTransport(
+        responses={
+            "show installer packages imported": ["", "", f"{PKG}      Imported"],
+            "show installer packages": SHOW_PACKAGES_ALL,
+            "show installer status build": DA_BUILD,
+            "sha1sum": f"{PKG_SHA1}  /var/log/upload/{PKG}",
+        }
+    )
+    _assign(store, inventory, "mgmt-01")
+    registry = EnvironmentRegistry()
+    registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
+    service = PatchingService(
+        registry=registry,
+        packages=packages,
+        runner=JobRunner(store),
+        vault=JobCredentialVault(),
+        store=store,
+        import_verify_attempts=5,
+        import_verify_delay=0,
+    )
+
+    job = service.submit_import("default", "mgmt-01", PKG)
+    _run(service)
+
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.SUCCEEDED, finished.error
+    waiting_lines = [e for e in store.events(job.id) if "not yet listed as imported" in e.message]
+    assert len(waiting_lines) == 1  # collapsed, not one row per poll
+    assert "check 2/5" in waiting_lines[0].message  # the latest attempt survives, not the first
+
+
+def test_import_job_times_out_and_keeps_temp_copy_if_never_listed_as_imported(
     store: Store, creds: CredentialStore, packages: PackageStore, inventory: Inventory
 ) -> None:
     # `installer import local` returns immediately while CPUSE keeps
@@ -652,9 +691,111 @@ def test_import_job_fails_and_keeps_temp_copy_if_never_listed_as_imported(
     _run(service)
 
     finished = store.get_job(job.id)
-    assert finished.status is JobStatus.FAILED
+    assert finished.status is JobStatus.TIMED_OUT
     assert finished.error is not None and "NOT removing the temp copy" in finished.error
     assert not any("rm -f" in c for c in transport.commands)  # never cleaned up
+
+
+def test_recheck_import_resolves_timed_out_job_to_succeeded_once_imported(
+    store: Store, creds: CredentialStore, packages: PackageStore, inventory: Inventory
+) -> None:
+    """The Jobs tab's "Check status" link: after a TIMED_OUT import, CPUSE
+    finishes processing in the background and the package shows up on a
+    later live check — recheck_import should resolve the job, clean up the
+    temp copy, and refresh cached state, same as the automatic path would
+    have if it had just waited a little longer."""
+    transport = FakeTransport(
+        responses={
+            "show installer packages imported": "",
+            "show installer packages": SHOW_PACKAGES_ALL,
+            "show installer status build": DA_BUILD,
+            "sha1sum": f"{PKG_SHA1}  /var/log/upload/{PKG}",
+        }
+    )
+    _assign(store, inventory, "mgmt-01")
+    registry = EnvironmentRegistry()
+    registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
+    service = PatchingService(
+        registry=registry,
+        packages=packages,
+        runner=JobRunner(store),
+        vault=JobCredentialVault(),
+        store=store,
+        import_verify_attempts=2,
+        import_verify_delay=0,
+    )
+
+    job = service.submit_import("default", "mgmt-01", PKG)
+    _run(service)
+    assert store.get_job(job.id).status is JobStatus.TIMED_OUT
+
+    # CPUSE has now caught up — a live check would see it as imported.
+    transport.responses["show installer packages imported"] = f"{PKG}      Imported"
+    resolved = service.recheck_import(job.id)
+
+    assert resolved.status is JobStatus.SUCCEEDED
+    assert any("rm -f" in c for c in transport.commands)  # temp copy cleaned up now
+    messages = [e.message for e in store.events(job.id)]
+    assert any("manual check: confirmed" in m for m in messages)
+    assert any("removed temp copy" in m for m in messages)
+
+
+def test_recheck_import_leaves_job_timed_out_when_still_not_imported(
+    store: Store, creds: CredentialStore, packages: PackageStore, inventory: Inventory
+) -> None:
+    transport = FakeTransport(
+        responses={
+            "show installer packages imported": "",
+            "show installer packages": SHOW_PACKAGES_ALL,
+            "show installer status build": DA_BUILD,
+            "sha1sum": f"{PKG_SHA1}  /var/log/upload/{PKG}",
+        }
+    )
+    _assign(store, inventory, "mgmt-01")
+    registry = EnvironmentRegistry()
+    registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
+    service = PatchingService(
+        registry=registry,
+        packages=packages,
+        runner=JobRunner(store),
+        vault=JobCredentialVault(),
+        store=store,
+        import_verify_attempts=2,
+        import_verify_delay=0,
+    )
+
+    job = service.submit_import("default", "mgmt-01", PKG)
+    _run(service)
+    assert store.get_job(job.id).status is JobStatus.TIMED_OUT
+
+    resolved = service.recheck_import(job.id)
+
+    assert resolved.status is JobStatus.TIMED_OUT
+    assert not any("rm -f" in c for c in transport.commands)  # still not cleaned up
+    messages = [e.message for e in store.events(job.id)]
+    assert any("manual check: still not listed as imported" in m for m in messages)
+
+
+def test_recheck_import_rejects_job_that_is_not_an_import_job(
+    service: PatchingService, store: Store
+) -> None:
+    job = service.submit_import_cloud("default", "mgmt-01", "Check_Point_R81.20_JHF_T99")
+    _run(service)
+    assert store.get_job(job.id).status is JobStatus.SUCCEEDED  # sanity: it did run
+
+    with pytest.raises(JobError, match="not an import job"):
+        service.recheck_import(job.id)
+
+
+def test_recheck_import_rejects_succeeded_import_job(
+    service: PatchingService, store: Store
+) -> None:
+    job = service.submit_import("default", "mgmt-01", PKG)
+    _run(service)
+    assert store.get_job(job.id).status is JobStatus.SUCCEEDED
+
+    with pytest.raises(JobError, match="isn't timed out"):
+        service.recheck_import(job.id)
 
 
 # -- import-from-cloud job ---------------------------------------------------------
