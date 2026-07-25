@@ -84,6 +84,7 @@ PROVISIONING_NOTES = [
 # an API key) is what makes discovery work.
 _API_SESSION_FILE = "/tmp/cpuse_orch_mgmt_api.sid"
 DEFAULT_API_PROFILE = "Super User"  # built-in profile; read access is enough for discovery
+DEFAULT_MDS_API_PROFILE = "Multi-Domain Super User"  # built-in global (all-Domains) profile
 
 # A note prefixed with this marker is rendered emphasized (orange) in the UI.
 NOTE_EMPHASIS = "[!] "
@@ -92,7 +93,7 @@ NOTE_EMPHASIS = "[!] "
 def render_mgmt_api_commands(
     username: str,
     *,
-    permissions_profile: str = DEFAULT_API_PROFILE,
+    permissions_profile: str | None = None,
     is_mds: bool = False,
 ) -> list[str]:
     """Expert-mode commands that create a Management API administrator (API-key auth)
@@ -105,19 +106,20 @@ def render_mgmt_api_commands(
 
     A Multi-Domain Server has no single-domain ``permissions-profile`` object of
     its own — a *global* administrator (one this tool's estate-wide discovery
-    needs) is granted via the separate ``multi-domain-permissions-profile``
-    parameter instead, even though the built-in profile is named the same
-    ("Super User") in both places.
+    needs) is granted via the separate ``multi-domain-profile`` parameter instead,
+    with its own distinctly-named built-in profile, ``"Multi-Domain Super User"``.
     """
     if not _USERNAME_RE.fullmatch(username):
         raise ProvisioningError(
             f"invalid username {username!r}: lowercase letters, digits, '_' and '-', "
             "starting with a letter or '_', max 32 chars"
         )
+    if permissions_profile is None:
+        permissions_profile = DEFAULT_MDS_API_PROFILE if is_mds else DEFAULT_API_PROFILE
     if not _ROLE_RE.fullmatch(permissions_profile.replace(" ", "")):
         raise ProvisioningError(f"invalid permissions profile: {permissions_profile!r}")
     sid = _API_SESSION_FILE
-    profile_param = "multi-domain-permissions-profile" if is_mds else "permissions-profile"
+    profile_param = "multi-domain-profile" if is_mds else "permissions-profile"
     return [
         f"mgmt_cli login -r true > {sid}",
         f"mgmt_cli -s {sid} add administrator name {username} "
@@ -138,6 +140,6 @@ MGMT_API_NOTES = [
 
 MDS_API_NOTE = (
     "This environment is Multi-Domain: the administrator is granted the "
-    '`multi-domain-permissions-profile "Super User"` (a global, all-Domains '
+    '`multi-domain-profile "Multi-Domain Super User"` (a global, all-Domains '
     "profile), not the single-domain `permissions-profile` used on an SMS."
 )
