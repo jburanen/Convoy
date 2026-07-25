@@ -13,6 +13,7 @@ copy, and paste. Nothing here talks to a server and nothing is stored.
 
 from __future__ import annotations
 
+import json
 import re
 
 from passlib.hash import sha512_crypt
@@ -90,35 +91,9 @@ DEFAULT_MDS_API_PROFILE = "Multi-Domain Super User"  # built-in global (all-Doma
 NOTE_EMPHASIS = "[!] "
 
 
-def render_mgmt_api_commands(
-    username: str,
-    *,
-    permissions_profile: str | None = None,
-    is_mds: bool = False,
-) -> list[str]:
-    """Expert-mode commands that create a Management API administrator (API-key auth)
-    on ONE Security Management Server / MDS.
-
-    All mutations share a single ``mgmt_cli`` session so the ``add administrator`` /
-    ``add api-key`` are actually published; ``-r true`` logs in as root on the box
-    (no password). ``add administrator ... authentication-method "api key"`` only
-    sets the auth *method* — it does not itself issue a key. The key value is
-    generated (and printed once, in its JSON output) by the separate
-    ``add api-key admin-name <name>`` command (CLI reference: ``add-api-key`` v2.1),
-    run in the same session so it can see the not-yet-published administrator.
-    The operator copies that key into the Credentials section (kind: API key).
-
-    On a standalone SMS (``is_mds=False``), the login also passes
-    ``--domain "System Data"``: without it the session lands in the box's own
-    "Domain" context, where ``add administrator``/``add api-key`` fail with
-    ``err_inappropriate_domain_type`` ("This command can work only on domains
-    of type MDS").
-
-    A Multi-Domain Server has no single-domain ``permissions-profile`` object of
-    its own — a *global* administrator (one this tool's estate-wide discovery
-    needs) is granted via the separate ``multi-domain-profile`` parameter instead,
-    with its own distinctly-named built-in profile, ``"Multi-Domain Super User"``.
-    """
+def _validate_mgmt_api_args(username: str, permissions_profile: str | None, is_mds: bool) -> str:
+    """Shared validation for the command builders below. Returns the effective
+    (validated) permissions/multi-domain profile name."""
     if not _USERNAME_RE.fullmatch(username):
         raise ProvisioningError(
             f"invalid username {username!r}: lowercase letters, digits, '_' and '-', "
@@ -128,30 +103,146 @@ def render_mgmt_api_commands(
         permissions_profile = DEFAULT_MDS_API_PROFILE if is_mds else DEFAULT_API_PROFILE
     if not _ROLE_RE.fullmatch(permissions_profile.replace(" ", "")):
         raise ProvisioningError(f"invalid permissions profile: {permissions_profile!r}")
-    sid = _API_SESSION_FILE
-    profile_param = "multi-domain-profile" if is_mds else "permissions-profile"
-    # On a standalone SMS, a login with no domain lands the session in that
-    # box's own "Domain" context; `add administrator`/`add api-key` only work
-    # in the "System Data" (MDS-type) domain, so it must be requested
-    # explicitly (operator-confirmed against live gear, 2026-07-25 —
-    # err_inappropriate_domain_type otherwise). Not yet confirmed whether the
-    # MDS path (is_mds=True) needs the same, so left untouched here.
+    return permissions_profile
+
+
+def render_mgmt_login_command(*, is_mds: bool = False) -> str:
+    """Log into ``mgmt_cli`` as root (no password) and save the session to a
+    well-known temp file so later commands (possibly separate SSH round-trips)
+    can reuse it via ``-s``.
+
+    On a standalone SMS (``is_mds=False``), the login also passes
+    ``--domain "System Data"``: without it the session lands in the box's own
+    "Domain" context, where ``add administrator``/``add api-key`` fail with
+    ``err_inappropriate_domain_type`` ("This command can work only on domains
+    of type MDS") — operator-confirmed against live gear, 2026-07-25. Not yet
+    confirmed whether the MDS path (``is_mds=True``) needs the same, so left
+    untouched here.
+    """
     domain_flag = "" if is_mds else ' --domain "System Data"'
+    return f"mgmt_cli login -r true{domain_flag} > {_API_SESSION_FILE}"
+
+
+def render_show_administrator_command(username: str) -> str:
+    """Existence probe for the Management API administrator, run against the
+    session opened by ``render_mgmt_login_command``. Used to decide whether
+    ``add administrator`` is needed (re-running the flow to issue a fresh API
+    key for an already-provisioned admin must not fail on "already exists").
+
+    NOT YET CONFIRMED against live gear: the exact not-found shape (non-zero
+    exit status vs. a JSON error body) for ``show administrator`` on an
+    unknown name. Callers should treat either as "does not exist yet" until
+    this is verified against a real management server.
+    """
+    if not _USERNAME_RE.fullmatch(username):
+        raise ProvisioningError(f"invalid username {username!r}")
+    return f"mgmt_cli -s {_API_SESSION_FILE} show administrator name {username} --format json"
+
+
+def render_add_administrator_command(
+    username: str, *, permissions_profile: str | None = None, is_mds: bool = False
+) -> str:
+    """Create the Management API administrator (API-key auth method only —
+    this does not itself issue a key; see ``render_add_api_key_command``).
+
+    A Multi-Domain Server has no single-domain ``permissions-profile`` object of
+    its own — a *global* administrator (one this tool's estate-wide discovery
+    needs) is granted via the separate ``multi-domain-profile`` parameter instead,
+    with its own distinctly-named built-in profile, ``"Multi-Domain Super User"``.
+    """
+    permissions_profile = _validate_mgmt_api_args(username, permissions_profile, is_mds)
+    profile_param = "multi-domain-profile" if is_mds else "permissions-profile"
+    return (
+        f"mgmt_cli -s {_API_SESSION_FILE} add administrator name {username} "
+        f'authentication-method "api key" {profile_param} "{permissions_profile}"'
+    )
+
+
+def render_add_api_key_command(username: str) -> str:
+    """Issue a (new) API key for ``username``, printed once in its JSON output
+    (CLI reference: ``add-api-key`` v2.1) — see
+    ``parse_api_key_from_add_api_key_output``. Safe to re-run for an
+    already-provisioned admin: each call issues a fresh key, which is exactly
+    the "regenerate" path this tool relies on.
+    """
+    if not _USERNAME_RE.fullmatch(username):
+        raise ProvisioningError(f"invalid username {username!r}")
+    return f"mgmt_cli -s {_API_SESSION_FILE} add api-key admin-name {username} --format json"
+
+
+def render_publish_logout_commands() -> list[str]:
+    """Publish the session's changes, log out, and remove the session file."""
     return [
-        f"mgmt_cli login -r true{domain_flag} > {sid}",
-        f"mgmt_cli -s {sid} add administrator name {username} "
-        f'authentication-method "api key" {profile_param} "{permissions_profile}"',
-        f"mgmt_cli -s {sid} add api-key admin-name {username} --format json",
-        f"mgmt_cli -s {sid} publish",
-        f"mgmt_cli -s {sid} logout",
-        f"rm -f {sid}",
+        f"mgmt_cli -s {_API_SESSION_FILE} publish",
+        f"mgmt_cli -s {_API_SESSION_FILE} logout",
+        f"rm -f {_API_SESSION_FILE}",
     ]
 
 
+def render_mgmt_api_commands(
+    username: str,
+    *,
+    permissions_profile: str | None = None,
+    is_mds: bool = False,
+) -> list[str]:
+    """Full "assume-fresh" command sequence that creates a Management API
+    administrator (API-key auth) and issues its first API key, on ONE Security
+    Management Server / MDS. All mutations share a single ``mgmt_cli`` session
+    so the ``add administrator`` / ``add api-key`` are actually published.
+
+    Used for the copy-paste-style preview shown before an automated run (see
+    services/connect_primary.py) — the automated run itself skips
+    ``add administrator`` when ``render_show_administrator_command`` reports
+    the account already exists, which this flat preview does not model.
+    """
+    permissions_profile = _validate_mgmt_api_args(username, permissions_profile, is_mds)
+    return [
+        render_mgmt_login_command(is_mds=is_mds),
+        render_add_administrator_command(
+            username, permissions_profile=permissions_profile, is_mds=is_mds
+        ),
+        render_add_api_key_command(username),
+        *render_publish_logout_commands(),
+    ]
+
+
+# Candidate JSON field names for the generated key in `add api-key`'s response —
+# the exact spelling isn't verifiable without live gear (NOT YET CONFIRMED).
+# Checked case-insensitively, in this priority order.
+_API_KEY_FIELD_CANDIDATES = ("api-key", "apiKey", "api_key", "value", "key")
+
+
+def parse_api_key_from_add_api_key_output(stdout: str) -> str:
+    """Extract the generated key from ``add api-key --format json``'s stdout.
+
+    Raises ``ProvisioningError`` on any parse failure. The message is
+    deliberately generic — never includes the raw ``stdout`` — because it may
+    contain the secret and this exception can end up recorded on a job's
+    (persisted) error field.
+    """
+    try:
+        parsed = json.loads(stdout)
+    except (json.JSONDecodeError, ValueError):
+        raise ProvisioningError(
+            "could not parse API key: `add api-key` did not return valid JSON"
+        ) from None
+    if not isinstance(parsed, dict):
+        raise ProvisioningError("could not parse API key: unexpected JSON shape")
+    lowered = {str(k).lower(): v for k, v in parsed.items()}
+    for candidate in _API_KEY_FIELD_CANDIDATES:
+        value = lowered.get(candidate.lower())
+        if isinstance(value, str) and value:
+            return value
+    raise ProvisioningError(
+        "could not parse API key: no recognized field in `add api-key` JSON output"
+    )
+
+
 MGMT_API_NOTES = [
-    NOTE_EMPHASIS + "`add api-key` prints the API key in its JSON output. Copy it ONCE "
-    "(it cannot be retrieved later), then Edit the credential entry added below and "
-    "paste it as the API key.",
+    NOTE_EMPHASIS + "Connect to Primary runs these automatically over SSH and captures "
+    "the generated API key for you — this preview is shown so you can review the exact "
+    "commands before they run. `add administrator` is skipped automatically if the "
+    "account already exists (e.g. on a re-run to issue a fresh key).",
 ]
 
 MDS_API_NOTE = (

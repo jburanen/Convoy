@@ -92,24 +92,26 @@
   <div class="tab-panel" id="tab-provisioning">
 
     <section id="provision">
-      <!-- Collapsed by default once there's nothing left to set up: storage
-           disabled (no credentials make sense), or storage enabled AND at
-           least one credential already exists. Left open when storage is
-           enabled but no credential exists yet, since bootstrapping is likely
-           still needed. Computed once per environment load/switch by
-           updateProvisionCollapse() in app.js, not re-forced on every
-           credential-set refresh, so it never overrides a manual toggle.
-           The Generate commands button lives inside the details body so it
-           hides along with everything else when collapsed. -->
+      <!-- Collapsed by default once there's nothing left to set up: the
+           Servers table's primary is fully provisioned (see
+           hasProvisionedPrimary in app.js). Left open otherwise, since
+           bootstrapping is likely still needed. Computed once per environment
+           load/switch by updateProvisionCollapse(), not re-forced on every
+           refresh, so it never overrides a manual toggle — reopen it anytime
+           to review the commands again. The Generate commands button lives
+           inside the details body so it hides along with everything else
+           when collapsed. -->
       <details id="provision-details">
-        <summary><h2>Bootstrap initial management access</h2></summary>
+        <summary><h2>1. Bootstrap initial management access</h2></summary>
         <div class="section-head-actions">
           <button type="submit" form="provision-form" id="prov-generate" class="small">Generate commands</button>
         </div>
         <p class="hint">
           Generates clish commands to provision this tool's service account on
           management servers. These credentials are saved to the <strong>Credentials</strong>
-          table below automatically; edit that entry to add the API key once you generate one.
+          table below automatically. Apply the generated commands in clish on
+          <strong>every</strong> management server, then continue to
+          <strong>2. Connect to Primary</strong> below.
         </p>
         <form id="provision-form">
           <div class="field-grid">
@@ -122,13 +124,7 @@
             <input type="password" id="prov-password" placeholder="8+ characters" required>
             <input type="number" id="prov-uid" value="0" min="0" max="65000" title="Defaults to 0, matching built-in adminRole accounts">
           </div>
-          <label class="prov-api-toggle" title="Emit the expert-mode commands that grant Management API access — required for estate auto-discovery">
-            <input type="checkbox" id="prov-api" checked>
-            Also generate commands to provision management API access
-          </label>
         </form>
-        <!-- Two blocks: each explanatory-notes block sits directly above the output
-             box it describes — clish (SSH/Gaia account) then expert (Management API). -->
         <div id="prov-clish-notes" class="prov-notes hidden"></div>
         <div id="prov-clish-wrap" class="output-pane hidden">
           <div class="output-body">
@@ -141,20 +137,51 @@
             <pre id="prov-clish-output" class="job-events mono"></pre>
           </div>
         </div>
-        <div id="prov-expert-notes" class="prov-notes hidden"></div>
-        <div id="prov-expert-wrap" class="output-pane hidden">
-          <div class="output-body">
-            <button type="button" class="copy-icon" data-copy="prov-expert-output" title="Copy to clipboard" aria-label="Copy to clipboard">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-              </svg>
-            </button>
-            <pre id="prov-expert-output" class="job-events mono"></pre>
-          </div>
-        </div>
-        <!-- Saved-credential status: sits at the bottom, below both output boxes. -->
+        <!-- Saved-credential status: sits at the bottom, below the output box. -->
         <div id="prov-cred-status" class="prov-notes hidden"></div>
+      </details>
+    </section>
+
+    <section id="connect-primary">
+      <!-- Collapses together with #provision-details once hasProvisionedPrimary
+           is true (see updateProvisionCollapse in app.js) — reopen anytime to
+           retry a failed connection or regenerate the API key. Replaces the
+           old standalone "Connect to Primary" modal: this now actually SSHes
+           into the primary (using the credential set saved in step 1, or a
+           typed SSH user when credential storage is disabled) and executes
+           the Management API admin/API-key commands itself, instead of the
+           operator pasting them into expert mode. -->
+      <details id="connect-primary-details">
+        <summary><h2>2. Connect to Primary</h2></summary>
+        <div class="section-head-actions">
+          <button type="submit" form="connect-primary-form" id="connect-primary-btn" class="small">Connect to Primary</button>
+        </div>
+        <p class="hint">
+          Once the clish commands above have been applied on the box, connect
+          to it here — this creates (or re-issues a key for) a Management API
+          administrator over SSH, no copy-paste required. You'll be shown the
+          exact commands to confirm before anything runs.
+        </p>
+        <form id="connect-primary-form">
+          <div class="field-grid">
+            <label for="cp-name">Name</label>
+            <label for="cp-address">Address / IP</label>
+            <label for="cp-role">Role</label>
+            <label for="cp-port">SSH port</label>
+            <input type="text" id="cp-name" placeholder="e.g. mgmt-primary" required>
+            <input type="text" id="cp-address" placeholder="hostname or IP" required>
+            <select id="cp-role">
+              <option value="primary_sms">Primary SMS</option>
+              <option value="primary_mds">Primary MDS</option>
+            </select>
+            <input type="number" id="cp-port" value="22" min="1" max="65535">
+          </div>
+          <label id="cp-user-label">SSH user<input type="text" id="cp-user" value="admin"></label>
+          <label id="cp-cred-label">Credential set
+            <select id="cp-cred-select"><option value="">none — assign later</option></select>
+          </label>
+        </form>
+        <div id="cp-status" class="prov-notes hidden"></div>
       </details>
     </section>
 
@@ -188,19 +215,21 @@
       <div class="section-head">
         <h2>Management Servers</h2>
         <div class="section-head-actions">
-          <!-- Shown once a primary exists (the first server is added via the
-               Connect-to-Primary modal); opens the same modal as Edit, in add mode. -->
+          <!-- Both hidden until hasProvisionedPrimary (app.js) — a primary
+               server with a working Management API key — completing
+               Connect to Primary above. -->
           <button type="button" id="add-server-btn" class="small hidden">Manually add a server</button>
-          <!-- Scans the estate from a chosen primary via the Management API (+ SSH for
+          <!-- Scans the estate from the primary via the Management API (+ SSH for
                MDS) and offers the discovered servers for review before import. -->
-          <button type="button" id="discover-btn" class="small">Discover servers</button>
+          <button type="button" id="discover-btn" class="small hidden">Discover servers</button>
         </div>
       </div>
       <p class="hint">
-        Connect to your primary SMS or MDS and discover/import any secondary servers
-        and SmartEvent servers. These will be used to orchestrate bulk patching of 
-        firewalls owned by this environment. The management servers can also be patched
-        with this tool on the <strong>CPUSE</strong> tab.
+        Once <strong>Connect to Primary</strong> above has succeeded, discover and
+        import any secondary servers and SmartEvent servers, or add them manually.
+        These will be used to orchestrate bulk patching of firewalls owned by this
+        environment. The management servers can also be patched with this tool on
+        the <strong>CPUSE</strong> tab.
       </p>
       <table id="servers-info-table">
         <thead>
@@ -642,40 +671,61 @@
   </div>
 </div>
 
-<!-- ============ Connect to Primary modal (opened from the Provisioning tab) == -->
-<!-- Configures the first (primary) management server for an empty environment. Once
-     a primary exists, the inline add form appears for manual additions and this
-     button becomes "Discover servers". -->
-<div id="primary-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="primary-title">
-  <div class="modal-card narrow">
+<!-- ============ Connect-to-Primary confirm modal (Provisioning tab) ========= -->
+<!-- Shows the exact Management API commands before Connect to Primary runs
+     them over SSH — the "dry-run first" confirm step. Populated from
+     GET .../connect-primary/preview; Run submits the connect-primary job. -->
+<div id="connect-primary-confirm-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="connect-primary-confirm-title">
+  <div class="modal-card">
     <div class="modal-head">
-      <h2 id="primary-title">Connect to Primary SMS/MDS</h2>
-      <button id="primary-close" class="small" title="Close">✕</button>
+      <h2 id="connect-primary-confirm-title">Confirm: provision Management API access</h2>
+      <button id="connect-primary-confirm-close" class="small" title="Close">✕</button>
     </div>
     <p class="hint">
-      Define your primary management server — a Security Management Server or a
-      Multi-Domain Server. After it's added you can discover the rest of the estate
-      from it, or keep adding servers manually.
+      These commands will run over SSH on <strong id="connect-primary-confirm-target"></strong> now.
+      <code>add administrator</code> is skipped automatically if the account already exists.
     </p>
-    <form id="primary-form" class="stacked">
-      <label>Name<input type="text" id="pm-name" placeholder="e.g. mgmt-primary" required></label>
-      <label>Address / IP<input type="text" id="pm-address" placeholder="hostname or IP" required></label>
-      <label>Role
-        <select id="pm-role">
-          <option value="primary_sms">Primary SMS</option>
-          <option value="primary_mds">Primary MDS</option>
-        </select>
-      </label>
-      <label id="pm-user-label">SSH user<input type="text" id="pm-user" value="admin"></label>
-      <label id="pm-cred-label">Credential set
-        <select id="pm-cred-select"><option value="">none — assign later</option></select>
-      </label>
-      <label>SSH port<input type="number" id="pm-port" value="22" min="1" max="65535"></label>
-      <div class="cred-modal-actions">
-        <button type="submit">Add primary server</button>
-        <button type="button" id="primary-cancel" class="secondary">Cancel</button>
+    <div id="connect-primary-confirm-notes" class="prov-notes hidden"></div>
+    <div class="output-pane">
+      <div class="output-body">
+        <pre id="connect-primary-confirm-output" class="job-events mono"></pre>
       </div>
-    </form>
+    </div>
+    <div class="cred-modal-actions">
+      <button type="button" id="connect-primary-confirm-run">Run</button>
+      <button type="button" id="connect-primary-confirm-cancel" class="secondary">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ API key reveal modal (Provisioning tab) ====================== -->
+<!-- Shown once, right after a successful connect-primary job — the key is
+     fetched via GET /api/jobs/{id}/reveal-api-key, which returns it exactly
+     once and never logs it anywhere. -->
+<div id="api-key-reveal-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="api-key-reveal-title">
+  <div class="modal-card narrow">
+    <div class="modal-head">
+      <h2 id="api-key-reveal-title">API key generated</h2>
+      <button id="api-key-reveal-close" class="small" title="Close">✕</button>
+    </div>
+    <p class="hint warn">
+      This key is shown <strong>once</strong> and cannot be retrieved again — copy it now.
+    </p>
+    <div class="output-pane">
+      <div class="output-body">
+        <button type="button" class="copy-icon" data-copy="api-key-reveal-output" title="Copy to clipboard" aria-label="Copy to clipboard">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+          </svg>
+        </button>
+        <pre id="api-key-reveal-output" class="job-events mono"></pre>
+      </div>
+    </div>
+    <p id="api-key-reveal-saved" class="hint hidden"></p>
+    <div class="cred-modal-actions">
+      <button type="button" id="api-key-reveal-done">Done</button>
+    </div>
   </div>
 </div>
 

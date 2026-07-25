@@ -85,6 +85,8 @@ def transport() -> FakeTransport:
             "cat /opt/CPcdt/orch_candidates.csv": CANDIDATES_CSV,
             "pgrep": (1, ""),  # no CDT process running by default
             "test -x": (0, ""),  # CDT binary present
+            "show administrator name": (1, ""),  # not found by default — connect-primary tests
+            "add api-key": '{"api-key": "generated-key-xyz"}',
         }
     )
 
@@ -1174,25 +1176,73 @@ def test_provision_renders_commands_without_plaintext(client: TestClient) -> Non
     assert body["commands"][3] == "set user svc-patch gid 100 shell /bin/bash"
     assert "s3cret-pw!" not in resp.text  # only the salted hash is echoed
     assert any("clish -c" in n for n in body["notes"])
-    # Management API access is included by default (needed for auto-discovery).
-    assert any('authentication-method "api key"' in c for c in body["api_commands"])
-
-
-def test_provision_can_skip_mgmt_api(client: TestClient) -> None:
-    resp = client.post(
-        "/api/provision",
-        json={"username": "svc-patch", "password": "s3cret-pw!", "mgmt_api": False},
-    )
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["api_commands"] == []
-    assert body["api_notes"] == []
+    # Management API provisioning is a separate step now (Connect to Primary) —
+    # this endpoint only renders the Gaia clish commands.
+    assert "api_commands" not in body
 
 
 def test_provision_rejects_bad_input(client: TestClient) -> None:
     resp = client.post("/api/provision", json={"username": "BAD NAME", "password": "longenough"})
     assert resp.status_code == 400
     assert "invalid username" in resp.json()["detail"]
+
+
+# -- connect to primary (SSH-executed Management API provisioning) ----------------
+
+
+def test_connect_primary_preview_renders_commands(client: TestClient) -> None:
+    resp = client.get(
+        "/api/environments/default/connect-primary/preview", params={"username": "svc-patch"}
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert any('authentication-method "api key"' in c for c in body["commands"])
+    assert any("add api-key admin-name svc-patch" in c for c in body["commands"])
+
+
+def test_connect_primary_preview_rejects_bad_username(client: TestClient) -> None:
+    resp = client.get(
+        "/api/environments/default/connect-primary/preview", params={"username": "Bad Name"}
+    )
+    assert resp.status_code == 400
+    assert "invalid username" in resp.json()["detail"]
+
+
+def test_connect_primary_captures_and_stores_key(client: TestClient) -> None:
+    _enable_storage(client, "default")
+    _put_set(client, "default", "primary", ssh_username="svc-patch")
+    resp = client.post(
+        "/api/environments/default/connect-primary",
+        json={
+            "name": "mgmt-01",
+            "address": "192.0.2.10",
+            "role": "primary_sms",
+            "ssh_user": "svc-patch",
+            "ssh_port": 22,
+            "credential_set": "primary",
+        },
+    )
+    assert resp.status_code == 202, resp.text
+    job = _wait_for_job(client, resp.json()["id"])
+    assert job["status"] == "succeeded", job["error"]
+
+    # Auto-persisted to the credential set.
+    sets = client.get("/api/env/default/credentials").json()
+    primary = next(s for s in sets if s["name"] == "primary")
+    assert primary["has_api"] is True
+
+    # Pop-once reveal: present once, null on the second call.
+    reveal = client.get(f"/api/jobs/{job['id']}/reveal-api-key")
+    assert reveal.status_code == 200, reveal.text
+    assert reveal.json()["api_key"] == "generated-key-xyz"
+    reveal_again = client.get(f"/api/jobs/{job['id']}/reveal-api-key")
+    assert reveal_again.json()["api_key"] is None
+
+
+def test_reveal_api_key_unknown_job_returns_null(client: TestClient) -> None:
+    resp = client.get("/api/jobs/no-such-job/reveal-api-key")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["api_key"] is None
 
 
 # -- jobs -------------------------------------------------------------------------

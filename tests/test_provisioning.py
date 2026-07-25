@@ -5,8 +5,14 @@ from passlib.hash import sha512_crypt
 
 from chkp_cpuse_orch.errors import ProvisioningError
 from chkp_cpuse_orch.services.provisioning import (
+    parse_api_key_from_add_api_key_output,
+    render_add_administrator_command,
+    render_add_api_key_command,
     render_gaia_user_commands,
     render_mgmt_api_commands,
+    render_mgmt_login_command,
+    render_publish_logout_commands,
+    render_show_administrator_command,
 )
 
 
@@ -103,3 +109,69 @@ def test_mgmt_api_commands_use_multi_domain_profile_for_mds() -> None:
     # The System Data domain flag is SMS-specific (unconfirmed on live MDS gear);
     # the MDS login is left as a plain root login.
     assert "--domain" not in cmds[0]
+
+
+# -- composable command builders (used directly by connect_primary.py's
+# idempotent run, unlike render_mgmt_api_commands' flat "assume-fresh" preview) --
+
+
+def test_composable_builders_match_the_flat_preview() -> None:
+    """The idempotent run's building blocks must render byte-identical
+    commands to the flat preview (minus the show-administrator probe, which
+    only the idempotent run needs)."""
+    flat = render_mgmt_api_commands("svc-patch", is_mds=False)
+    composed = [
+        render_mgmt_login_command(is_mds=False),
+        render_add_administrator_command("svc-patch", is_mds=False),
+        render_add_api_key_command("svc-patch"),
+        *render_publish_logout_commands(),
+    ]
+    assert flat == composed
+
+
+def test_show_administrator_command_rejects_bad_username() -> None:
+    with pytest.raises(ProvisioningError, match="invalid username"):
+        render_show_administrator_command("Bad Name")
+
+
+def test_show_administrator_command_uses_same_session_file_as_login() -> None:
+    login = render_mgmt_login_command(is_mds=False)
+    probe = render_show_administrator_command("svc-patch")
+    session_file = login.rsplit("> ", 1)[1]
+    assert f"-s {session_file}" in probe
+
+
+# -- API key parsing ---------------------------------------------------------------
+
+
+def test_parse_api_key_recognized_field() -> None:
+    assert parse_api_key_from_add_api_key_output('{"api-key": "abc123"}') == "abc123"
+
+
+def test_parse_api_key_case_insensitive_and_alternate_spellings() -> None:
+    assert parse_api_key_from_add_api_key_output('{"apiKey": "abc123"}') == "abc123"
+    assert parse_api_key_from_add_api_key_output('{"API-KEY": "abc123"}') == "abc123"
+    assert parse_api_key_from_add_api_key_output('{"value": "abc123"}') == "abc123"
+
+
+def test_parse_api_key_prefers_first_candidate_field() -> None:
+    assert (
+        parse_api_key_from_add_api_key_output('{"value": "wrong", "api-key": "right"}') == "right"
+    )
+
+
+def test_parse_api_key_rejects_non_json() -> None:
+    with pytest.raises(ProvisioningError, match="could not parse API key") as exc:
+        parse_api_key_from_add_api_key_output("not json at all")
+    # The raw (possibly secret-bearing) input must never appear in the message.
+    assert "not json at all" not in str(exc.value)
+
+
+def test_parse_api_key_rejects_unexpected_shape() -> None:
+    with pytest.raises(ProvisioningError, match="could not parse API key"):
+        parse_api_key_from_add_api_key_output("[1, 2, 3]")
+
+
+def test_parse_api_key_rejects_missing_field() -> None:
+    with pytest.raises(ProvisioningError, match="could not parse API key"):
+        parse_api_key_from_add_api_key_output('{"message": "ok, but no key here"}')
