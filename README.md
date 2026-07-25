@@ -1,9 +1,6 @@
 # chkp-cpuse-orch
 
-Orchestration layer for Check Point's **Central Deployment Tool (CDT)** and **CPUSE**.
-It coordinates deployment of patches and upgrades — hotfixes,
-Jumbo Hotfix Accumulators, and major-version upgrades — across fleets of Security
-Management Servers and Security Gateways, through a web interface.
+Orchestration layer for Check Point's **Central Deployment Tool (CDT)** and **CPUSE**. It coordinates deployment of patches and upgrades — hotfixes, Jumbo Hotfix Accumulators, and major-version upgrades — across fleets of Security Management Servers and Security Gateways, through a web interface.  
 
 > This is an internal operations tool for authorized maintenance on infrastructure you own. It *drives* Check Point's own CDT/CPUSE agents; it does not replace them.
 
@@ -105,19 +102,16 @@ These gates define the major version releases - the milestones may change in the
 ### Roadmap / Punch List
 ⏫ Probably a major change 🤞 Non-blocking nice-to-have ✨ Cosmetic only
 
-✨ Add logic to display a warning on mobile devices that the UI of this tool does not scale down well (by design) and you should use it on a larger display. 
-✨ Make a favicon  
-✨ Name the project  
+✨ Add logic to display a warning on mobile devices that the UI of this tool does not scale down well (by design) and you should use it on a larger display.   
 
 #### Provisioning
-Empty is a good sign!
+Empty is a good sign!  
 
 #### Packages
 🤞 Investigate if we can extract and display meta data like compatible major version from the package file  
 
 #### Direct Patching (CPUSE)
 ⏫ Add deployment agent upgrade option  
-⏫ Consider adding the ability to populate and uninstall installed packages  
 🤞 Some kind of sledgehammer to swing to release config/job lock from management server and firewalls if a job gets stranded/stuck  
 
 #### Jobs
