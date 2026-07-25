@@ -108,6 +108,12 @@ def render_mgmt_api_commands(
     run in the same session so it can see the not-yet-published administrator.
     The operator copies that key into the Credentials section (kind: API key).
 
+    On a standalone SMS (``is_mds=False``), the login also passes
+    ``--domain "System Data"``: without it the session lands in the box's own
+    "Domain" context, where ``add administrator``/``add api-key`` fail with
+    ``err_inappropriate_domain_type`` ("This command can work only on domains
+    of type MDS").
+
     A Multi-Domain Server has no single-domain ``permissions-profile`` object of
     its own — a *global* administrator (one this tool's estate-wide discovery
     needs) is granted via the separate ``multi-domain-profile`` parameter instead,
@@ -124,8 +130,15 @@ def render_mgmt_api_commands(
         raise ProvisioningError(f"invalid permissions profile: {permissions_profile!r}")
     sid = _API_SESSION_FILE
     profile_param = "multi-domain-profile" if is_mds else "permissions-profile"
+    # On a standalone SMS, a login with no domain lands the session in that
+    # box's own "Domain" context; `add administrator`/`add api-key` only work
+    # in the "System Data" (MDS-type) domain, so it must be requested
+    # explicitly (operator-confirmed against live gear, 2026-07-25 —
+    # err_inappropriate_domain_type otherwise). Not yet confirmed whether the
+    # MDS path (is_mds=True) needs the same, so left untouched here.
+    domain_flag = "" if is_mds else ' --domain "System Data"'
     return [
-        f"mgmt_cli login -r true > {sid}",
+        f"mgmt_cli login -r true{domain_flag} > {sid}",
         f"mgmt_cli -s {sid} add administrator name {username} "
         f'authentication-method "api key" {profile_param} "{permissions_profile}"',
         f"mgmt_cli -s {sid} add api-key admin-name {username} --format json",

@@ -28,3 +28,4 @@ Load this at the start of each session; read a linked file when its hook looks r
 - [Mgmt API bootstrap MDS profile](mgmt-api-bootstrap-mds-profile.md) — MDS admin uses `multi-domain-profile "Multi-Domain Super User"`, not `permissions-profile "Super User"`
 - [Mgmt API add-api-key command](mgmt-api-add-api-key-command.md) — key comes from a separate `add api-key admin-name` call, not `add administrator`; no `api restart` needed
 - [Project rename to Convoy](project-rename-convoy.md) — renaming from chkp-cpuse-orch to Convoy before GA; GitHub rename is user's manual step, don't do it proactively
+- [Mgmt API SMS System Data domain](mgmt-api-sms-system-data-domain.md) — standalone SMS bootstrap login needs `--domain "System Data"` or add administrator/add api-key fail with err_inappropriate_domain_type
