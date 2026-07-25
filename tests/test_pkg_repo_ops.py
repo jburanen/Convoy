@@ -123,7 +123,7 @@ def test_push_uploads_and_registers_package(
     finished = store.get_job(job.id)
     assert finished.status == JobStatus.SUCCEEDED
     assert transport.puts == [(str(tmp_path / "packages" / PKG), "/var/log/upload/" + PKG)]
-    assert repo_client.add_calls == [(PKG, "/var/log/upload", "local")]
+    assert repo_client.add_calls == [(PKG, "/var/log/upload/", "local")]
     assert repo_client.show_task_calls == 1
     assert transport.closed is True
 

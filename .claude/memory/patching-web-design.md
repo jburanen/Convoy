@@ -214,6 +214,16 @@ environment RBAC** — environments are DB rows partly for that reason.
     needs a `publish` call afterward — assumed not (task-based commands like
     `install-policy` normally don't, unlike object CRUD); a wrong assumption
     surfaces as a task-failure error, not a silent false success.
+
+    **Confirmed against live gear, 2026-07-25: `path` must end with `/`.**
+    First real-world call failed with `The path must start with the forward
+    slash, must not contain spaces, and must end with the forward slash.`
+    `DEFAULT_STAGING_DIR` (`/var/log/upload`, `cpuse.py`) has no trailing
+    slash, so every call was broken until fixed. `pkg_repo_ops.py`'s
+    `_do_push` now appends `/` to `self._staging_dir` before passing it as
+    `add_repository_package`'s `path` arg — fix lives at the call site, not in
+    `mgmt_api.py`, since `ManagementAPIClient.add_repository_package` is a
+    thin wrapper and other callers may want to pass an already-correct path.
   - **Server/firewall CRUD is jobs too** (`prov.add`/`prov.edit`/`prov.delete` —
     `services/prov_ops.py`, `ProvisioningJobService`; operator-directed, 2026-07-23).
     Add/edit/delete of management servers *and* CPUSE firewalls share these three
