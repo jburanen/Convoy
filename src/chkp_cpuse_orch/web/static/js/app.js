@@ -2960,12 +2960,63 @@ document.getElementById("cdt-execute").addEventListener("click", () => {
 
 /* ---------- 4. packages ---------- */
 
+// filename -> display text ("queued" / "NN%") for an in-flight pkgs.push_to_repo
+// job, kept live by refreshPushProgress() (called from pollJobs()) by reading
+// the job's own log lines — see ProgressReporter in services/patching.py,
+// which logs "upload progress: NN%" at ~10% steps during the SFTP transfer.
+const pkgPushProgress = new Map();
+
+// Reflects pkgPushProgress for one already-rendered row — called both right
+// after a row is built (loadPackages()) and on every poll tick while a push
+// is in flight (refreshPushProgress()), so it must be cheap and idempotent.
+function applyPushProgress(row, filename) {
+  const span = row.querySelector(".pkg-push-progress");
+  const btn = row.querySelector(".btn-push-repo");
+  const text = pkgPushProgress.get(filename);
+  if (text) {
+    span.textContent = text === "queued" ? "queued…" : `uploading… ${text}`;
+    span.classList.remove("hidden");
+    btn.disabled = true;
+  } else {
+    span.textContent = "";
+    span.classList.add("hidden");
+  }
+}
+
+// Polls the log of every currently-running pkgs.push_to_repo job for its
+// latest "upload progress: NN%" line (see ProgressReporter, ~10% steps) and
+// reflects it on the matching package row. Called from pollJobs() so it rides
+// the same 2.5s cadence as everything else there — no separate timer.
+async function refreshPushProgress(activeJobs) {
+  const seen = new Set();
+  for (const job of activeJobs) {
+    const filename = job.params && job.params.package;
+    if (!filename) continue; // shouldn't happen — submit_push_to_repo always sets it
+    seen.add(filename);
+    if (job.status !== "running") continue; // "pending" keeps its "queued" placeholder
+    try {
+      const events = await api(`/api/jobs/${job.id}/events`);
+      let pct = null;
+      for (let i = events.length - 1; i >= 0; i--) {
+        const m = /upload progress: (\d+)%/.exec(events[i].message);
+        if (m) { pct = m[1]; break; }
+      }
+      if (pct != null) pkgPushProgress.set(filename, `${pct}%`);
+    } catch { /* transient — next tick retries */ }
+  }
+  for (const filename of pkgPushProgress.keys()) if (!seen.has(filename)) pkgPushProgress.delete(filename);
+  for (const row of document.querySelectorAll("#packages-table tr.pkg-row")) {
+    applyPushProgress(row, row.dataset.pkgFilename);
+  }
+}
+
 async function loadPackages() {
   const tbody = document.querySelector("#packages-table tbody");
   const packages = await api("/api/packages");
   tbody.replaceChildren();
   for (const pkg of packages) {
     const row = el("tpl-package-row");
+    row.dataset.pkgFilename = pkg.filename;
     row.querySelector(".pkg-filename").textContent = pkg.filename;
     row.querySelector(".pkg-size").textContent = fmtBytes(pkg.size);
 
@@ -3038,14 +3089,22 @@ async function loadPackages() {
           { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(extra) },
         );
         lastJobStatus.set(job.id, job.status);
-        toast("Upload to repository started — see the Jobs tab for progress.");
+        toast("Upload to repository started.");
+        // Shown live on this row (not just the Jobs tab) — pollJobs() picks up
+        // the running job and fills in a real percentage; "queued" is just the
+        // placeholder for the gap until the first poll tick.
+        pkgPushProgress.set(pkg.filename, "queued");
+        applyPushProgress(row, pkg.filename);
         await loadJobs();
       } catch (e) {
         toast("Could not start upload: " + e.message);
       } finally {
-        btn.disabled = false;
+        // Leave it disabled if the job is now tracked as in-flight — only the
+        // failure path (job never got created) should re-enable immediately.
+        if (!pkgPushProgress.has(pkg.filename)) btn.disabled = false;
       }
     });
+    applyPushProgress(row, pkg.filename); // in case a push-to-repo job is already in flight
     tbody.appendChild(row);
     tbody.appendChild(sha1Row);
   }
@@ -3058,38 +3117,48 @@ async function loadPackages() {
 // rest (hash, dedupe, store) immediately too — see services/pkgs_ops.py — so
 // the response here is already the finished pkgs.upload job, not a "queued"
 // placeholder.
+const UPLOAD_FIELD_HINT = "Click to choose a file, or drag and drop to begin upload";
+
 async function uploadPackageFile(file) {
-  const progress = document.getElementById("upload-progress");
-  const btn = document.getElementById("upload-btn");
+  const field = document.getElementById("upload-field");
+  const text = document.getElementById("upload-field-text");
+  const input = document.getElementById("upload-file");
   const form = new FormData();
   form.append("file", file);
-  btn.disabled = true;
-  progress.textContent = `uploading ${file.name}… (large packages take a while)`;
+  field.classList.add("uploading"); // blocks re-trigger — see the .uploading rule in app.css
+  input.disabled = true;
+  text.textContent = `uploading ${file.name}… (large packages take a while)`;
   try {
     const job = await api("/api/packages", { method: "POST", body: form });
     lastJobStatus.set(job.id, job.status);
     if (job.status === "succeeded") {
-      progress.textContent = `${file.name}: stored`;
+      text.textContent = `${file.name}: stored`;
       await Promise.all([loadJobs(), loadPackages()]);
     } else {
-      progress.textContent = "";
+      text.textContent = UPLOAD_FIELD_HINT;
       toast(`Upload of ${file.name} failed: ` + (job.error || "unknown error"));
       await loadJobs();
     }
   } catch (e) {
-    progress.textContent = "";
+    text.textContent = UPLOAD_FIELD_HINT;
     toast(`Upload of ${file.name} failed to start: ` + e.message);
   } finally {
-    btn.disabled = false;
+    field.classList.remove("uploading");
+    input.disabled = false;
   }
 }
 
-document.getElementById("upload-form").addEventListener("submit", async (ev) => {
-  ev.preventDefault();
-  const input = document.getElementById("upload-file");
+// The <label for="upload-file"> wrapping the (visually hidden but focusable)
+// input already opens the native file dialog on click or keyboard activation —
+// no click handler needed for that part. Selecting a file begins the upload
+// immediately (no separate submit step), matching the field's own hint text
+// and the drag & drop behavior below.
+document.getElementById("upload-file").addEventListener("change", async (ev) => {
+  const input = ev.target;
   if (!input.files.length) return;
-  await uploadPackageFile(input.files[0]);
-  input.value = "";
+  const file = input.files[0];
+  input.value = ""; // reset so choosing the same file again still fires "change"
+  await uploadPackageFile(file);
 });
 
 // Drag & drop: the whole Packages section is the drop zone. A depth counter
@@ -3710,6 +3779,11 @@ async function pollJobs() {
     }
     const currentIds = new Set(jobs.map((j) => j.id));
     for (const id of lastJobStatus.keys()) if (!currentIds.has(id)) lastJobStatus.delete(id);
+
+    const activePush = jobs.filter(
+      (j) => j.kind === "pkgs.push_to_repo" && (j.status === "pending" || j.status === "running"),
+    );
+    if (activePush.length || pkgPushProgress.size) await refreshPushProgress(activePush);
 
     const active = jobs.some((j) => j.status === "pending" || j.status === "running");
     if (active || openJobLogs.size) await loadJobs();

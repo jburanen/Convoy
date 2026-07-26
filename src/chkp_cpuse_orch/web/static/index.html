@@ -279,11 +279,10 @@
         runs as a background job (large-file transfer + server-side import) — track
         it on the <strong>Jobs</strong> tab.
       </p>
-      <form id="upload-form">
-        <input type="file" id="upload-file" required>
-        <button type="submit" id="upload-btn">Upload</button>
-        <span id="upload-progress" class="muted"></span>
-      </form>
+      <label id="upload-field" for="upload-file">
+        <input type="file" id="upload-file" class="sr-hide">
+        <span id="upload-field-text">Click to choose a file, or drag and drop to begin upload</span>
+      </label>
       <table id="packages-table">
         <thead>
           <tr>
@@ -1148,6 +1147,7 @@
     </td>
     <td class="pkg-actions" rowspan="2">
       <button class="btn-push-repo small" title="Upload to the current environment's primary management server's package repository">Upload to Mgmt</button>
+      <span class="pkg-push-progress muted hidden"></span>
       <button class="btn-delete small danger">Delete</button>
     </td>
   </tr>
