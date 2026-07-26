@@ -59,6 +59,7 @@ from ..errors import (
 from ..jobs import JobRunner
 from ..packages import PackageStore
 from ..reporting import configure_logging, get_logger, resolve_log_level
+from ..services.api_access import ApiAccessService
 from ..services.cdt_ops import CDTService
 from ..services.common import ClientFactory, EnvironmentRegistry
 from ..services.connect_primary import PrimaryConnectService
@@ -516,6 +517,7 @@ def create_app(
             store=store,
         )
         discovery = DiscoveryService(registry=registry, mgmt_client_factory=mgmt_client_factory)
+        api_access = ApiAccessService(registry=registry, runner=runner)
         pkg_repo = PackageRepoService(
             registry=registry,
             packages=packages,
@@ -542,6 +544,7 @@ def create_app(
         app.state.prov_jobs = prov_jobs
         app.state.primary_connect = primary_connect
         app.state.discovery = discovery
+        app.state.api_access = api_access
         app.state.pkg_repo = pkg_repo
 
         interrupted = runner.recover()
@@ -667,6 +670,11 @@ def _prov_jobs(request: Request) -> ProvisioningJobService:
 
 def _primary_connect(request: Request) -> PrimaryConnectService:
     service: PrimaryConnectService = request.app.state.primary_connect
+    return service
+
+
+def _api_access(request: Request) -> ApiAccessService:
+    service: ApiAccessService = request.app.state.api_access
     return service
 
 
@@ -1134,6 +1142,51 @@ def _register_routes(app: FastAPI) -> None:
         null on a second call, an unknown job id, or a job that isn't a
         connect-primary job. Never logged; see PrimaryConnectService."""
         return {"api_key": _primary_connect(request).reveal_api_key(job_id)}
+
+    # -- Management API accessibility diagnose/repair (SSH) --------------------
+    # Proactive follow-up to Connect to Primary above: the UI calls diagnose
+    # right after a connect-primary job succeeds, so a Management API that's
+    # unreachable (e.g. accessibility scoped to require-local) surfaces right
+    # where it was just provisioned, instead of showing up later as a
+    # confusing 403 during estate discovery.
+
+    @app.post("/api/environments/{env}/api-access/diagnose")
+    def diagnose_api_access(env: str, request: Request) -> dict[str, Any]:
+        """Runs `api status` on the environment's primary over SSH to tell
+        "API not enabled" apart from "accessibility restricted to
+        localhost" — the two common causes of a 403 from the Management API.
+        Never itself raises an OrchestratorError: any failure (no SSH
+        credential, unreachable host, bad command) comes back as ``error``
+        for the UI to show inline."""
+        diag = _api_access(request).diagnose(env)
+        return {
+            "overall_started": diag.overall_started,
+            "restricted_to_local": diag.restricted_to_local,
+            "raw_output": diag.raw_output,
+            "error": diag.error,
+        }
+
+    @app.get("/api/environments/{env}/api-access/repair-preview")
+    def api_access_repair_preview(env: str, request: Request) -> dict[str, Any]:
+        """Renders the exact mgmt_cli sequence the repair job below runs over
+        SSH, so the operator can review it before confirming — same pattern
+        as connect-primary/preview."""
+        try:
+            commands = _api_access(request).preview_repair_commands(env)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        return {"commands": commands}
+
+    @app.post("/api/environments/{env}/api-access/repair", status_code=202)
+    def repair_api_access(env: str, request: Request) -> JobRecord:
+        """Widens the primary's Management API accessibility off
+        `require-local` over SSH (see services/api_access.py) and restarts
+        the API server for the change to take effect."""
+        _require_env(request, env)
+        try:
+            return _api_access(request).submit_repair(env, triggered_by=_current_user(request))
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
 
     # -- servers (environment-scoped) ------------------------------------------
 

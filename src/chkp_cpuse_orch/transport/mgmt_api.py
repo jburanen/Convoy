@@ -37,7 +37,7 @@ from typing import Any
 
 import httpx
 
-from ..errors import TransportError
+from ..errors import ManagementAPIForbidden, TransportError
 from ..inventory import Host
 from ..reporting import get_logger
 
@@ -275,6 +275,10 @@ class ManagementAPIClient:
         if resp.status_code != httpx.codes.OK:
             # The API returns a JSON body with 'message'/'code' on error.
             message = _error_message(resp)
+            if resp.status_code == httpx.codes.FORBIDDEN:
+                raise ManagementAPIForbidden(
+                    f"Management API {command} failed: HTTP 403 Forbidden ({message})"
+                )
             raise TransportError(f"Management API {command} failed: {message}")
         try:
             body: dict[str, Any] = resp.json()

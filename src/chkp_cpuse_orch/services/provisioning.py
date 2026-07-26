@@ -170,6 +170,17 @@ def render_add_api_key_command(username: str) -> str:
     return f"mgmt_cli -s {_API_SESSION_FILE} add api-key admin-name {username} --format json"
 
 
+def render_set_api_settings_command() -> str:
+    """Widen the Management API's accessibility, run against the session
+    opened by ``render_mgmt_login_command``. ``"minimize"`` is Check Point's
+    own "All IP addresses that can be used for GUI clients" (Trusted
+    Clients) option — the least-broad fix for a 403 caused by
+    ``accessibility require-local`` (CLI reference: set-api-settings v2.1).
+    Used by services/api_access.py's SSH repair flow, triggered from a 403
+    on estate discovery (services/discovery.py)."""
+    return f'mgmt_cli -s {_API_SESSION_FILE} set-api-settings accessibility "minimize"'
+
+
 def render_publish_logout_commands() -> list[str]:
     """Publish the session's changes, log out, and remove the session file."""
     return [

@@ -49,7 +49,12 @@ from types import TracebackType
 from typing import Any, Protocol
 
 from ..credentials import CredentialKind
-from ..errors import CredentialError, OrchestratorError, TransportError
+from ..errors import (
+    CredentialError,
+    ManagementAPIForbidden,
+    OrchestratorError,
+    TransportError,
+)
 from ..inventory import Host, Role
 from ..reporting import get_logger
 from ..transport.mgmt_api import ManagementAPIClient
@@ -222,6 +227,9 @@ class DiscoveryService:
                         f"pre-filled): {exc}"
                     )
                     clusters = []
+        except ManagementAPIForbidden as exc:
+            result.warnings.append(_forbidden_warning(exc, primary))
+            return
         except TransportError as exc:
             result.warnings.append(f"Management API discovery failed: {exc}")
             return
@@ -317,6 +325,9 @@ class DiscoveryService:
         try:
             with self._mgmt_client_factory(primary, **auth) as client:
                 objects = client.show_gateways_and_servers(details_level="full")
+        except ManagementAPIForbidden as exc:
+            result.warnings.append(_forbidden_warning(exc, primary))
+            return
         except TransportError as exc:
             result.warnings.append(f"Management API discovery failed: {exc}")
             return
@@ -364,6 +375,15 @@ class DiscoveryService:
         if not rows:
             result.warnings.append("Could not parse mdsquerydb MDSs output")
         result.servers.extend(rows)
+
+
+def _forbidden_warning(exc: ManagementAPIForbidden, primary: Host) -> str:
+    return (
+        f"Management API discovery failed: {exc}. A 403 like this almost always means "
+        f"the Management API on {primary.address} is either not enabled, or its access "
+        "settings don't allow connections from this server — re-run Connect to Primary "
+        "on the Provisioning tab, which checks this over SSH and can repair it."
+    )
 
 
 # ---- pure mapping helpers (unit-tested without live gear) -----------------------

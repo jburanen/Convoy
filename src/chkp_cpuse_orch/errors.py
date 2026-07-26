@@ -23,6 +23,14 @@ class TransportError(OrchestratorError):
     """SSH / REST transport failure reaching a target host."""
 
 
+class ManagementAPIForbidden(TransportError):
+    """The Management API responded HTTP 403. Almost always means the API
+    process isn't started, or its `accessibility` setting doesn't permit
+    connections from this host — not a bad credential. See
+    services/api_access.py for the SSH-based diagnose/repair flow this
+    triggers in the discovery UI."""
+
+
 class CDTError(OrchestratorError):
     """The Central Deployment Tool reported a failure."""
 

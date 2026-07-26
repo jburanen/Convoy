@@ -838,10 +838,107 @@ document.getElementById("connect-primary-confirm-run").addEventListener("click",
       document.getElementById("provision-details").open = false;
       document.getElementById("connect-primary-details").open = false;
     }
+    // Proactively confirm the Management API is actually reachable right where
+    // it was just provisioned, rather than leaving an accessibility problem to
+    // surface later as a confusing 403 during discovery.
+    checkApiAccessAfterConnect();
   } catch (e) {
     connectPrimaryStatus("Connect to Primary failed: " + e.message, "err");
   } finally {
     btn.disabled = false;
+  }
+});
+
+/* ---------- api accessibility check — proactive follow-up to Connect to --- */
+/* ---------- Primary above, over SSH (see services/api_access.py) ---------- */
+
+async function checkApiAccessAfterConnect() {
+  if (!currentEnv) return;
+  const box = document.getElementById("cp-api-access");
+  const msg = document.getElementById("cp-api-access-message");
+  const repairBtn = document.getElementById("cp-api-access-repair");
+  box.classList.remove("hidden");
+  repairBtn.classList.add("hidden");
+  msg.textContent = "Checking API accessibility over SSH…";
+  try {
+    const diag = await api(
+      `/api/environments/${encodeURIComponent(currentEnv)}/api-access/diagnose`,
+      { method: "POST" },
+    );
+    if (diag.error) {
+      msg.textContent = "Could not check API accessibility: " + diag.error;
+    } else if (diag.restricted_to_local) {
+      msg.textContent =
+        "Heads up: the Management API only accepts connections from the management " +
+        "server itself (accessibility: require local) — this app won't be able to reach " +
+        "it for discovery or package-repo pushes until that's widened.";
+      repairBtn.classList.remove("hidden");
+    } else if (!diag.overall_started) {
+      msg.textContent =
+        "The API service does not appear to be started on this server — check " +
+        "`api status` on it directly, or start it with `api start`.";
+    } else {
+      box.classList.add("hidden"); // reachable and unrestricted — nothing to show
+    }
+  } catch (e) {
+    msg.textContent = "Could not check API accessibility: " + e.message;
+  }
+}
+
+document.getElementById("cp-api-access-repair").addEventListener("click", async () => {
+  if (!currentEnv) return;
+  try {
+    const preview = await api(
+      `/api/environments/${encodeURIComponent(currentEnv)}/api-access/repair-preview`,
+    );
+    document.getElementById("api-access-repair-confirm-output").textContent =
+      preview.commands.join("\n");
+    document.getElementById("api-access-repair-confirm-modal").classList.remove("hidden");
+  } catch (e) {
+    toast("Could not render command preview: " + e.message);
+  }
+});
+
+function closeApiAccessRepairConfirmModal() {
+  document.getElementById("api-access-repair-confirm-modal").classList.add("hidden");
+}
+document.getElementById("api-access-repair-confirm-close").addEventListener(
+  "click", closeApiAccessRepairConfirmModal,
+);
+document.getElementById("api-access-repair-confirm-cancel").addEventListener(
+  "click", closeApiAccessRepairConfirmModal,
+);
+document.getElementById("api-access-repair-confirm-modal").addEventListener("click", (ev) => {
+  if (ev.target.id === "api-access-repair-confirm-modal") closeApiAccessRepairConfirmModal();
+});
+
+document.getElementById("api-access-repair-confirm-run").addEventListener("click", async () => {
+  if (!currentEnv) return;
+  closeApiAccessRepairConfirmModal();
+  const msg = document.getElementById("cp-api-access-message");
+  msg.textContent = "Repairing API access over SSH…";
+  try {
+    const job = await api(`/api/environments/${encodeURIComponent(currentEnv)}/api-access/repair`, {
+      method: "POST",
+    });
+    lastJobStatus.set(job.id, job.status);
+    await loadJobs();
+    // api restart plus several mgmt_cli round-trips can take a while — same
+    // longer budget as connect-primary's own waitForJobDone use.
+    const finished = await waitForJobDone(job.id, { timeoutMs: 30000 });
+    if (!finished) {
+      msg.textContent = "Still running — check the Jobs tab for progress.";
+      return;
+    }
+    await loadJobs();
+    if (finished.status !== "succeeded") {
+      msg.textContent = `Repair failed: ${finished.error || "see the Jobs tab for details"}`;
+      return;
+    }
+    msg.textContent = "Repaired — the API now accepts connections from this server.";
+    document.getElementById("cp-api-access-repair").classList.add("hidden");
+  } catch (e) {
+    msg.textContent = "Repair failed: " + e.message;
   }
 });
 

@@ -12,6 +12,7 @@ from chkp_cpuse_orch.services.provisioning import (
     render_mgmt_api_commands,
     render_mgmt_login_command,
     render_publish_logout_commands,
+    render_set_api_settings_command,
     render_show_administrator_command,
 )
 
@@ -175,3 +176,13 @@ def test_parse_api_key_rejects_unexpected_shape() -> None:
 def test_parse_api_key_rejects_missing_field() -> None:
     with pytest.raises(ProvisioningError, match="could not parse API key"):
         parse_api_key_from_add_api_key_output('{"message": "ok, but no key here"}')
+
+
+# -- set-api-settings (used by services/api_access.py's 403 repair flow) ----------
+
+
+def test_set_api_settings_command_widens_to_minimize() -> None:
+    login = render_mgmt_login_command(is_mds=False)
+    cmd = render_set_api_settings_command()
+    session_file = login.rsplit("> ", 1)[1]
+    assert cmd == f'mgmt_cli -s {session_file} set-api-settings accessibility "minimize"'

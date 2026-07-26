@@ -181,6 +181,17 @@
         </form>
         <div id="cp-status" class="prov-notes hidden"></div>
       </details>
+      <!-- Proactive follow-up once Connect to Primary succeeds: checks the
+           Management API is actually reachable (accessibility isn't scoped to
+           require-local) right where it was just provisioned, instead of
+           leaving that to surface later as a confusing 403 during discovery.
+           Kept outside the <details> above so it stays visible even after a
+           successful connect auto-collapses that panel (see
+           updateProvisionCollapse). See services/api_access.py. -->
+      <div id="cp-api-access" class="hint warn hidden">
+        <p id="cp-api-access-message"></p>
+        <button type="button" id="cp-api-access-repair" class="hidden">Repair over SSH</button>
+      </div>
     </section>
 
     <section id="credentials">
@@ -692,6 +703,35 @@
     <div class="cred-modal-actions">
       <button type="button" id="connect-primary-confirm-run">Run</button>
       <button type="button" id="connect-primary-confirm-cancel" class="secondary">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ Repair API access confirm modal (Provisioning tab) ========== -->
+<!-- Opened from "Repair over SSH" in the Connect to Primary panel, once the
+     proactive api-access diagnose that runs right after a successful connect
+     confirms the Management API is scoped to accessibility require-local.
+     Shows the exact mgmt_cli sequence before it runs, same pattern as
+     connect-primary-confirm above. -->
+<div id="api-access-repair-confirm-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="api-access-repair-confirm-title">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2 id="api-access-repair-confirm-title">Confirm: repair Management API access</h2>
+      <button id="api-access-repair-confirm-close" class="small" title="Close">✕</button>
+    </div>
+    <p class="hint warn">
+      These commands will run over SSH now, widening the API's accessibility off
+      <code>require-local</code>. The final <code>api restart</code> briefly interrupts other
+      API/SmartConsole sessions — it does not affect gateway policy enforcement.
+    </p>
+    <div class="output-pane">
+      <div class="output-body">
+        <pre id="api-access-repair-confirm-output" class="job-events mono"></pre>
+      </div>
+    </div>
+    <div class="cred-modal-actions">
+      <button type="button" id="api-access-repair-confirm-run">Run</button>
+      <button type="button" id="api-access-repair-confirm-cancel" class="secondary">Cancel</button>
     </div>
   </div>
 </div>

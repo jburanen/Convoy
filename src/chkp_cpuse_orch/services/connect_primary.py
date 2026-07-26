@@ -14,6 +14,11 @@ not a raised exception's message (which ends up on ``JobRecord.error``), not
 structlog. It lives only in local variables during the job, then in this
 service's in-process, pop-once ``_ApiKeyReveal`` map, read exactly once by the
 web layer's reveal endpoint.
+
+This job creates the administrator/API key but doesn't itself confirm the
+Management API is actually *reachable* — its ``accessibility`` setting might
+still be scoped to ``require-local``. The web UI checks that separately,
+automatically, right after this job succeeds (see services/api_access.py).
 """
 
 from __future__ import annotations
