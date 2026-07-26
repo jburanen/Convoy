@@ -719,14 +719,22 @@ function populateConnectPrimaryCredSelect() {
   document.getElementById("cp-cred-label").classList.toggle("hidden", !enabled);
   if (!enabled) return;
   const select = document.getElementById("cp-cred-select");
+  const previous = select.value;
   select.querySelectorAll("option:not(:first-child)").forEach((o) => o.remove());
+  let defaultName = "";
   for (const set of credentialSets) {
     const opt = document.createElement("option");
     opt.value = set.name;
     opt.textContent = set.name;
     opt.dataset.sshUser = set.ssh_username || "";
     select.appendChild(opt);
+    if (set.is_default) defaultName = set.name;
   }
+  // Keep an already-chosen set across reloads (e.g. after a job finishes);
+  // otherwise auto-pick the one marked "default" instead of leaving this on
+  // the "none — assign later" placeholder.
+  const stillExists = credentialSets.some((s) => s.name === previous);
+  select.value = stillExists ? previous : defaultName;
 }
 
 function connectPrimaryStatus(message, cls) {
