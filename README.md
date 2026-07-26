@@ -106,7 +106,7 @@ These gates define the major version releases - the milestones may change in the
 ✨ Revisit ALL descriptive text and rewrite for clarity and brevity  
 
 #### Provisioning  
-✨ Remove the expert mode password - it will never be necessary  
+Empty is a good sign!  
 
 #### Packages
 🤞 Investigate if we can extract and display meta data like compatible major version from the package file  
