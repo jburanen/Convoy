@@ -5,16 +5,18 @@ so a broken accessibility setting surfaces where it was just provisioned
 instead of later as a confusing HTTP 403 during estate discovery.
 
 An unreachable Management API almost always means one of two things: the API
-process isn't started, or its ``accessibility`` setting is scoped to
+process isn't started, or its accepted-calls-from setting is scoped to
 ``require-local`` (loopback only) and refuses this app's connection outright.
 ``api status``, run over SSH since by construction the API itself is what's
-unreachable, tells the two apart. The fix for the second case widens
-accessibility to ``"minimize"`` — Check Point's own "All IP addresses that
-can be used for GUI clients" (Trusted Clients) option, the least-broad
-setting that unblocks this app — via ``mgmt_cli set-api-settings``, then
-publishes and restarts the API server (required for the new setting to take
-effect; this briefly drops other API/SmartConsole sessions, not gateway
-policy enforcement — CLI reference: set-api-settings v2.1).
+unreachable, reports this as an ``accessibility: ...`` line and tells the two
+apart. The fix for the second case widens it to ``"All IP addresses that can
+be used for GUI clients"`` — the least-broad setting that unblocks this app —
+via ``mgmt_cli set api-settings accepted-api-calls-from`` (CLI reference:
+set-api-settings v2.1 — NOT an ``accessibility``/``"minimize"`` parameter
+pair, which an earlier docs-tool lookup fabricated wholesale; operator-
+corrected 2026-07-26), then publishes and restarts the API server (required
+for the new setting to take effect; this briefly drops other API/SmartConsole
+sessions, not gateway policy enforcement).
 
 ``diagnose()`` is read-only and synchronous, same shape as
 ``DiscoveryService.list_domains`` — the UI calls it automatically, no
@@ -99,7 +101,7 @@ def render_repair_commands(*, is_mds: bool) -> list[str]:
     restart``/``api status`` on an MDS affects."""
     return [
         render_mgmt_login_command(is_mds=is_mds),
-        render_set_api_settings_command(),
+        render_set_api_settings_command(is_mds=is_mds),
         *render_publish_logout_commands(),
         "api restart",
     ]
@@ -182,11 +184,11 @@ class ApiAccessService:
                 )
                 return
             ctx.log(
-                "API accessibility is restricted to localhost — widening it to "
-                '"minimize" (All IP addresses that can be used for GUI clients)'
+                "API accessibility is restricted to localhost — widening accepted-api-calls-from "
+                'to "All IP addresses that can be used for GUI clients"'
             )
             require_ok(client.run(render_mgmt_login_command(is_mds=is_mds)))
-            require_ok(client.run(render_set_api_settings_command()))
+            require_ok(client.run(render_set_api_settings_command(is_mds=is_mds)))
             for cmd in render_publish_logout_commands():
                 require_ok(client.run(cmd))
             ctx.log("published the change and logged out of mgmt_cli")
