@@ -110,17 +110,21 @@ Empty is a good sign!
 
 #### Packages
 🤞 Investigate if we can extract and display meta data like compatible major version from the package file  
+🤞 Add a percentage progress display for package upload  
 
 #### Direct Patching (CPUSE)
 ⏫ Add deployment agent upgrade option  
 🤞 Some kind of sledgehammer to swing to release config/job lock from management server and firewalls if a job gets stranded/stuck  
 ⏫ Offer via text link in info line to use CPRID to provision SSH access to firewalls if status check fails - also management servers?  
+🪲 Package verify command is being invoked incorrectly - needs to run with the package display name and not the package file name  
+🪲 Install job fails to initiate on the first click and requires a second attempt to run
 
 #### Jobs
 ⏫ Add syslog output    
 🤞 Add a download button for the install log  
 🤞 Allow import jobs to be cancelled during file copy stage - clean up partial file on target  
 ✨ Affirm in a push_to_repo job output that the temp storage was cleaned up  
+✨ On jobs with error output, never let the error output spill outside the table boundary - direct the user to view details in the output box or something like that  
 
 #### Squashed Bugs
 v0.49.3 Jobs tab Target column was blank for push_to_repo jobs (grouped with the other filename-only pkgs.* jobs) - now shows the management server being pushed to  
