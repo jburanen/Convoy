@@ -77,6 +77,36 @@ def test_upload_job_fails_on_conflicting_content(
     assert finished.status == JobStatus.FAILED
     assert "different content" in (finished.error or "")
     assert not staged.exists()  # cleaned up even on failure
+    messages = [e.message for e in store.events(job.id)]
+    assert any("cleanup: removed temp upload" in m for m in messages)
+
+
+def test_upload_job_logs_cleanup_failure_when_unlink_fails(
+    service: PackageJobService,
+    packages: PackageStore,
+    store: Store,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The staged file fails to import (content conflict) *and* fails to clean
+    up (e.g. still held open) — both outcomes should land in the job log."""
+    packages.add_stream(PKG, io.BytesIO(b"original content"))
+    staged = _stage(packages, b"different content")
+
+    original_unlink = Path.unlink
+
+    def failing_unlink(self: Path, *args: object, **kwargs: object) -> None:
+        if self == staged:
+            raise PermissionError("simulated: file in use")
+        original_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", failing_unlink)
+
+    job = service.submit_upload(PKG, staged)
+
+    finished = store.get_job(job.id)
+    assert finished.status == JobStatus.FAILED
+    messages = [e.message for e in store.events(job.id)]
+    assert any("cleanup: failed to remove temp upload" in m for m in messages)
 
 
 def test_upload_job_logs_progress(
