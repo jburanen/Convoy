@@ -852,36 +852,50 @@ document.getElementById("connect-primary-confirm-run").addEventListener("click",
 /* ---------- api accessibility check — proactive follow-up to Connect to --- */
 /* ---------- Primary above, over SSH (see services/api_access.py) ---------- */
 
+// Same orange/red/green convention as connectPrimaryStatus (prov-note-warn/
+// -err/-ok) — used here so a functionality-blocking accessibility problem
+// (restricted to localhost, or the API not started at all) reads as an
+// unmissable orange call-out instead of blending into the muted hint text.
+function setApiAccessMessage(text, cls) {
+  const msg = document.getElementById("cp-api-access-message");
+  msg.textContent = text;
+  msg.classList.remove("prov-note-warn", "prov-note-err", "prov-note-ok");
+  if (cls) msg.classList.add(`prov-note-${cls}`);
+}
+
 async function checkApiAccessAfterConnect() {
   if (!currentEnv) return;
   const box = document.getElementById("cp-api-access");
-  const msg = document.getElementById("cp-api-access-message");
   const repairBtn = document.getElementById("cp-api-access-repair");
   box.classList.remove("hidden");
   repairBtn.classList.add("hidden");
-  msg.textContent = "Checking API accessibility over SSH…";
+  setApiAccessMessage("Checking API accessibility over SSH…");
   try {
     const diag = await api(
       `/api/environments/${encodeURIComponent(currentEnv)}/api-access/diagnose`,
       { method: "POST" },
     );
     if (diag.error) {
-      msg.textContent = "Could not check API accessibility: " + diag.error;
+      setApiAccessMessage("Could not check API accessibility: " + diag.error, "err");
     } else if (diag.restricted_to_local) {
-      msg.textContent =
+      setApiAccessMessage(
         "Heads up: the Management API only accepts connections from the management " +
-        "server itself (accessibility: require local) — this app won't be able to reach " +
-        "it for discovery or package-repo pushes until that's widened.";
+          "server itself (accessibility: require local) — this app won't be able to reach " +
+          "it for discovery or package-repo pushes until that's widened.",
+        "warn",
+      );
       repairBtn.classList.remove("hidden");
     } else if (!diag.overall_started) {
-      msg.textContent =
-        "The API service does not appear to be started on this server — check " +
-        "`api status` on it directly, or start it with `api start`.";
+      setApiAccessMessage(
+        "Heads up: the API service does not appear to be started on this server — " +
+          "check `api status` on it directly, or start it with `api start`.",
+        "warn",
+      );
     } else {
       box.classList.add("hidden"); // reachable and unrestricted — nothing to show
     }
   } catch (e) {
-    msg.textContent = "Could not check API accessibility: " + e.message;
+    setApiAccessMessage("Could not check API accessibility: " + e.message, "err");
   }
 }
 
@@ -915,8 +929,7 @@ document.getElementById("api-access-repair-confirm-modal").addEventListener("cli
 document.getElementById("api-access-repair-confirm-run").addEventListener("click", async () => {
   if (!currentEnv) return;
   closeApiAccessRepairConfirmModal();
-  const msg = document.getElementById("cp-api-access-message");
-  msg.textContent = "Repairing API access over SSH…";
+  setApiAccessMessage("Repairing API access over SSH…");
   try {
     const job = await api(`/api/environments/${encodeURIComponent(currentEnv)}/api-access/repair`, {
       method: "POST",
@@ -927,18 +940,21 @@ document.getElementById("api-access-repair-confirm-run").addEventListener("click
     // longer budget as connect-primary's own waitForJobDone use.
     const finished = await waitForJobDone(job.id, { timeoutMs: 30000 });
     if (!finished) {
-      msg.textContent = "Still running — check the Jobs tab for progress.";
+      setApiAccessMessage("Still running — check the Jobs tab for progress.", "warn");
       return;
     }
     await loadJobs();
     if (finished.status !== "succeeded") {
-      msg.textContent = `Repair failed: ${finished.error || "see the Jobs tab for details"}`;
+      setApiAccessMessage(
+        `Repair failed: ${finished.error || "see the Jobs tab for details"}`,
+        "err",
+      );
       return;
     }
-    msg.textContent = "Repaired — the API now accepts connections from this server.";
+    setApiAccessMessage("Repaired — the API now accepts connections from this server.", "ok");
     document.getElementById("cp-api-access-repair").classList.add("hidden");
   } catch (e) {
-    msg.textContent = "Repair failed: " + e.message;
+    setApiAccessMessage("Repair failed: " + e.message, "err");
   }
 });
 

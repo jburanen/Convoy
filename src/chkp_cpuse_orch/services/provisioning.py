@@ -170,15 +170,29 @@ def render_add_api_key_command(username: str) -> str:
     return f"mgmt_cli -s {_API_SESSION_FILE} add api-key admin-name {username} --format json"
 
 
-def render_set_api_settings_command() -> str:
-    """Widen the Management API's accessibility, run against the session
-    opened by ``render_mgmt_login_command``. ``"minimize"`` is Check Point's
-    own "All IP addresses that can be used for GUI clients" (Trusted
-    Clients) option — the least-broad fix for a 403 caused by
-    ``accessibility require-local`` (CLI reference: set-api-settings v2.1).
+def render_set_api_settings_command(*, is_mds: bool = False) -> str:
+    """Widen which IPs the Management API accepts calls from, run against the
+    session opened by ``render_mgmt_login_command``. The parameter is
+    ``accepted-api-calls-from`` — NOT ``accessibility``/``"minimize"``, which
+    an earlier docs-tool lookup fabricated wholesale (operator-corrected
+    2026-07-26 against the real CLI reference: set-api-settings v2.1).
+    ``"All IP addresses that can be used for GUI clients"`` is the
+    least-broad fix for a 403 caused by ``api status``'s own ``accessibility:
+    require local`` reading (a different, Gaia-CLI-side status field — not
+    the mgmt_cli parameter name).
+
+    Needs the same ``--domain "System Data"`` flag as the login command on a
+    standalone SMS (operator-confirmed 2026-07-26) — unlike ``add
+    administrator``/``add api-key``, this command doesn't inherit the
+    session's login-time domain context on its own.
+
     Used by services/api_access.py's SSH repair flow, triggered from a 403
     on estate discovery (services/discovery.py)."""
-    return f'mgmt_cli -s {_API_SESSION_FILE} set-api-settings accessibility "minimize"'
+    domain_flag = "" if is_mds else ' --domain "System Data"'
+    return (
+        f"mgmt_cli -s {_API_SESSION_FILE} set api-settings accepted-api-calls-from "
+        f'"All IP addresses that can be used for GUI clients"{domain_flag}'
+    )
 
 
 def render_publish_logout_commands() -> list[str]:

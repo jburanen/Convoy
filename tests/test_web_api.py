@@ -1323,7 +1323,7 @@ def test_api_access_repair_preview_renders_commands(client: TestClient) -> None:
     resp = client.get("/api/environments/default/api-access/repair-preview")
     assert resp.status_code == 200, resp.text
     commands = resp.json()["commands"]
-    assert any('set-api-settings accessibility "minimize"' in c for c in commands)
+    assert any("set api-settings accepted-api-calls-from" in c for c in commands)
     assert commands[-1] == "api restart"
 
 
@@ -1339,7 +1339,7 @@ def test_api_access_repair_widens_accessibility(
     assert resp.status_code == 202, resp.text
     job = _wait_for_job(client, resp.json()["id"])
     assert job["status"] == "succeeded", job["error"]
-    assert any('set-api-settings accessibility "minimize"' in c for c in transport.commands)
+    assert any("set api-settings accepted-api-calls-from" in c for c in transport.commands)
     assert "api restart" in transport.commands
 
 

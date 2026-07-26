@@ -178,11 +178,19 @@ def test_parse_api_key_rejects_missing_field() -> None:
         parse_api_key_from_add_api_key_output('{"message": "ok, but no key here"}')
 
 
-# -- set-api-settings (used by services/api_access.py's 403 repair flow) ----------
+# -- set api-settings (used by services/api_access.py's 403 repair flow) ----------
 
 
-def test_set_api_settings_command_widens_to_minimize() -> None:
+def test_set_api_settings_command_widens_accepted_calls_from() -> None:
     login = render_mgmt_login_command(is_mds=False)
-    cmd = render_set_api_settings_command()
+    cmd = render_set_api_settings_command(is_mds=False)
     session_file = login.rsplit("> ", 1)[1]
-    assert cmd == f'mgmt_cli -s {session_file} set-api-settings accessibility "minimize"'
+    assert cmd == (
+        f"mgmt_cli -s {session_file} set api-settings accepted-api-calls-from "
+        '"All IP addresses that can be used for GUI clients" --domain "System Data"'
+    )
+
+
+def test_set_api_settings_command_mds_omits_domain() -> None:
+    cmd = render_set_api_settings_command(is_mds=True)
+    assert "--domain" not in cmd

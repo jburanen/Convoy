@@ -103,13 +103,13 @@ These gates define the major version releases - the milestones may change in the
 🪲 Bugfix ⏫ Probably a major change 🤞 Non-blocking nice-to-have ✨ Cosmetic only
 
 ✨ Add logic to display a warning on mobile devices that the UI of this tool does not scale down well (by design) and you should use it on a larger display.   
-✨ Revisit ALL descriptive text and rewrite for clarity and brevity
+✨ Revisit ALL descriptive text and rewrite for clarity and brevity  
 
 #### Provisioning  
 ⏫ Move definition of primary SMS/MDS to the Mangement Environment modal? This would make it possible to further automate bootstrapping - test SSH access, provision API account automatically, test access  
 ⏫ After bootstrapping the SSH user, use that user to deploy the admin API account, check/test access settings and offer to correct if needed  
 ✨ Make it more clear on the provisioning tab that the SSH account from bootstrapping must be added to ALL management servers - maybe have it test access and indicate in the servers table  
-✨ Sort management servers table by Role
+✨ Sort management servers table by Role  
 
 #### Packages
 🤞 Investigate if we can extract and display meta data like compatible major version from the package file  
@@ -128,7 +128,9 @@ These gates define the major version releases - the milestones may change in the
 🤞 Allow import jobs to be cancelled during file copy stage - clean up partial file on target  
 ✨ Affirm in a push_to_repo job output that the temp storage was cleaned up  
 
-#### Squashed Bugs
+#### Squashed Bugs, Polished Edges
+v0.48.1 The Connect to Primary API-access repair used a fabricated `set-api-settings accessibility "minimize"` mgmt_cli command - corrected to the real `set api-settings accepted-api-calls-from "All IP addresses that can be used for GUI clients"`, with the `--domain "System Data"` flag it also needs on a standalone SMS  
+v0.48.1 The "heads up" API-accessibility warning under Connect to Primary rendered as plain muted text instead of orange - `hint warn` had no matching CSS rule; now uses the same prov-note-warn/-err/-ok convention as the rest of that panel  
 v0.48.0 No error checking for lack of API access - Connect to Primary now proactively checks the API's accessibility over SSH right after provisioning it, and offers to repair a require-local restriction; a 403 during discovery also explains the likely cause  
 v0.47.3 Multi-select management servers for import - only starts first server, doesn't queue second  
 v0.46.0 Provide a way to clean up the temp file storage after a timed out or failed package import job  

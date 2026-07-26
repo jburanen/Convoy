@@ -83,7 +83,10 @@ def test_render_repair_commands_sms() -> None:
     cmds = render_repair_commands(is_mds=False)
     joined = "\n".join(cmds)
     assert cmds[0].startswith('mgmt_cli login -r true --domain "System Data" > ')
-    assert 'set-api-settings accessibility "minimize"' in joined
+    assert (
+        'set api-settings accepted-api-calls-from "All IP addresses that can be used '
+        'for GUI clients" --domain "System Data"'
+    ) in joined
     assert any(c.endswith("publish") for c in cmds)
     assert cmds[-1] == "api restart"
 
@@ -203,7 +206,7 @@ def test_repair_job_widens_restricted_access(
     finished = store.get_job(job.id)
     assert finished.status.value == "succeeded"
     joined = "\n".join(transport.commands)
-    assert 'set-api-settings accessibility "minimize"' in joined
+    assert "set api-settings accepted-api-calls-from" in joined
     assert "api restart" in joined
     events = "\n".join(e.message for e in store.events(job.id))
     assert "restarted the API server" in events
@@ -216,7 +219,7 @@ def test_repair_job_is_noop_when_already_unrestricted(
     job = service.submit_repair(ENV)
     _run(service)
     assert store.get_job(job.id).status.value == "succeeded"
-    assert not any("set-api-settings" in c for c in transport.commands)
+    assert not any("set api-settings" in c for c in transport.commands)
     events = "\n".join(e.message for e in store.events(job.id))
     assert "nothing to repair" in events
 

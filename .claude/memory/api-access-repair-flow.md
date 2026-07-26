@@ -6,11 +6,25 @@ metadata:
 ---
 
 A Management API 403 (during estate discovery or elsewhere) almost always
-means the API isn't started, or its `accessibility` setting is
-`require-local` (loopback only). `services/api_access.py` offers an
-SSH-based diagnose (`api status`, read-only) and repair (`mgmt_cli
-set-api-settings accessibility "minimize"` + publish + `api restart`) for
+means the API isn't started, or `api status`'s own `accessibility: ...`
+reading is `require local` (loopback only). `services/api_access.py` offers
+an SSH-based diagnose (`api status`, read-only) and repair (`mgmt_cli set
+api-settings accepted-api-calls-from "All IP addresses that can be used for
+GUI clients" --domain "System Data"` on SMS + publish + `api restart`) for
 the second case.
+
+**Corrected 2026-07-26:** the first cut of this used a fabricated
+`set-api-settings accessibility "minimize"` command — an early docs-tool
+(MCP) lookup invented that parameter/value pairing wholesale; it doesn't
+exist. The real parameter, `accepted-api-calls-from`, was sitting in this
+repo's own git history the whole time (the 2026-07-20 removal below), and
+the operator confirmed both the correct value string and that the command
+also needs its own `--domain "System Data"` flag on a standalone SMS (unlike
+`add administrator`/`add api-key`, it doesn't inherit login's domain
+context). **Lesson: don't trust the docs-tool for exact mgmt_cli parameter
+names/values without cross-checking this repo's git history or getting
+operator confirmation** — same caution [[mgmt-api-bootstrap-mds-profile]]
+already recorded for a different command.
 
 **Trigger point: right after Connect to Primary succeeds**, not the
 discover-servers modal (where this first shipped 2026-07-25, then moved same
