@@ -3,7 +3,7 @@ from __future__ import annotations
 from pydantic import SecretStr
 
 from chkp_cpuse_orch.credentials import Credential, CredentialBundle, CredentialKind
-from chkp_cpuse_orch.errors import InventoryError, TransportError
+from chkp_cpuse_orch.errors import InventoryError, ManagementAPIForbidden, TransportError
 from chkp_cpuse_orch.inventory import FIREWALL_ROLES, Host, Inventory, Role, Site
 from chkp_cpuse_orch.services.discovery import (
     DiscoveryService,
@@ -258,6 +258,40 @@ def test_discover_api_failure_becomes_warning() -> None:
     result = service.discover("default", "mgmt-01")
     assert result.servers == []
     assert any("Management API discovery failed" in w for w in result.warnings)
+
+
+def test_discover_api_403_explains_likely_cause() -> None:
+    """A 403 from the Management API gets a distinct, actionable warning
+    (not a raw transport-error string) pointing at Connect to Primary, which
+    now proactively diagnoses/repairs this over SSH (services/api_access.py)
+    right after provisioning API access — rather than a repair path living
+    in this discover flow itself."""
+    inv = _inventory(Host(name="mgmt-01", address="192.0.2.10", role=Role.PRIMARY_SMS))
+
+    def boom(host: object, **kw: object) -> _FakeMgmtClient:
+        raise ManagementAPIForbidden("Management API show-gateways-and-servers failed: HTTP 403")
+
+    service = DiscoveryService(
+        _FakeRegistry(_FakeConnector(inv, _api_bundle())),  # type: ignore[arg-type]
+        mgmt_client_factory=boom,
+    )
+    result = service.discover("default", "mgmt-01")
+    assert result.servers == []
+    assert any("not enabled" in w and "Connect to Primary" in w for w in result.warnings)
+
+
+def test_discover_firewalls_api_403_explains_likely_cause() -> None:
+    inv = _inventory(Host(name="mgmt-01", address="192.0.2.10", role=Role.PRIMARY_SMS))
+
+    def boom(host: object, **kw: object) -> _FakeMgmtClient:
+        raise ManagementAPIForbidden("Management API show-gateways-and-servers failed: HTTP 403")
+
+    service = DiscoveryService(
+        _FakeRegistry(_FakeConnector(inv, _api_bundle())),  # type: ignore[arg-type]
+        mgmt_client_factory=boom,
+    )
+    result = service.discover_firewalls("default")
+    assert any("not enabled" in w and "Connect to Primary" in w for w in result.warnings)
 
 
 def test_discover_mds_uses_global_domain_for_api_call() -> None:

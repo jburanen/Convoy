@@ -5,7 +5,7 @@ import json
 import httpx
 import pytest
 
-from chkp_cpuse_orch.errors import TransportError
+from chkp_cpuse_orch.errors import ManagementAPIForbidden, TransportError
 from chkp_cpuse_orch.inventory import Host, Role
 from chkp_cpuse_orch.transport import mgmt_api
 from chkp_cpuse_orch.transport.mgmt_api import LOG_API_CALLS_ENV, ManagementAPIClient, _redact
@@ -65,6 +65,25 @@ def test_error_status_becomes_transport_error() -> None:
     client = _client(handler)
     client.login()
     with pytest.raises(TransportError, match="bad command"):
+        client.show_gateways_and_servers()
+
+
+def test_403_becomes_management_api_forbidden() -> None:
+    """A 403 gets its own exception type — a subclass of TransportError — so
+    callers (services/discovery.py) can distinguish "API not reachable" from
+    "API refused this host" and offer the SSH diagnose/repair flow."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/login"):
+            return httpx.Response(200, json={"sid": "S"})
+        return httpx.Response(403, json={"message": "Forbidden"})
+
+    client = _client(handler)
+    client.login()
+    with pytest.raises(ManagementAPIForbidden, match="403"):
+        client.show_gateways_and_servers()
+    # Still catchable by callers that only know about the base type.
+    with pytest.raises(TransportError):
         client.show_gateways_and_servers()
 
 

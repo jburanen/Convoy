@@ -1284,6 +1284,65 @@ def test_reveal_api_key_unknown_job_returns_null(client: TestClient) -> None:
     assert resp.json()["api_key"] is None
 
 
+# -- Management API accessibility diagnose/repair (SSH) — 403 follow-up -----------
+
+
+def _primary_with_ssh(client: TestClient) -> None:
+    """A Primary SMS with an assigned SSH credential set — what
+    ApiAccessService.diagnose/submit_repair need to reach `mgmt-01` at all."""
+    _enable_storage(client, "default")
+    job = _add_server(client, name="mgmt-01", address="192.0.2.10", role="primary_sms")
+    assert job["status"] == "succeeded", job["error"]
+    _add_ssh_credential(client, "mgmt-01")
+
+
+def test_diagnose_api_access_reports_restricted_to_local(
+    client: TestClient, transport: FakeTransport
+) -> None:
+    _primary_with_ssh(client)
+    transport.responses["api status"] = (
+        0,
+        "Overall API Status: Started\nAccessibility: require local\n",
+    )
+    resp = client.post("/api/environments/default/api-access/diagnose")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["error"] is None
+    assert body["overall_started"] is True
+    assert body["restricted_to_local"] is True
+
+
+def test_diagnose_api_access_no_primary_returns_error(client: TestClient) -> None:
+    resp = client.post("/api/environments/default/api-access/diagnose")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["error"] is not None
+
+
+def test_api_access_repair_preview_renders_commands(client: TestClient) -> None:
+    _primary_with_ssh(client)
+    resp = client.get("/api/environments/default/api-access/repair-preview")
+    assert resp.status_code == 200, resp.text
+    commands = resp.json()["commands"]
+    assert any('set-api-settings accessibility "minimize"' in c for c in commands)
+    assert commands[-1] == "api restart"
+
+
+def test_api_access_repair_widens_accessibility(
+    client: TestClient, transport: FakeTransport
+) -> None:
+    _primary_with_ssh(client)
+    transport.responses["api status"] = (
+        0,
+        "Overall API Status: Started\nAccessibility: require local\n",
+    )
+    resp = client.post("/api/environments/default/api-access/repair")
+    assert resp.status_code == 202, resp.text
+    job = _wait_for_job(client, resp.json()["id"])
+    assert job["status"] == "succeeded", job["error"]
+    assert any('set-api-settings accessibility "minimize"' in c for c in transport.commands)
+    assert "api restart" in transport.commands
+
+
 # -- jobs -------------------------------------------------------------------------
 
 
