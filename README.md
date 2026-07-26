@@ -106,21 +106,14 @@ These gates define the major version releases - the milestones may change in the
 ✨ Revisit ALL descriptive text and rewrite for clarity and brevity  
 
 #### Provisioning  
-⏫ Move definition of primary SMS/MDS to the Mangement Environment modal? This would make it possible to further automate bootstrapping - test SSH access, provision API account automatically, test access  
-⏫ After bootstrapping the SSH user, use that user to deploy the admin API account, check/test access settings and offer to correct if needed  
-✨ Make it more clear on the provisioning tab that the SSH account from bootstrapping must be added to ALL management servers - maybe have it test access and indicate in the servers table  
-✨ Sort management servers table by Role  
-✨ Remove the expert mode password - it will never be necessary 
+✨ Remove the expert mode password - it will never be necessary  
 
 #### Packages
 🤞 Investigate if we can extract and display meta data like compatible major version from the package file  
-✨ Show package upload status  
-🪲 In the event of a failed upload to repo job we're not cleaning up the temp package storage  
 
 #### Direct Patching (CPUSE)
 ⏫ Add deployment agent upgrade option  
 🤞 Some kind of sledgehammer to swing to release config/job lock from management server and firewalls if a job gets stranded/stuck  
-✨ Improve the display of the check intervals in the job log  
 ⏫ Offer via text link in info line to use CPRID to provision SSH access to firewalls if status check fails - also management servers?  
 
 #### Jobs
@@ -129,7 +122,10 @@ These gates define the major version releases - the milestones may change in the
 🤞 Allow import jobs to be cancelled during file copy stage - clean up partial file on target  
 ✨ Affirm in a push_to_repo job output that the temp storage was cleaned up  
 
-#### Squashed Bugs, Polished Edges
+#### Squashed Bugs
+v0.49.3 Jobs tab Target column was blank for push_to_repo jobs (grouped with the other filename-only pkgs.* jobs) - now shows the management server being pushed to  
+v0.49.2 If a package import or upload-to-repo job fails we attempt to remove the file from the temp storage and alert in the job log if this was successful  
+v0.49.1 Added percentage display for package uploads  
 v0.48.2 Connect to Primary now auto-selects the credential set flagged "default" (if any) in the Credential set picker, instead of leaving it on "none — assign later"  
 v0.48.2 In storage-disabled environments, the SSH user field/label in Connect to Primary rendered inline (browser-default) instead of aligned with Name/Address/Role/SSH port above it - also fixes an ID-vs-class CSS specificity bug where the fix itself broke hiding that field in storage-enabled environments  
 v0.48.1 The Connect to Primary API-access repair used a fabricated `set-api-settings accessibility "minimize"` mgmt_cli command - corrected to the real `set api-settings accepted-api-calls-from "All IP addresses that can be used for GUI clients"`, with the `--domain "System Data"` flag it also needs on a standalone SMS  
@@ -137,7 +133,7 @@ v0.48.1 The "heads up" API-accessibility warning under Connect to Primary render
 v0.48.0 No error checking for lack of API access - Connect to Primary now proactively checks the API's accessibility over SSH right after provisioning it, and offers to repair a require-local restriction; a 403 during discovery also explains the likely cause  
 v0.47.3 Multi-select management servers for import - only starts first server, doesn't queue second  
 v0.46.0 Provide a way to clean up the temp file storage after a timed out or failed package import job  
-v0.46.0 Make timeout and check intervals longer during package import process to account for slower imports  
+v0.46.0 Make timeout and check intervals longer during package import process to account for slower imports, improve how they are displayed in job log  
 v0.45.3 Upload package to management repo fails with path formatting error  
 
 > Not affiliated with or endorsed by Check Point Software Technologies. "Check Point", "CDT", and "CPUSE" refer to their products. Use only on infrastructure you are authorized to maintain.  

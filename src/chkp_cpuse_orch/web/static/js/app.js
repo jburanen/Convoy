@@ -3431,12 +3431,18 @@ function renderJobRow(row, job) {
   // Give them a synthetic "Packages" env label; the Output column stays the
   // normal outcome text like every other job kind.
   const isPkgs = job.kind.startsWith("pkgs.");
+  // pkgs.push_to_repo is the one pkgs.* kind that IS scoped to a real host —
+  // submit_push_to_repo() targets the environment's primary management
+  // server (services/pkg_repo_ops.py), unlike upload/keep/notkeep/delete
+  // whose target is a filename. Show that host rather than blanking it.
+  const isPkgsWithHostTarget = job.kind === "pkgs.push_to_repo";
   // Every other kind — including cred.* and prov.* — DOES act on a real
   // environment (a credential set or server/firewall belonging to it), so
   // the Env column always shows the actual environment name for them
   // (previously cred.* showed a synthetic "Credentials" label here instead;
   // operator-directed, 2026-07-23 — the real environment is more useful).
-  row.querySelector(".job-target").textContent = isPkgs ? "" : (job.target ?? "");
+  row.querySelector(".job-target").textContent =
+    isPkgs && !isPkgsWithHostTarget ? "" : (job.target ?? "");
   row.querySelector(".job-env").textContent = isPkgs ? "Packages" : (job.environment ?? "");
   row.querySelector(".job-user").textContent = job.username ?? "";
   const badge = row.querySelector(".job-status .badge");
