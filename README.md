@@ -110,6 +110,7 @@ These gates define the major version releases - the milestones may change in the
 ⏫ After bootstrapping the SSH user, use that user to deploy the admin API account, check/test access settings and offer to correct if needed  
 ✨ Make it more clear on the provisioning tab that the SSH account from bootstrapping must be added to ALL management servers - maybe have it test access and indicate in the servers table  
 ✨ Sort management servers table by Role  
+✨ Remove the expert mode password - it will never be necessary 
 
 #### Packages
 🤞 Investigate if we can extract and display meta data like compatible major version from the package file  
@@ -123,12 +124,14 @@ These gates define the major version releases - the milestones may change in the
 ⏫ Offer via text link in info line to use CPRID to provision SSH access to firewalls if status check fails - also management servers?  
 
 #### Jobs
-⏫ Add syslog output configuration  
+⏫ Add syslog output    
 🤞 Add a download button for the install log  
 🤞 Allow import jobs to be cancelled during file copy stage - clean up partial file on target  
 ✨ Affirm in a push_to_repo job output that the temp storage was cleaned up  
 
 #### Squashed Bugs, Polished Edges
+v0.48.2 Connect to Primary now auto-selects the credential set flagged "default" (if any) in the Credential set picker, instead of leaving it on "none — assign later"  
+v0.48.2 In storage-disabled environments, the SSH user field/label in Connect to Primary rendered inline (browser-default) instead of aligned with Name/Address/Role/SSH port above it - also fixes an ID-vs-class CSS specificity bug where the fix itself broke hiding that field in storage-enabled environments  
 v0.48.1 The Connect to Primary API-access repair used a fabricated `set-api-settings accessibility "minimize"` mgmt_cli command - corrected to the real `set api-settings accepted-api-calls-from "All IP addresses that can be used for GUI clients"`, with the `--domain "System Data"` flag it also needs on a standalone SMS  
 v0.48.1 The "heads up" API-accessibility warning under Connect to Primary rendered as plain muted text instead of orange - `hint warn` had no matching CSS rule; now uses the same prov-note-warn/-err/-ok convention as the rest of that panel  
 v0.48.0 No error checking for lack of API access - Connect to Primary now proactively checks the API's accessibility over SSH right after provisioning it, and offers to repair a require-local restriction; a 403 during discovery also explains the likely cause  

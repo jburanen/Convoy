@@ -697,6 +697,33 @@ tr.srv-row.fw-cluster-member td { padding-bottom: 0.225rem; }
 }
 .field-grid input { width: 100%; box-sizing: border-box; }
 
+/* Connect to Primary, storage-disabled environments only: the typed SSH user
+   field sits below the field-grid above (its own row, since it isn't a fixed
+   part of that grid — storage-enabled environments show Credential set there
+   instead). Matches the field-grid's label-above-input rhythm and typography
+   instead of the browser's default inline "label + input on one line". */
+#cp-user-label {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+/* #cp-user-label's own `display: flex` outranks the generic `.hidden` class
+   on specificity (ID beats class) — same fix already applied to .modal.hidden/
+   .pill.hidden/etc. above. Without this, storage-enabled environments would
+   show the SSH user field alongside Credential set instead of hiding it. */
+#cp-user-label.hidden { display: none; }
+#cp-user-label input {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 1rem;
+  font-weight: 400;
+  color: var(--text);
+}
+
 /* Provisioning explanatory notes as normal text, each block sitting directly
    above the command output box it describes. */
 .prov-notes { margin: 0.75rem 0; font-size: 0.9rem; color: var(--muted); }
