@@ -53,7 +53,8 @@ class PackageJobService:
             )
         except Exception as exc:  # job boundary: record failure, don't raise
             self._fail(job, exc)
-        finally:
+            self._cleanup_staged_upload(job, staged_path)
+        else:
             staged_path.unlink(missing_ok=True)
         return self._store.get_job(job.id)
 
@@ -114,6 +115,21 @@ class PackageJobService:
         error = f"{type(exc).__name__}: {exc}"
         self._store.append_event(job.id, f"job failed: {error}", level="error")
         self._store.finish_job(job.id, JobStatus.FAILED, error=error)
+
+    def _cleanup_staged_upload(self, job: JobRecord, staged_path: Path) -> None:
+        """Best-effort removal of the request-staged temp file after a failed
+        upload, logging whether it actually succeeded — a leftover ``.upload-*``
+        file otherwise sits in the package directory unexplained."""
+        try:
+            staged_path.unlink(missing_ok=True)
+        except OSError as exc:
+            self._store.append_event(
+                job.id,
+                f"cleanup: failed to remove temp upload {staged_path.name}: {exc}",
+                level="warning",
+            )
+        else:
+            self._store.append_event(job.id, f"cleanup: removed temp upload {staged_path.name}")
 
 
 __all__ = ["JOB_DELETE", "JOB_KEEP", "JOB_NOTKEEP", "JOB_UPLOAD", "PackageJobService"]

@@ -156,6 +156,44 @@ def test_push_fails_when_task_fails(store: Store, tmp_path: Path, transport: Fak
     assert "disk full on repository" in (finished.error or "")
 
 
+def test_push_cleans_up_staged_package_after_failure(
+    store: Store, tmp_path: Path, transport: FakeTransport
+) -> None:
+    """A task failure (post-upload) leaves the file staged on the mgmt server —
+    the job should attempt to remove it and log whether that worked."""
+    repo_client = _FakeRepoClient(
+        task_status="failed", task_details=[{"statusDescription": "disk full on repository"}]
+    )
+    service = _service(store, tmp_path, transport, repo_client)
+
+    job = service.submit_push_to_repo("default", PKG)
+    _run(service)
+
+    assert store.get_job(job.id).status == JobStatus.FAILED
+    assert any(f"rm -f /var/log/upload/{PKG}" in cmd for cmd in transport.commands)
+    messages = [e.message for e in store.events(job.id)]
+    assert any(f"cleanup: removed staged package /var/log/upload/{PKG}" in m for m in messages)
+
+
+def test_push_logs_cleanup_failure_when_removal_fails(
+    store: Store, tmp_path: Path, transport: FakeTransport
+) -> None:
+    transport.responses["rm -f"] = (1, "")
+    repo_client = _FakeRepoClient(
+        task_status="failed", task_details=[{"statusDescription": "disk full on repository"}]
+    )
+    service = _service(store, tmp_path, transport, repo_client)
+
+    job = service.submit_push_to_repo("default", PKG)
+    _run(service)
+
+    assert store.get_job(job.id).status == JobStatus.FAILED
+    messages = [e.message for e in store.events(job.id)]
+    assert any(
+        f"cleanup: failed to remove staged package /var/log/upload/{PKG}" in m for m in messages
+    )
+
+
 def test_push_uses_ssh_username_password_as_api_auth_fallback(
     store: Store, tmp_path: Path, transport: FakeTransport
 ) -> None:
