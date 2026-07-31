@@ -274,8 +274,16 @@ class PatchingService:
             cpuse = CPUSE(client, shell=self._shell)
             agent_build = cpuse.agent_build()
             packages = cpuse.list_packages(PackageScope.ALL)
+            imported_packages = cpuse.list_packages(PackageScope.IMPORTED)
             cluster = cpuse.cluster_state()
-            self._cache_state(environment, host.name, agent_build, packages, cluster)
+            self._cache_state(
+                environment,
+                host.name,
+                agent_build,
+                packages,
+                cluster,
+                imported_packages=imported_packages,
+            )
             return DetectedState(
                 host=host.name, agent_build=agent_build, packages=packages, cluster=cluster
             )
@@ -313,14 +321,39 @@ class PatchingService:
         agent_build: str,
         packages: list[PackageState],
         cluster: ClusterMemberState | None = None,
+        *,
+        imported_packages: list[PackageState] | None = None,
     ) -> None:
         """Derive the UI's summary (version/JHF, packages ready to install)
         from detected packages and persist it — shared by ``detect()`` (an
         explicit Refresh) and both import job handlers (an automatic refresh
-        right after a successful import, reusing the same open connection)."""
+        right after a successful import, reusing the same open connection).
+
+        ``installable`` identifiers come from ``imported_packages`` — a
+        dedicated `show installer packages imported` query — rather than by
+        filtering ``packages`` (the combined `show installer packages all`
+        query used for the version summary and the installed list). CPUSE
+        doesn't reliably render the same identifier for a package across the
+        two scopes: some JHFs show a human-readable "R82.10 Jumbo Hotfix
+        Accumulator Take 24" style name under `imported` but a bare filename
+        under `all` (same quirk `_is_imported_now`/hf.config already work
+        around for import confirmation — see the module docstring), and
+        `installer verify`/`installer install` need the identifier exactly as
+        `imported` scope renders it, since that's what those verbs actually
+        recognize (operator-confirmed, 2026-07-31 — installs were issuing
+        `installer verify` against the `all`-scoped identifier and failing).
+        Falls back to filtering ``packages`` itself when no separate
+        imported-scope list is supplied.
+        """
         summary = summarize_jumbo(packages)
-        installable = [p.identifier for p in packages if p.is_imported and not p.is_installed]
         installed = [p.identifier for p in packages if p.is_installed]
+        if imported_packages is not None:
+            installed_ids = set(installed)
+            installable = [
+                p.identifier for p in imported_packages if p.identifier not in installed_ids
+            ]
+        else:
+            installable = [p.identifier for p in packages if p.is_imported and not p.is_installed]
         self._store.upsert_server_state(
             ServerStateRow(
                 environment=environment,
@@ -573,8 +606,16 @@ class PatchingService:
         try:
             agent_build = cpuse.agent_build()
             packages = cpuse.list_packages(PackageScope.ALL)
+            imported_packages = cpuse.list_packages(PackageScope.IMPORTED)
             cluster = cpuse.cluster_state()
-            self._cache_state(ctx.job.environment, host_name, agent_build, packages, cluster)
+            self._cache_state(
+                ctx.job.environment,
+                host_name,
+                agent_build,
+                packages,
+                cluster,
+                imported_packages=imported_packages,
+            )
             ctx.log("detected state refreshed")
         except CPUSEError as exc:
             ctx.log(f"could not refresh detected state: {exc}", level="warning")

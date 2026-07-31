@@ -677,8 +677,12 @@ def test_server_state_detects_live_packages(client: TestClient) -> None:
     assert body["version"] == "R81.10"
     assert body["jhf"] == "Take 45"
     assert body["checked_at"]
-    # The other package (imported, not installed) is the Install picker's option.
-    assert body["installable"] == ["Check_Point_R81_20_JUMBO_HF_MAIN_Bundle_T89_FULL.tgz"]
+    # The Install picker's option comes from a dedicated `show installer
+    # packages imported` query (the identifier `installer verify`/`install`
+    # actually recognize — see PatchingService._cache_state), not from the
+    # `all`-scoped query above — hence "jhf.tgz" here, not the JHF's name in
+    # SHOW_PACKAGES_ALL.
+    assert body["installable"] == ["jhf.tgz"]
 
 
 def test_server_state_without_credentials_is_409(client: TestClient) -> None:
@@ -702,7 +706,9 @@ def test_servers_list_exposes_cached_state_after_a_refresh(client: TestClient) -
     assert after["version"] == "R81.10"
     assert after["jhf"] == "Take 45"
     assert after["checked_at"]
-    assert after["installable"] == ["Check_Point_R81_20_JUMBO_HF_MAIN_Bundle_T89_FULL.tgz"]
+    # See test_server_state_detects_live_packages — installable identifiers
+    # come from the dedicated "show installer packages imported" query.
+    assert after["installable"] == ["jhf.tgz"]
 
 
 # -- credentials ------------------------------------------------------------------

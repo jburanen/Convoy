@@ -74,9 +74,27 @@ CLI syntax — Check Point changes these across releases.)
     explicitly skips banner lines (anything starting with `**`). Deliberately
     NOT applied to `scope=all` — there's no way to tell installed from
     merely-imported from "Type" alone, so an unrecognized `all`-scoped line in
-    this shape is left alone rather than guessed at (unconfirmed whether this
-    device's `all`-scoped output has the same issue — if it turns out to,
-    `detect()`'s single combined query would need revisiting too).
+    this shape is left alone rather than guessed at.
+  - **Confirmed, 2026-07-31: `detect()`'s single combined query DID need
+    revisiting**, per the "unconfirmed" note above. `installer verify`/
+    `installer install` were being issued against the identifier `show
+    installer packages all` reported for a package, but CPUSE doesn't always
+    render the *same* identifier for a package across `all` vs. `imported`
+    scope — same human-readable-vs-filename divergence as the
+    `_is_imported_now` quirk above, just hitting the *install* path instead
+    of the *import-confirmation* path this time. Symptom: `installer verify`
+    failing for reasons that looked unrelated to whether the install would
+    actually succeed (operator-reported; this is also why the Management
+    tab has a "skip verify" toggle at all — see patching-web-design.md).
+    Fixed in `PatchingService._cache_state`: `detect()` and `_refresh_state()`
+    now run a **second, dedicated `show installer packages imported` query**
+    and source the `installable` list (what the UI's Install picker offers,
+    and therefore the exact string that becomes `package_id` for
+    `cpuse.verify()`/`cpuse.install()`) from *that* query's identifiers, not
+    from filtering the `all`-scoped list. `installed` (and the version/JHF
+    summary) still come from the `all`-scoped query — that one's already
+    confirmed correct via the `REAL_ALL_SCOPE_AFTER_JHF_INSTALL` fixture in
+    tests/test_cpuse.py, so it was left alone.
   - **`installer install` can report success while the install genuinely
     failed or is still running** (operator-confirmed, 2026-07-22) — same
     asynchronous pattern as import. The list commands (`show installer
