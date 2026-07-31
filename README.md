@@ -109,7 +109,6 @@ These gates define the major version releases - the milestones may change in the
 Empty is a good sign!  
 
 #### Packages
-🤞 Investigate if we can extract and display meta data like compatible major version from the package file  
 🤞 Add a percentage progress display for package upload  
 
 #### Direct Patching (CPUSE)
@@ -125,6 +124,7 @@ Empty is a good sign!
 ✨ On jobs with error output, never let the error output spill outside the table boundary - direct the user to view details in the output box or something like that  
 
 #### Squashed Bugs
+v0.49.5 Packages tab now extracts and displays compatible major version, Take number, category, arch, and a free-text compatibility/prerequisite note from the package file itself (`hf.config` + `conditions_set.json`) at upload time - also fixed a latent bug where BUNDLE-type packages' per-component `hf.config` files (missing Take/category) could be picked up instead of the authoritative bundle-level one  
 v0.49.4 Package verify command was invoked with the identifier from `show installer packages all` instead of the display name from `show installer packages imported` - `installer verify`/`installer install` need the latter, and CPUSE doesn't always render the same identifier across the two scopes  
 v0.49.4 Install button on the Direct Patching (CPUSE) tab failed to register the first click - a background poll could land between picking a package and clicking Install, silently resetting the row's selection and re-disabling the button (disabled buttons don't dispatch click at all)  
 v0.49.3 Jobs tab Target column was blank for push_to_repo jobs (grouped with the other filename-only pkgs.* jobs) - now shows the management server being pushed to  

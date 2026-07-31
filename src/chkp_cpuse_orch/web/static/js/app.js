@@ -3057,6 +3057,14 @@ async function loadPackages() {
     row.dataset.pkgFilename = pkg.filename;
     row.querySelector(".pkg-filename").textContent = pkg.filename;
     row.querySelector(".pkg-size").textContent = fmtBytes(pkg.size);
+    // Compatible major version / Take / category, extracted from the
+    // package file itself at upload time (hfconfig.extract_package_metadata,
+    // packages.py) — "—" for anything uploaded before this shipped, or
+    // that wasn't a readable CPUSE archive (e.g. a non-CPUSE file).
+    row.querySelector(".pkg-compat").textContent =
+      [pkg.direct_base_version, pkg.take_number ? `Take ${pkg.take_number}` : null, pkg.category]
+        .filter(Boolean)
+        .join(" · ") || "—";
 
     const sha1Row = el("tpl-package-sha1-row");
     sha1Row.querySelector(".pkg-sha1").textContent = `sha1: ${pkg.sha1}`;
@@ -3145,8 +3153,22 @@ async function loadPackages() {
     applyPushProgress(row, pkg.filename); // in case a push-to-repo job is already in flight
     tbody.appendChild(row);
     tbody.appendChild(sha1Row);
+    const noteRow = buildPackageNoteRow(pkg);
+    if (noteRow) tbody.appendChild(noteRow);
   }
   await populateCdtSelectors(); // keep the CDT dropdowns in sync with packages/servers
+}
+
+// Collapsed detail row for the package's compatibility/prerequisite note
+// (hfconfig.extract_package_metadata's conditions_set.json read) — same
+// presence-gated pattern as syncInstallLogRow on the Jobs tab, simplified
+// since loadPackages() rebuilds the whole table every call (no existing row
+// to find/update): just skip the row entirely when there's no note.
+function buildPackageNoteRow(pkg) {
+  if (!pkg.compatibility_note) return null;
+  const row = el("tpl-package-note-row");
+  row.querySelector(".pkg-note").textContent = pkg.compatibility_note;
+  return row;
 }
 
 // Shared upload path for the form and drag & drop. The multipart body itself
