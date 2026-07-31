@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import io
+import tarfile
 from datetime import timedelta
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
@@ -142,3 +144,60 @@ def test_purge_expired_noop_before_deadline(pkg_store: PackageStore) -> None:
     pkg_store.add_stream("jhf.tgz", io.BytesIO(CONTENT))
     assert pkg_store.purge_expired() == []  # deadline is ~30 days out
     assert [p.filename for p in pkg_store.list()] == ["jhf.tgz"]
+
+
+# -- compatibility metadata extraction (hfconfig.py), wired into add_stream ------
+
+
+def _make_tar(members: dict[str, bytes], *, mode: Literal["w"] = "w") -> bytes:
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode=mode) as tar:
+        for name, content in members.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(content)
+            tar.addfile(info, io.BytesIO(content))
+    return buf.getvalue()
+
+
+_HF_CONFIG = (
+    "2474\n"
+    "PATCH_NAME=BUNDLE_R82_10_JUMBO_HF_MAIN\n"
+    "TAKE_NUMBER=24\n"
+    "PACKAGE_TYPE=BUNDLE\n"
+    "ARCH=x86_64\n"
+    "CATEGORY=JUMBO\n"
+    "DIRECT_BASE_VERSION=R82.10\n"
+)
+_CONDITIONS_SET = '{"set_description": "This hotfix is supported only for R82.10.\\n"}'
+
+
+def test_add_stream_extracts_compatibility_metadata_from_a_real_looking_package(
+    pkg_store: PackageStore,
+) -> None:
+    package = _make_tar(
+        {"hf.config": _HF_CONFIG.encode(), "conditions_set.json": _CONDITIONS_SET.encode()}
+    )
+    rec = pkg_store.add_stream("jhf_t24.tgz", io.BytesIO(package))
+
+    assert rec.direct_base_version == "R82.10"
+    assert rec.take_number == 24
+    assert rec.category == "JUMBO"
+    assert rec.arch == "x86_64"
+    assert rec.compatibility_note == "This hotfix is supported only for R82.10."
+    # Round-trips through the store, not just the in-memory return value.
+    stored = pkg_store.get("jhf_t24.tgz")
+    assert stored.direct_base_version == "R82.10"
+    assert stored.compatibility_note == "This hotfix is supported only for R82.10."
+
+
+def test_add_stream_leaves_metadata_none_for_a_non_archive_upload(
+    pkg_store: PackageStore,
+) -> None:
+    # CONTENT (used throughout this file) isn't a real tar — extraction must
+    # degrade silently rather than fail the upload.
+    rec = pkg_store.add_stream("jhf.tgz", io.BytesIO(CONTENT))
+    assert rec.direct_base_version is None
+    assert rec.take_number is None
+    assert rec.category is None
+    assert rec.arch is None
+    assert rec.compatibility_note is None

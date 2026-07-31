@@ -19,6 +19,7 @@ from typing import BinaryIO
 
 from .config import DEFAULT_PACKAGE_RETENTION_DAYS
 from .errors import PackageError
+from .hfconfig import extract_package_metadata
 from .store import PackageRecord, Store, utcnow
 
 # Package filenames feed remote shell commands and filesystem paths — keep them
@@ -80,12 +81,24 @@ class PackageStore:
                     "Delete it first if you really mean to replace it."
                 )
 
+            # Best-effort: compatible major version / Take / category / arch
+            # / prerequisite note, for the Packages tab. Cheap even for a
+            # GB-scale package (the payload member is skipped by size before
+            # ever being decompressed — see hfconfig.py) and tolerant of
+            # anything that isn't a readable CPUSE archive (all fields None).
+            metadata = extract_package_metadata(tmp_path)
+            hf = metadata.hf_config
             rec = PackageRecord(
                 filename=name,
                 sha1=sha1.hexdigest(),
                 sha256=digest256,
                 size=size,
                 expires_at=self._default_expiry(),
+                direct_base_version=hf.direct_base_version if hf else None,
+                take_number=hf.take_number if hf else None,
+                category=hf.category if hf else None,
+                arch=hf.arch if hf else None,
+                compatibility_note=metadata.compatibility_note,
             )
             tmp_path.replace(self.directory / name)
             self._store.insert_package(rec)

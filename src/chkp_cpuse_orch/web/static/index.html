@@ -288,11 +288,12 @@
           <tr>
             <th>Filename</th>
             <th>Size</th>
+            <th>Compatible with</th>
             <th>Retention</th>
             <th></th>
           </tr>
         </thead>
-        <tbody><!-- tpl-package-row / tpl-package-sha1-row instances --></tbody>
+        <tbody><!-- tpl-package-row / tpl-package-sha1-row / tpl-package-note-row instances --></tbody>
       </table>
     </section>
 
@@ -1133,13 +1134,19 @@
   </tr>
 </template>
 
-<!-- A package is two rows: filename/size/Keep, then sha1 (+ retention hint).
-     The action cell spans both so there's no empty cell (and its padding)
-     under the hash to push it away from the filename row. -->
+<!-- A package is two (sometimes three) rows: filename/size/compat/Keep, then
+     sha1 (+ retention hint), then — only when the package file actually
+     carried a compatibility note (hfconfig.extract_package_metadata) — a
+     collapsed detail row for it, same pattern as tpl-job-install-log-row.
+     The action cell spans the first two so there's no empty cell (and its
+     padding) under the hash to push it away from the filename row; the
+     compatibility-note row (when present) is a separate full-width row
+     below both, so it doesn't need to fit inside that rowspan. -->
 <template id="tpl-package-row">
   <tr class="pkg-row">
     <td class="pkg-filename mono"></td>
     <td class="pkg-size"></td>
+    <td class="pkg-compat muted"></td>
     <td class="pkg-retention">
       <label title="keep this package indefinitely (skip auto-delete)">
         <input type="checkbox" class="pkg-pin"> Keep
@@ -1155,8 +1162,24 @@
 
 <template id="tpl-package-sha1-row">
   <tr class="pkg-sha1-row">
-    <td colspan="2" class="pkg-sha1 mono muted"></td>
+    <td colspan="3" class="pkg-sha1 mono muted"></td>
     <td class="pkg-expiry muted"></td>
+  </tr>
+</template>
+
+<!-- Compatibility/prerequisite note extracted from the package file's own
+     conditions_set.json (e.g. "This hotfix is supported only for R82.10
+     (jess_main)."), collapsed by default — only inserted into the DOM when
+     the package actually has one (see syncPackageNoteRow in app.js), same
+     presence-gated insert/remove pattern as tpl-job-install-log-row. -->
+<template id="tpl-package-note-row">
+  <tr class="pkg-note-row">
+    <td colspan="5">
+      <details class="pkg-note-details">
+        <summary class="pkg-note-summary muted">Compatibility note</summary>
+        <pre class="pkg-note mono"></pre>
+      </details>
+    </td>
   </tr>
 </template>
 

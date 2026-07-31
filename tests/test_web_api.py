@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import io
+import tarfile
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -796,6 +798,31 @@ def test_package_upload_list_delete(client: TestClient) -> None:
     job = resp.json()
     assert job["status"] == "succeeded", job["error"]
     assert client.get("/api/packages").json() == []
+
+
+def test_package_upload_extracts_compatibility_metadata(client: TestClient) -> None:
+    hf_config = (
+        "2474\nPATCH_NAME=BUNDLE_R82_10_JUMBO_HF_MAIN\nTAKE_NUMBER=24\n"
+        "PACKAGE_TYPE=BUNDLE\nARCH=x86_64\nCATEGORY=JUMBO\nDIRECT_BASE_VERSION=R82.10\n"
+    )
+    conditions = '{"set_description": "This hotfix is supported only for R82.10.\\n"}'
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        for name, content in {
+            "hf.config": hf_config.encode(),
+            "conditions_set.json": conditions.encode(),
+        }.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(content)
+            tar.addfile(info, io.BytesIO(content))
+
+    _upload_package(client, name="jhf_t24.tar", content=buf.getvalue())
+    listing = client.get("/api/packages").json()
+    assert listing[0]["direct_base_version"] == "R82.10"
+    assert listing[0]["take_number"] == 24
+    assert listing[0]["category"] == "JUMBO"
+    assert listing[0]["arch"] == "x86_64"
+    assert listing[0]["compatibility_note"] == "This hotfix is supported only for R82.10."
 
 
 def test_package_conflict_rejected(client: TestClient) -> None:

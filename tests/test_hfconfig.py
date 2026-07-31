@@ -7,7 +7,12 @@ from typing import Literal
 
 import pytest
 
-from chkp_cpuse_orch.hfconfig import HfConfig, extract_hf_config, parse_hf_config
+from chkp_cpuse_orch.hfconfig import (
+    HfConfig,
+    extract_hf_config,
+    extract_package_metadata,
+    parse_hf_config,
+)
 
 HF_CONFIG_TEXT = """2474
 PATCH_REG_PRODUCT=CPUpdates
@@ -33,6 +38,7 @@ def test_parse_hf_config_reads_known_fields_and_ignores_the_rest() -> None:
         package_type="BUNDLE",
         category="JUMBO",
         direct_base_version="R82.10",
+        arch="x86_64",
     )
 
 
@@ -118,5 +124,113 @@ def test_extract_hf_config_skips_oversized_nested_members(
     inner = _make_tar({"hf.config": HF_CONFIG_TEXT.encode()})
     package_path = tmp_path / "pkg.tar"
     package_path.write_bytes(_make_tar({"metadata.tar": inner}))
+
+    assert extract_hf_config(package_path) is None
+
+
+# Real BUNDLE-type CPUSE packages ship one hf.config per component under
+# crs/<component>/hf.config (missing TAKE_NUMBER/CATEGORY — bundle-level
+# facts) *plus* one authoritative bundle-level hf.config at the metadata
+# archive's own root, and tar iteration lists the per-component ones first
+# (operator-confirmed against a real R82.10 GA time-fix package, 2026-07-31).
+PER_COMPONENT_HF_CONFIG = "2474\nPATCH_NAME=HOTFIX_X\nPACKAGE_TYPE=single_hotfix\n"
+
+
+def test_extract_hf_config_prefers_the_archive_root_file_over_nested_ones(
+    tmp_path: Path,
+) -> None:
+    package_path = tmp_path / "pkg.tar"
+    package_path.write_bytes(
+        _make_tar(
+            {
+                # Listed first, like real packages — must not win.
+                "crs/CheckPoint#foo#All#6.0#5#6#HOTFIX_X/hf.config": (
+                    PER_COMPONENT_HF_CONFIG.encode()
+                ),
+                "hf.config": HF_CONFIG_TEXT.encode(),
+            }
+        )
+    )
+
+    hf = extract_hf_config(package_path)
+    assert hf is not None
+    assert hf.take_number == 24  # from the root file, not the per-component one
+    assert hf.category == "JUMBO"
+    assert hf.patch_name == "BUNDLE_R82_10_JUMBO_HF_MAIN"
+
+
+def test_extract_hf_config_falls_back_to_a_nested_file_if_no_root_one_exists(
+    tmp_path: Path,
+) -> None:
+    # No bundle-level hf.config at all — better to use the per-component one
+    # than nothing, matching the prior best-effort behavior.
+    package_path = tmp_path / "pkg.tar"
+    package_path.write_bytes(
+        _make_tar(
+            {
+                "crs/CheckPoint#foo#All#6.0#5#6#HOTFIX_X/hf.config": (
+                    PER_COMPONENT_HF_CONFIG.encode()
+                ),
+            }
+        )
+    )
+
+    hf = extract_hf_config(package_path)
+    assert hf is not None
+    assert hf.patch_name == "HOTFIX_X"
+
+
+def test_extract_package_metadata_reads_the_sibling_conditions_set_note(
+    tmp_path: Path,
+) -> None:
+    conditions = (
+        '{"set_description": "This hotfix is supported only for R82.10 '
+        '(jess_main).\\n"}'
+    )
+    package_path = tmp_path / "pkg.tar"
+    package_path.write_bytes(
+        _make_tar(
+            {"hf.config": HF_CONFIG_TEXT.encode(), "conditions_set.json": conditions.encode()}
+        )
+    )
+
+    meta = extract_package_metadata(package_path)
+    assert meta.hf_config is not None
+    assert meta.hf_config.take_number == 24
+    assert meta.compatibility_note == "This hotfix is supported only for R82.10 (jess_main)."
+
+
+def test_extract_package_metadata_tolerates_missing_conditions_set(tmp_path: Path) -> None:
+    package_path = tmp_path / "pkg.tar"
+    package_path.write_bytes(_make_tar({"hf.config": HF_CONFIG_TEXT.encode()}))
+
+    meta = extract_package_metadata(package_path)
+    assert meta.hf_config is not None
+    assert meta.compatibility_note is None
+
+
+def test_extract_package_metadata_tolerates_malformed_conditions_set(tmp_path: Path) -> None:
+    package_path = tmp_path / "pkg.tar"
+    package_path.write_bytes(
+        _make_tar(
+            {
+                "hf.config": HF_CONFIG_TEXT.encode(),
+                "conditions_set.json": b"not valid json {{{",
+            }
+        )
+    )
+
+    meta = extract_package_metadata(package_path)
+    assert meta.hf_config is not None  # hf.config itself still parses fine
+    assert meta.compatibility_note is None
+
+
+def test_extract_package_metadata_returns_empty_when_nothing_found(tmp_path: Path) -> None:
+    package_path = tmp_path / "pkg.tar"
+    package_path.write_bytes(_make_tar({"readme.txt": b"nothing to see here"}))
+
+    meta = extract_package_metadata(package_path)
+    assert meta.hf_config is None
+    assert meta.compatibility_note is None
 
     assert extract_hf_config(package_path) is None

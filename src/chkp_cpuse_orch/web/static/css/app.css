@@ -391,6 +391,19 @@ tr.job-install-log-row td { padding-top: 0; padding-bottom: 0.5rem; }
   overflow-wrap: anywhere;
 }
 
+/* Packages tab: collapsed-by-default compatibility/prerequisite note row —
+   same shape as .job-install-log above, just without the max-height/scroll
+   (this is a short prose statement, not a growing log). */
+.pkg-note-summary { cursor: pointer; }
+.pkg-note {
+  margin: 0.4rem 0 0;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg);
+  border-radius: 6px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* Jobs tab: "Show N jobs" limit control, in the panel header row (see
    .section-head-actions) rather than its own block above the table. */
 #jobs-limit-label { display: flex; align-items: center; gap: 0.4rem; }

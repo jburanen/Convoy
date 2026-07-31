@@ -107,6 +107,14 @@ class PackageRecord(BaseModel):
     # (pinned by the operator, or expiry disabled). Set at upload time from the
     # configured retention window.
     expires_at: datetime | None = None
+    # Compatibility metadata extracted from the package file itself at upload
+    # time (hfconfig.extract_package_metadata) — None for anything that
+    # wasn't a readable CPUSE archive, or predates this field (no backfill).
+    direct_base_version: str | None = None  # e.g. "R82.10"
+    take_number: int | None = None
+    category: str | None = None  # e.g. "JUMBO", "HOTFIX"
+    arch: str | None = None  # e.g. "x86_64"
+    compatibility_note: str | None = None  # free-text prereq/compat statement
 
     @property
     def pinned(self) -> bool:
@@ -504,6 +512,19 @@ _MIGRATIONS: tuple[str, ...] = (
     # next refresh) — same convention as installable (v12).
     """
     ALTER TABLE server_state ADD COLUMN installed TEXT NOT NULL DEFAULT '[]';
+    """,
+    # v22: compatibility metadata extracted from a package file at upload
+    # time (hfconfig.extract_package_metadata) — compatible major version,
+    # Take number, category, arch, and a free-text prerequisite/compatibility
+    # note, for display on the Packages tab. NULL for existing rows (no
+    # backfill — only new uploads get this) and for anything that wasn't a
+    # readable CPUSE archive.
+    """
+    ALTER TABLE packages ADD COLUMN direct_base_version TEXT;
+    ALTER TABLE packages ADD COLUMN take_number INTEGER;
+    ALTER TABLE packages ADD COLUMN category TEXT;
+    ALTER TABLE packages ADD COLUMN arch TEXT;
+    ALTER TABLE packages ADD COLUMN compatibility_note TEXT;
     """,
 )
 
@@ -964,8 +985,9 @@ class Store:
     def insert_package(self, rec: PackageRecord) -> None:
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO packages (id, filename, sha1, sha256, size, created_at, expires_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO packages (id, filename, sha1, sha256, size, created_at, expires_at,"
+                " direct_base_version, take_number, category, arch, compatibility_note)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     rec.id,
                     rec.filename,
@@ -974,6 +996,11 @@ class Store:
                     rec.size,
                     rec.created_at.isoformat(),
                     _iso(rec.expires_at),
+                    rec.direct_base_version,
+                    rec.take_number,
+                    rec.category,
+                    rec.arch,
+                    rec.compatibility_note,
                 ),
             )
 
@@ -1396,6 +1423,11 @@ def _package_from_row(row: sqlite3.Row) -> PackageRecord:
         size=row["size"],
         created_at=datetime.fromisoformat(row["created_at"]),
         expires_at=_dt(row["expires_at"]),
+        direct_base_version=row["direct_base_version"],
+        take_number=row["take_number"],
+        category=row["category"],
+        arch=row["arch"],
+        compatibility_note=row["compatibility_note"],
     )
 
 
