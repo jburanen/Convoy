@@ -1629,9 +1629,44 @@ function markRowIfJobActive(selectCb, hostName) {
   return true;
 }
 
+// loadServers()/loadFirewalls() tear down and rebuild every row from scratch
+// on each call — including background polls the operator never asked for
+// (pollJobs() reloads the whole table on ANY job's active-set change in the
+// environment, not just the row in question — see refreshActiveJobTargets).
+// Without this, a poll landing between "pick a package" and "click Install"
+// silently resets the row's <select> to its blank placeholder and disables
+// the Install button out from under the operator — a disabled button doesn't
+// even dispatch a click, so it looked like the first click "did nothing" and
+// a second one (after unknowingly re-picking the package) was needed
+// (operator-reported, 2026-07-31). Capture each row's in-flight choice before
+// the rebuild and reapply it by host name afterward.
+function captureRowSelections(tbody, nameSelector) {
+  const saved = new Map();
+  for (const row of tbody.querySelectorAll("tr.srv-row")) {
+    const name = row.querySelector(nameSelector)?.textContent;
+    if (!name) continue;
+    saved.set(name, {
+      value: row.querySelector(".install-select").value,
+      skipVerify: row.querySelector(".skip-verify").checked,
+    });
+  }
+  return saved;
+}
+
+function restoreRowSelection(row, hostName, saved) {
+  const prior = saved.get(hostName);
+  if (!prior || !prior.value) return;
+  const select = row.querySelector(".install-select");
+  if (!select.querySelector(`option[value="${CSS.escape(prior.value)}"]`)) return; // no longer offered
+  select.value = prior.value;
+  row.querySelector(".skip-verify").checked = prior.skipVerify;
+  syncActionButtons(row);
+}
+
 async function loadServers() {
   const tbody = document.querySelector("#servers-table tbody");
   const infoTbody = document.querySelector("#servers-info-table tbody");
+  const savedSelections = captureRowSelections(tbody, ".srv-name");
 
   tbody.replaceChildren();
   infoTbody.replaceChildren();
@@ -1709,6 +1744,7 @@ async function loadServers() {
     row.querySelector(".srv-role").textContent = roleLabel(srv.role);
     renderInstallSelect(row, srv.installable ?? [], srv.installed ?? [], srv.name);
     row.querySelector(".skip-verify").checked = !!envSkipVerifyDefault[currentEnv];
+    restoreRowSelection(row, srv.name, savedSelections);
 
     const stateRow = el("tpl-server-state-row");
     stateRow.dataset.server = srv.name; // looked up by the "Refresh all" button
@@ -2165,6 +2201,7 @@ document.getElementById("bulk-import-cloud-btn").addEventListener("click", () =>
 
 async function loadFirewalls() {
   const tbody = document.querySelector("#firewalls-table tbody");
+  const savedSelections = captureRowSelections(tbody, ".fw-name-link");
   tbody.replaceChildren();
 
   if (!currentEnv) {
@@ -2198,6 +2235,7 @@ async function loadFirewalls() {
       (state && state.credential_set) || "none — not assigned";
     renderInstallSelect(row, state?.installable ?? [], state?.installed ?? [], fw.name);
     row.querySelector(".skip-verify").checked = !!envSkipVerifyDefault[currentEnv];
+    restoreRowSelection(row, fw.name, savedSelections);
 
     const stateRow = el("tpl-firewall-state-row");
     stateRow.dataset.firewall = fw.name; // looked up by the "Refresh all" button
