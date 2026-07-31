@@ -30,3 +30,4 @@ Load this at the start of each session; read a linked file when its hook looks r
 - [Project rename to Convoy](project-rename-convoy.md) — renaming from chkp-cpuse-orch to Convoy before GA; GitHub rename is user's manual step, don't do it proactively
 - [Mgmt API SMS System Data domain](mgmt-api-sms-system-data-domain.md) — standalone SMS bootstrap login needs `--domain "System Data"` or add administrator/add api-key fail with err_inappropriate_domain_type
 - [API access repair flow](api-access-repair-flow.md) — proactive SSH diagnose right after Connect to Primary succeeds; repair stays confirm-gated, not folded into the provisioning command sequence
+- [Punch list workflow](punchlist-workflow.md) — closing a README Punch List bug moves it to Squashed Bugs w/ version, same commit as the fix
