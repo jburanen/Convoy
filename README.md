@@ -115,9 +115,7 @@ Empty is a good sign!
 #### Direct Patching (CPUSE)
 ⏫ Add deployment agent upgrade option  
 🤞 Some kind of sledgehammer to swing to release config/job lock from management server and firewalls if a job gets stranded/stuck  
-⏫ Offer via text link in info line to use CPRID to provision SSH access to firewalls if status check fails - also management servers?  
-🪲 Package verify command is being invoked incorrectly - needs to run with the package display name and not the package file name  
-🪲 Install job fails to initiate on the first click and requires a second attempt to run
+⏫ Offer via text link in info line to use CPRID to provision SSH access to firewalls if status check fails - also management servers?
 
 #### Jobs
 ⏫ Add syslog output    
@@ -127,6 +125,8 @@ Empty is a good sign!
 ✨ On jobs with error output, never let the error output spill outside the table boundary - direct the user to view details in the output box or something like that  
 
 #### Squashed Bugs
+v0.49.4 Package verify command was invoked with the identifier from `show installer packages all` instead of the display name from `show installer packages imported` - `installer verify`/`installer install` need the latter, and CPUSE doesn't always render the same identifier across the two scopes  
+v0.49.4 Install button on the Direct Patching (CPUSE) tab failed to register the first click - a background poll could land between picking a package and clicking Install, silently resetting the row's selection and re-disabling the button (disabled buttons don't dispatch click at all)  
 v0.49.3 Jobs tab Target column was blank for push_to_repo jobs (grouped with the other filename-only pkgs.* jobs) - now shows the management server being pushed to  
 v0.49.2 If a package import or upload-to-repo job fails we attempt to remove the file from the temp storage and alert in the job log if this was successful  
 v0.49.1 Added percentage display for package uploads  
