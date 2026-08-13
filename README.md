@@ -104,6 +104,8 @@ These gates define the major version releases - the milestones may change in the
 
 ✨ Add logic to display a warning on mobile devices that the UI of this tool does not scale down well (by design) and you should use it on a larger display.   
 ✨ Revisit ALL descriptive text and rewrite for clarity and brevity  
+🤞 Built-in help docs with ? button on each page/panel with long-form descriptive text  
+🤞 RADIUS auth option
 
 #### Provisioning  
 Empty is a good sign!  
@@ -122,6 +124,7 @@ Empty is a good sign!
 🤞 Allow import jobs to be cancelled during file copy stage - clean up partial file on target  
 ✨ Affirm in a push_to_repo job output that the temp storage was cleaned up  
 ✨ On jobs with error output, never let the error output spill outside the table boundary - direct the user to view details in the output box or something like that  
+✨ Show current percentage when available in the output column so I don't have to expand the full job progress to see it
 
 #### Squashed Bugs
 v0.49.5 Packages tab now extracts and displays compatible major version, Take number, category, arch, and a free-text compatibility/prerequisite note from the package file itself (`hf.config` + `conditions_set.json`) at upload time - also fixed a latent bug where BUNDLE-type packages' per-component `hf.config` files (missing Take/category) could be picked up instead of the authoritative bundle-level one  
