@@ -117,6 +117,7 @@ Empty is a good sign!
 ⏫ Add deployment agent upgrade option  
 🤞 Some kind of sledgehammer to swing to release config/job lock from management server and firewalls if a job gets stranded/stuck  
 ⏫ Offer via text link in info line to use CPRID to provision SSH access to firewalls if status check fails - also management servers?
+⏫ Add Spark via the 'upgrade_revert_image.sh filename safe' command
 
 #### Jobs
 ⏫ Add syslog output    
