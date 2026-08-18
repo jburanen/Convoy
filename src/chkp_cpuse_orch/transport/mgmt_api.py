@@ -245,17 +245,34 @@ class ManagementAPIClient:
     ) -> str:
         """Execute ``script`` (bash) on each of ``targets`` (gateway names)
         via SIC — no SSH needed. Returns a ``task-id`` to poll via
-        ``show_task``. Requires a write-capable (``read_only=False``)
-        session — this mutates the target(s). Request/response shape
-        confirmed against live gear 2026-08-18 (see
-        services/gateway_bootstrap.py, the first caller)."""
+        ``show_task``.
+
+        Requires a write-capable (``read_only=False``) session — this
+        mutates the target(s). ``show-task``'s response shape was confirmed
+        against live gear 2026-08-18 (see services/gateway_bootstrap.py) —
+        but that verification used ``mgmt_cli``, which auto-polls and prints
+        the *completed* task, not ``run-script``'s own immediate response.
+        A live 2026-08-18 failure (``run-script returned no task-id``) showed
+        the flat ``task-id`` key this shares with ``add-repository-package``
+        is NOT what ``run-script`` itself returns — so this also tries the
+        same nested ``tasks[0]["task-id"]`` shape ``show-task`` uses (the two
+        commands share the same underlying task/notification mechanism).
+        NOT YET CONFIRMED which of the two actually matches — if neither
+        does, the raised error carries the raw response so the real shape
+        can finally be read directly off a live failure."""
         data = self._post(
             "run-script",
             {"script-name": script_name, "script": script, "targets": targets},
         )
         task_id = data.get("task-id")
         if not isinstance(task_id, str) or not task_id:
-            raise TransportError("run-script returned no task-id")
+            tasks = data.get("tasks")
+            if isinstance(tasks, list) and tasks and isinstance(tasks[0], dict):
+                nested = tasks[0].get("task-id")
+                if isinstance(nested, str) and nested:
+                    task_id = nested
+        if not isinstance(task_id, str) or not task_id:
+            raise TransportError(f"run-script returned no task-id: {data!r}")
         return task_id
 
     def show_task(self, task_id: str) -> dict[str, Any]:

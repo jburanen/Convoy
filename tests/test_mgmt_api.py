@@ -204,6 +204,57 @@ def test_add_repository_package_raises_without_task_id() -> None:
         client.add_repository_package("jhf.tgz", "/var/log/upload")
 
 
+def test_run_script_returns_flat_task_id() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/login"):
+            return httpx.Response(200, json={"sid": "SID-123"})
+        if request.url.path.endswith("/run-script"):
+            body = json.loads(request.content or b"{}")
+            assert body == {"script-name": "s", "script": "echo hi", "targets": ["gw-1"]}
+            return httpx.Response(200, json={"task-id": "TASK-1"})
+        raise AssertionError(f"unexpected path {request.url.path}")
+
+    client = ManagementAPIClient(
+        _host(), api_key="k", read_only=False, transport=httpx.MockTransport(handler)
+    )
+    client.login()
+    assert client.run_script("echo hi", ["gw-1"], script_name="s") == "TASK-1"
+
+
+def test_run_script_falls_back_to_nested_tasks_shape() -> None:
+    # Same nested shape show-task returns — not yet confirmed this is what
+    # run-script itself sends back, but it's the best fallback guess when the
+    # flat key (add-repository-package's shape) isn't present.
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/login"):
+            return httpx.Response(200, json={"sid": "SID-123"})
+        if request.url.path.endswith("/run-script"):
+            return httpx.Response(
+                200, json={"tasks": [{"task-id": "TASK-2", "status": "in progress"}]}
+            )
+        raise AssertionError(f"unexpected path {request.url.path}")
+
+    client = ManagementAPIClient(
+        _host(), api_key="k", read_only=False, transport=httpx.MockTransport(handler)
+    )
+    client.login()
+    assert client.run_script("echo hi", ["gw-1"]) == "TASK-2"
+
+
+def test_run_script_raises_with_raw_response_when_unrecognized() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/login"):
+            return httpx.Response(200, json={"sid": "SID-123"})
+        return httpx.Response(200, json={"message": "accepted"})
+
+    client = ManagementAPIClient(
+        _host(), api_key="k", read_only=False, transport=httpx.MockTransport(handler)
+    )
+    client.login()
+    with pytest.raises(TransportError, match=r"no task-id.*accepted"):
+        client.run_script("echo hi", ["gw-1"])
+
+
 def test_show_task_returns_first_task() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/login"):
