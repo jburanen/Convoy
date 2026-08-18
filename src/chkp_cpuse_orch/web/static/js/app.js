@@ -2399,6 +2399,14 @@ document.getElementById("fw-bootstrap-creds-confirm-run").addEventListener("clic
 // display-only, no Run button: the operator pastes the command into the
 // device's own clish shell themselves (services/gateway_bootstrap.py's
 // preview_spark_admin_commands has no matching submit_*).
+//
+// Resolves once the operator closes the modal, so a caller stepping through
+// several firewalls in sequence (the Discover Firewalls import loop) can
+// `await` it and avoid clobbering one row's commands with the next before
+// the operator has copied them; the single-shot caller below (Firewalls
+// panel's own "Show Bootstrap Commands" link) just doesn't await it.
+let _fwSparkBootstrapResolve = null;
+
 async function openSparkBootstrapModal(name) {
   try {
     const preview = await api(
@@ -2409,16 +2417,122 @@ async function openSparkBootstrapModal(name) {
     document.getElementById("fw-spark-bootstrap-modal").classList.remove("hidden");
   } catch (e) {
     toast("Could not render command preview: " + e.message);
+    return;
   }
+  await new Promise((resolve) => { _fwSparkBootstrapResolve = resolve; });
 }
 
 function closeSparkBootstrapModal() {
   document.getElementById("fw-spark-bootstrap-modal").classList.add("hidden");
+  const resolve = _fwSparkBootstrapResolve;
+  _fwSparkBootstrapResolve = null;
+  if (resolve) resolve();
 }
 document.getElementById("fw-spark-bootstrap-close").addEventListener("click", closeSparkBootstrapModal);
 document.getElementById("fw-spark-bootstrap-ok").addEventListener("click", closeSparkBootstrapModal);
 document.getElementById("fw-spark-bootstrap-modal").addEventListener("click", (ev) => {
   if (ev.target.id === "fw-spark-bootstrap-modal") closeSparkBootstrapModal();
+});
+
+// ---- Spark firewall credential scenario modal ------------------------------
+// Shared by the Add Firewall modal (role changed to Spark Firewall) and the
+// Discover Firewalls import loop — both need the same "which scenario, which
+// credential set" prompt (#fw-spark-cred-modal in index.html). Resolves to
+// {credentialSetName, scenario} ("direct" | "bootstrap"), or null on
+// Cancel/backdrop click.
+let _fwSparkCredResolve = null;
+
+function toggleSparkCredNewFields() {
+  const isNew = document.getElementById("fw-spark-cred-select").value === "";
+  document.getElementById("fw-spark-cred-new-fields").classList.toggle("hidden", !isNew);
+}
+document.getElementById("fw-spark-cred-select").addEventListener("change", toggleSparkCredNewFields);
+
+async function resolveSparkFirewallCredentials(targetLabel) {
+  document.getElementById("fw-spark-cred-target").textContent = targetLabel;
+  document.getElementById("fw-spark-cred-form").reset();
+  const select = document.getElementById("fw-spark-cred-select");
+  select.querySelectorAll("option:not(:first-child)").forEach((o) => o.remove());
+  for (const set of await fetchCredentialSets()) select.appendChild(new Option(set.name, set.name));
+  select.value = "";
+  toggleSparkCredNewFields();
+  document.getElementById("fw-spark-cred-modal").classList.remove("hidden");
+  return new Promise((resolve) => { _fwSparkCredResolve = resolve; });
+}
+
+function closeSparkCredModal(result) {
+  document.getElementById("fw-spark-cred-modal").classList.add("hidden");
+  const resolve = _fwSparkCredResolve;
+  _fwSparkCredResolve = null;
+  if (resolve) resolve(result);
+}
+
+// Save a new credential set from the Spark scenario modal — same name-collision
+// handling as saveBootstrapCredential (prompt overwrite/new/skip), but expert
+// password is required (require_expert: true) and the set never becomes the
+// environment default (that's reserved for management-server bootstrap creds,
+// see saveBootstrapCredential). Unlike saveBootstrapCredential, this checks the
+// returned job actually succeeded before reporting success.
+async function saveSparkCredential({ name, ssh_username, ssh_password, expert_password, api_key }) {
+  await loadCredentialSets(); // refresh before checking for a username collision
+  const existing = credentialSets.find((s) => s.ssh_username === ssh_username);
+  let setName = name;
+  if (existing) {
+    const choice = await promptOverwriteChoice(ssh_username, existing.name);
+    if (choice === "skip") return { ok: false, reason: "you chose not to save them" };
+    setName = choice === "overwrite" ? existing.name : uniqueCredentialName(name);
+  }
+  try {
+    const job = await api(envUrl("/credentials"), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: setName,
+        ssh_username,
+        ssh_password,
+        expert_password,
+        api_key: api_key || null,
+        require_expert: true,
+      }),
+    });
+    lastJobStatus.set(job.id, job.status);
+    await Promise.all([loadJobs(), loadCredentialSets()]);
+    if (job.status !== "succeeded") return { ok: false, reason: job.error || "unknown error" };
+    return { ok: true, name: setName };
+  } catch (e) {
+    return { ok: false, reason: e.message };
+  }
+}
+
+document.getElementById("fw-spark-cred-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const scenario = document.querySelector('input[name="fw-spark-cred-scenario"]:checked').value;
+  const select = document.getElementById("fw-spark-cred-select");
+  if (select.value) {
+    closeSparkCredModal({ credentialSetName: select.value, scenario });
+    return;
+  }
+  const name = document.getElementById("fw-spark-cred-name").value.trim();
+  const ssh_username = document.getElementById("fw-spark-cred-user").value.trim();
+  const ssh_password = document.getElementById("fw-spark-cred-password").value;
+  const expert_password = document.getElementById("fw-spark-cred-expert").value;
+  const api_key = document.getElementById("fw-spark-cred-api").value;
+  if (!name || !ssh_username || !ssh_password) {
+    toast("Enter a name, SSH username, and SSH password — or pick an existing credential set.");
+    return;
+  }
+  if (!expert_password) {
+    toast("An expert password is required for a Spark firewall credential set.");
+    return;
+  }
+  const result = await saveSparkCredential({ name, ssh_username, ssh_password, expert_password, api_key });
+  if (!result.ok) { toast("Save failed: " + result.reason); return; }
+  closeSparkCredModal({ credentialSetName: result.name, scenario });
+});
+document.getElementById("fw-spark-cred-cancel").addEventListener("click", () => closeSparkCredModal(null));
+document.getElementById("fw-spark-cred-close").addEventListener("click", () => closeSparkCredModal(null));
+document.getElementById("fw-spark-cred-modal").addEventListener("click", (ev) => {
+  if (ev.target.id === "fw-spark-cred-modal") closeSparkCredModal(null); // backdrop click cancels
 });
 
 document.getElementById("fw-refresh-all-btn").addEventListener("click", async () => {
@@ -2558,9 +2672,34 @@ async function addFirewall({ name, address, role, ssh_user, ssh_port, credential
 // the name link, which opens straight into this modal).
 let editingFirewallName = null;
 
+// Set when the operator picks "bootstrap a dedicated account" in the Spark
+// credential-scenario modal (see fm-role change listener below) — the
+// firewall submit handler opens the Spark bootstrap-commands modal right
+// after a successful add. Reset on any role change away from Spark, and
+// consumed (reset) once acted on.
+let pendingSparkBootstrap = false;
+
+// Only the add flow prompts automatically when Spark is picked — editing an
+// existing firewall's role to Spark doesn't interrupt with this scenario
+// modal; the operator can still assign/replace credentials via the normal
+// #fm-cred-select dropdown in that case.
+document.getElementById("fm-role").addEventListener("change", async (ev) => {
+  if (ev.target.value !== "spark_firewall") { pendingSparkBootstrap = false; return; }
+  if (editingFirewallName !== null || !storageEnabled()) return;
+  const label = document.getElementById("fm-name").value.trim() || "this firewall";
+  const result = await resolveSparkFirewallCredentials(label);
+  if (result) {
+    await populateFirewallCredSelect(result.credentialSetName);
+    pendingSparkBootstrap = result.scenario === "bootstrap";
+  } else {
+    pendingSparkBootstrap = false; // cancelled — role stays Spark, credential unresolved ("assign later")
+  }
+});
+
 async function openAddFirewallModal() {
   if (!currentEnv) { toast("Create an environment first (picker → New Environment…)."); return; }
   editingFirewallName = null;
+  pendingSparkBootstrap = false;
   document.getElementById("firewall-form").reset();
   document.getElementById("fm-name").disabled = false;
   document.getElementById("firewall-modal-title").textContent = "Add firewall";
@@ -2576,6 +2715,7 @@ async function openAddFirewallModal() {
 }
 async function openEditFirewallModal(fw, assignedSetName, clusterName, mdsDomain) {
   editingFirewallName = fw.name;
+  pendingSparkBootstrap = false;
   document.getElementById("fm-name").value = fw.name;
   document.getElementById("fm-name").disabled = true;
   document.getElementById("fm-address").value = fw.address;
@@ -2736,6 +2876,10 @@ document.getElementById("firewall-form").addEventListener("submit", async (ev) =
     }
     closeFirewallModal();
     await Promise.all([loadJobs(), loadFirewalls()]);
+    if (pendingSparkBootstrap) {
+      pendingSparkBootstrap = false;
+      await openSparkBootstrapModal(name);
+    }
   } catch (e) { toast("Save failed: " + e.message); }
 });
 document.getElementById("firewall-modal-remove").addEventListener("click", async () => {
@@ -2935,6 +3079,19 @@ document.getElementById("discover-firewalls-import").addEventListener("click", a
     const address = r.querySelector(".disc-address").value.trim();
     const role = r.querySelector(".disc-role").value;
     if (!name || !address) { failed.push(name || address || "(unnamed)"); continue; }
+    // Every other imported firewall silently inherits the primary's credential
+    // set; Spark firewalls get their own scenario+credential prompt instead
+    // (see #fw-spark-cred-modal) since Spark needs an expert password the
+    // primary's set likely doesn't carry, and often ships with a distinct
+    // per-device admin password anyway. Cancelling leaves the row unassigned
+    // ("assign later") rather than blocking the rest of the batch.
+    let credentialSet = (storageEnabled() && discoverFwPrimaryCredSet) || undefined;
+    let bootstrapAfter = false;
+    if (role === "spark_firewall" && storageEnabled()) {
+      const result = await resolveSparkFirewallCredentials(name);
+      credentialSet = result ? result.credentialSetName : undefined;
+      bootstrapAfter = result ? result.scenario === "bootstrap" : false;
+    }
     try {
       // Add executes immediately as a prov.add job (services/prov_ops.py), so
       // the response already carries the real outcome (e.g. a name collision
@@ -2944,14 +3101,20 @@ document.getElementById("discover-firewalls-import").addEventListener("click", a
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name, address, role, ssh_user: discoverFwPrimarySshUser,
-          credential_set: (storageEnabled() && discoverFwPrimaryCredSet) || undefined,
+          credential_set: credentialSet,
           cluster_name: r.dataset.clusterName || undefined,
           mds_domain: r.dataset.mdsDomain || undefined,
         }),
       });
       lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if another tab is watching
-      if (job.status === "succeeded") ok++;
-      else failed.push(`${name}: ${job.error || "unknown error"}`);
+      if (job.status === "succeeded") {
+        ok++;
+        // Awaited so the operator can copy this row's commands before the
+        // next Spark row's prompt/preview overwrites the same modal.
+        if (bootstrapAfter) await openSparkBootstrapModal(name);
+      } else {
+        failed.push(`${name}: ${job.error || "unknown error"}`);
+      }
     } catch (e) { failed.push(`${name}: ${e.message}`); }
   }
   await Promise.all([loadJobs(), loadFirewalls()]);

@@ -34,6 +34,15 @@ distinct ephemeral-credential path, not a named set). Still no CPUSE/CDT code pa
 reads it back out — it's storage only, for the operator's own reference/manual use,
 same as before v23.
 
+**`require_expert` (added 2026-08-18, same day):** `CredentialSetIn` gained a
+`require_expert: bool = False` field, checked in `put_credential_set`
+(`web/app.py`) before it ever reaches `submit_put`/`put_set` — the *only*
+role-aware point in this whole otherwise role-agnostic path. Set by the Spark
+firewall credential-scenario flow (see [[spark-firewall-credential-scenarios]])
+when saving a *new* credential set for a Spark firewall, since Spark patching
+needs an expert password. Everywhere else (the plain Credentials panel,
+`saveBootstrapCredential`) omits it and is unaffected.
+
 ## Assignment
 A management server references **one** set; a set is assignable to **many** servers
 (the reuse pattern that replaced `*`). Stored as `env_hosts.credential_set_id` FK →
