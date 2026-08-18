@@ -776,6 +776,53 @@
      user`/`set user password-hash`/`add rba`), and Management-API run-script
      support on Spark appliances isn't established, so the operator pastes this
      into the device's own clish shell (operator-directed, 2026-08-18). -->
+<!-- ============ Spark firewall credential scenario modal ===================== -->
+<!-- Shown when adding a Spark (Gaia Embedded) firewall in a storage-enabled
+     environment — manually (role changed to Spark Firewall) or per-row during
+     Discover Firewalls import. Spark patching needs an expert-mode password
+     (services/gateway_bootstrap.py), so this is the one place a credential set's
+     expert password is required, not optional. Resolves to a credential set name
+     either way: pick an existing one, or create a new one inline (same fields for
+     both scenarios — the radio choice only changes the copy and whether the
+     existing Spark bootstrap-commands modal (#fw-spark-bootstrap-modal, below)
+     auto-opens afterward for the operator to paste into clish themselves. -->
+<div id="fw-spark-cred-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="fw-spark-cred-title">
+  <div class="modal-card narrow">
+    <div class="modal-head">
+      <h2 id="fw-spark-cred-title">Credentials for <span id="fw-spark-cred-target"></span></h2>
+      <button id="fw-spark-cred-close" class="small" title="Close">✕</button>
+    </div>
+    <p class="hint">
+      Spark firewalls need an expert-mode password for patching. Choose how this
+      one will be patched, then pick or create the credential set to use.
+    </p>
+    <form id="fw-spark-cred-form" class="stacked">
+      <div class="radio-option">
+        <input type="radio" name="fw-spark-cred-scenario" id="fw-spark-cred-scenario-direct" value="direct" checked>
+        <label for="fw-spark-cred-scenario-direct">I have existing admin credentials on the firewall that I'll use for patching</label>
+      </div>
+      <div class="radio-option">
+        <input type="radio" name="fw-spark-cred-scenario" id="fw-spark-cred-scenario-bootstrap" value="bootstrap">
+        <label for="fw-spark-cred-scenario-bootstrap">I have existing admin creds I'll use to bootstrap a dedicated credential set for this tool</label>
+      </div>
+      <label>Credential set
+        <select id="fw-spark-cred-select"><option value="">+ Create new credential set</option></select>
+      </label>
+      <div id="fw-spark-cred-new-fields">
+        <label>Name<input type="text" id="fw-spark-cred-name" placeholder="e.g. spark-01-admin"></label>
+        <label>SSH username<input type="text" id="fw-spark-cred-user" placeholder="admin"></label>
+        <label>SSH password<input type="password" id="fw-spark-cred-password" autocomplete="new-password"></label>
+        <label>Expert password (required)<input type="password" id="fw-spark-cred-expert" autocomplete="new-password"></label>
+        <label>API key (optional)<input type="password" id="fw-spark-cred-api" autocomplete="new-password"></label>
+      </div>
+      <div class="cred-modal-actions">
+        <button type="submit">Continue</button>
+        <button type="button" id="fw-spark-cred-cancel" class="secondary">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <div id="fw-spark-bootstrap-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="fw-spark-bootstrap-title">
   <div class="modal-card">
     <div class="modal-head">

@@ -722,6 +722,17 @@ button.link-btn.fw-name-link {
 /* Must out-rank .modal's display:flex (same-specificity .hidden loses to the
    later .modal rule) — without this the dialog is stuck open on page load. */
 .modal.hidden { display: none; }
+
+/* Modals that can be opened while another modal is still open (equal
+   z-index falls back to DOM order, which doesn't reflect nesting) need an
+   explicit rank: #fw-spark-cred-modal opens from within #firewall-modal or
+   #discover-firewalls-modal; #fw-spark-bootstrap-modal opens from within
+   #discover-firewalls-modal (the per-row import loop); #prov-overwrite-modal
+   can open from within #fw-spark-cred-modal on a credential-name collision. */
+#fw-spark-cred-modal,
+#fw-spark-bootstrap-modal { z-index: 101; }
+#prov-overwrite-modal { z-index: 102; }
+
 .modal-card {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -879,6 +890,19 @@ button.link-btn.fw-name-link {
   color: var(--muted);
   margin: 0.25rem 0 0.75rem;
 }
+
+/* Radio choices inside a .stacked form (e.g. Spark firewall credential
+   scenario) — .stacked's flex-column label rule would otherwise stack the
+   radio above its own text, so these live outside that label styling. */
+.radio-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 0.6rem;
+  font-size: 0.9rem;
+}
+.radio-option input[type="radio"] { margin-top: 0.2rem; }
+.radio-option label { font-weight: normal; }
 
 /* Header note when this tab is holding session-cached credentials. */
 #cred-cache-note {

@@ -196,6 +196,11 @@ class CredentialSetIn(BaseModel):
     # Make this the environment's default set, but only if none is set yet. Used by
     # the bootstrap flow so the first credentials become the default automatically.
     default_if_none: bool = False
+    # Set by the Spark-firewall credential flow (Add Firewall / Discover Firewalls) —
+    # Spark patching needs an expert password, unlike every other credential set,
+    # where it's optional. This is the only role-aware bit of the whole credential-set
+    # path; put_set/CredentialStore stay role-agnostic on purpose.
+    require_expert: bool = False
 
 
 class CredentialAssignmentIn(BaseModel):
@@ -1768,6 +1773,13 @@ def _register_routes(app: FastAPI) -> None:
                 status_code=409,
                 detail=f"credential storage is disabled for environment {env!r} — "
                 "enable it first, or supply credentials per operation",
+            )
+        if body.require_expert and not (
+            body.expert_password and body.expert_password.get_secret_value()
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="an expert password is required for this credential set",
             )
 
         def _reveal(value: SecretStr | None) -> str | None:

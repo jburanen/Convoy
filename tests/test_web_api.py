@@ -738,6 +738,43 @@ def test_credential_sets_roundtrip_never_echoes_secret(client: TestClient) -> No
     assert client.get("/api/env/default/credentials").json() == []
 
 
+def test_require_expert_rejects_missing_expert_password(client: TestClient) -> None:
+    """require_expert is the Spark-firewall credential flow's opt-in guard
+    (web/app.py's put_credential_set) — every other caller of this same route
+    (the plain Credentials panel, saveBootstrapCredential) omits it and stays
+    unaffected, see test_credential_sets_roundtrip_never_echoes_secret above."""
+    resp = client.put(
+        "/api/env/default/credentials",
+        json={
+            "name": "spark-01",
+            "ssh_username": "admin",
+            "ssh_password": "pw",
+            "require_expert": True,
+        },
+    )
+    assert resp.status_code == 422, resp.text
+    assert "expert password" in resp.json()["detail"]
+    assert client.get("/api/env/default/credentials").json() == []  # nothing written
+
+
+def test_require_expert_accepts_with_expert_password(client: TestClient) -> None:
+    resp = client.put(
+        "/api/env/default/credentials",
+        json={
+            "name": "spark-01",
+            "ssh_username": "admin",
+            "ssh_password": "pw",
+            "expert_password": "expertpw",
+            "require_expert": True,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    job = resp.json()
+    assert job["status"] == "succeeded", job["error"]
+    listing = client.get("/api/env/default/credentials").json()
+    assert listing[0]["has_expert"] is True
+
+
 def test_locked_credential_store_returns_503(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
