@@ -28,6 +28,16 @@ success), and ``responseMessage`` (the script's stdout, **base64-encoded**).
 The polling loop/status-set convention below mirrors
 services/pkg_repo_ops.py's ``add-repository-package`` polling, which uses the
 same generic Management API task mechanism.
+
+**Spark (Quantum SMB) firewalls are a deliberate exception to all of the
+above** (operator-directed, 2026-08-18): ``preview_spark_admin_commands``
+renders SMB's own ``add administrator`` clish command
+(``provisioning.render_spark_admin_commands``) but there is no matching
+``submit_*`` / ``run-script`` push — Spark's support for that transport
+isn't established, and full Gaia's clish commands aren't valid on Gaia
+Embedded anyway. ``preview_bootstrap_commands``/``submit_bootstrap`` (the
+full-Gaia path above) explicitly reject a Spark target rather than silently
+rendering/pushing the wrong commands to it.
 """
 
 from __future__ import annotations
@@ -40,13 +50,17 @@ from types import TracebackType
 from typing import Any, Protocol
 
 from ..credentials import CredentialKind
-from ..errors import CredentialError, TransportError
-from ..inventory import Host
+from ..errors import CredentialError, InventoryError, TransportError
+from ..inventory import Host, Role
 from ..jobs import JobContext, JobRunner
 from ..store import JobRecord, Store
 from ..transport.mgmt_api import ManagementAPIClient
 from .common import EnvironmentRegistry, api_auth
-from .provisioning import render_bootstrap_script, render_gaia_user_commands
+from .provisioning import (
+    render_bootstrap_script,
+    render_gaia_user_commands,
+    render_spark_admin_commands,
+)
 
 JOB_BOOTSTRAP_CREDENTIALS = "cred.bootstrap"
 
@@ -140,19 +154,49 @@ class GatewayBootstrapService:
     def preview_bootstrap_commands(self, environment: str, name: str) -> list[str]:
         """Pure rendering (no server contact) for the confirm dialog shown
         before ``submit_bootstrap`` actually runs these via the Management
-        API. Raises OrchestratorError if the firewall is unknown or its
-        assigned credential set isn't password-based."""
+        API. Raises OrchestratorError if the firewall is unknown, is a Spark
+        firewall (see ``preview_spark_admin_commands`` instead — that path
+        stays manual, no automated push), or its assigned credential set
+        isn't password-based."""
         connector = self._registry.get(environment)
         host = connector.firewall_host(name)
+        if host.role == Role.SPARK_FIREWALL:
+            raise InventoryError(
+                f"{name!r} is a Spark firewall — its bootstrap commands are "
+                "display-only, not an automated push (see the Spark bootstrap preview)"
+            )
         bundle = connector.host_credentials(host)
         username, password = _bootstrap_credential(host, bundle)
         return render_gaia_user_commands(username, password)
+
+    def preview_spark_admin_commands(self, environment: str, name: str) -> list[str]:
+        """Read-only rendering (no server contact) of the Quantum Spark (SMB)
+        ``add administrator`` clish command for ``name``'s assigned
+        credential set, for the operator to paste into the device's own
+        clish shell. Unlike ``preview_bootstrap_commands`` (full Gaia),
+        there is no matching ``submit_*`` — Spark bootstrap stays manual
+        (operator-directed, 2026-08-18): Management API ``run-script``
+        support on Spark appliances isn't established, and full Gaia's
+        clish account commands aren't valid there anyway (see
+        ``provisioning.render_spark_admin_commands``)."""
+        connector = self._registry.get(environment)
+        host = connector.firewall_host(name)
+        if host.role != Role.SPARK_FIREWALL:
+            raise InventoryError(f"{name!r} is not a Spark firewall")
+        bundle = connector.host_credentials(host)
+        username, password = _bootstrap_credential(host, bundle)
+        return render_spark_admin_commands(username, password)
 
     def submit_bootstrap(
         self, environment: str, name: str, *, triggered_by: str | None = None
     ) -> JobRecord:
         connector = self._registry.get(environment)
-        connector.firewall_host(name)  # validates existence/role before queuing
+        host = connector.firewall_host(name)  # validates existence/role before queuing
+        if host.role == Role.SPARK_FIREWALL:
+            raise InventoryError(
+                f"{name!r} is a Spark firewall — credential bootstrap there is "
+                "manual, not an automated push (see the Spark bootstrap preview)"
+            )
         return self.runner.submit(
             JOB_BOOTSTRAP_CREDENTIALS,
             target=name,

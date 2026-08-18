@@ -761,6 +761,43 @@
   </div>
 </div>
 
+<!-- ============ Spark bootstrap-admin commands modal (CPUSE tab, Firewalls) === -->
+<!-- Opened from the Firewalls panel's "Show Bootstrap Commands" link, shown only
+     after a status-refresh SSH authentication failure on a Spark (Gaia Embedded)
+     firewall. Unlike fw-bootstrap-creds-confirm-modal above (full Gaia, pushed
+     automatically via the Management API), this is display-only — Spark's
+     clish speaks a different command family (`add administrator`, not `add
+     user`/`set user password-hash`/`add rba`), and Management-API run-script
+     support on Spark appliances isn't established, so the operator pastes this
+     into the device's own clish shell (operator-directed, 2026-08-18). -->
+<div id="fw-spark-bootstrap-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="fw-spark-bootstrap-title">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2 id="fw-spark-bootstrap-title">Bootstrap commands</h2>
+      <button id="fw-spark-bootstrap-close" class="small" title="Close">✕</button>
+    </div>
+    <p class="hint warn">
+      Paste this into clish on <strong id="fw-spark-bootstrap-target"></strong> yourself —
+      Spark appliances aren't bootstrapped automatically. It resets the device's
+      local admin user/password to match its assigned credential set.
+    </p>
+    <div class="output-pane">
+      <div class="output-body">
+        <button type="button" class="copy-icon" data-copy="fw-spark-bootstrap-output" title="Copy to clipboard" aria-label="Copy to clipboard">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+          </svg>
+        </button>
+        <pre id="fw-spark-bootstrap-output" class="job-events mono"></pre>
+      </div>
+    </div>
+    <div class="cred-modal-actions">
+      <button type="button" id="fw-spark-bootstrap-ok" class="secondary">Close</button>
+    </div>
+  </div>
+</div>
+
 <!-- ============ API key reveal modal (Provisioning tab) ====================== -->
 <!-- Shown once, right after a successful connect-primary job — the key is
      fetched via GET /api/jobs/{id}/reveal-api-key, which returns it exactly
@@ -1128,6 +1165,10 @@
       <span class="srv-checked"></span>
       <button type="button" class="link-btn srv-refresh-link">Refresh</button>
       <button type="button" class="link-btn srv-bootstrap-creds-link hidden">Bootstrap Credentials</button>
+      <!-- Spark (Gaia Embedded) firewalls only — shown instead of the link
+           above on an auth failure, since Spark bootstrap is display-only
+           (see fw-spark-bootstrap-modal). -->
+      <button type="button" class="link-btn srv-spark-bootstrap-link hidden">Show Bootstrap Commands</button>
     </td>
   </tr>
 </template>

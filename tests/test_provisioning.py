@@ -17,6 +17,7 @@ from chkp_cpuse_orch.services.provisioning import (
     render_publish_logout_commands,
     render_set_api_settings_command,
     render_show_administrator_command,
+    render_spark_admin_commands,
 )
 
 
@@ -98,6 +99,46 @@ def test_uid_zero_allowed() -> None:
 def test_bad_role_rejected() -> None:
     with pytest.raises(ProvisioningError, match="invalid role"):
         render_gaia_user_commands("svc", "longenough", role="bad role;x")
+
+
+# -- render_spark_admin_commands (Quantum Spark / SMB clish) ----------------------
+
+
+def test_spark_renders_single_add_administrator_command() -> None:
+    cmds = render_spark_admin_commands("svc-patch", "s3cret-pw!")
+    assert len(cmds) == 1
+    assert cmds[0].startswith("add administrator username svc-patch password-hash $6$")
+    assert cmds[0].endswith('permission "Super Admin"')
+
+
+def test_spark_hash_verifies_and_plaintext_absent() -> None:
+    password = "correct horse battery"
+    (cmd,) = render_spark_admin_commands("svc_patch", password)
+    assert password not in cmd
+    pw_hash = cmd.split("password-hash ", 1)[1].split(" permission", 1)[0]
+    assert sha512_crypt.verify(password, pw_hash)
+    assert "rounds=" not in pw_hash  # classic $6$salt$hash, matching cryptpw -a sha512
+
+
+def test_spark_custom_permission() -> None:
+    (cmd,) = render_spark_admin_commands("ops", "longenough", permission="read-write")
+    assert cmd.endswith('permission "read-write"')
+
+
+def test_spark_invalid_usernames_rejected() -> None:
+    for bad in ("Admin", "1abc", "a b", "user;reboot", "", "a" * 33):
+        with pytest.raises(ProvisioningError, match="invalid username"):
+            render_spark_admin_commands(bad, "longenough")
+
+
+def test_spark_short_password_rejected() -> None:
+    with pytest.raises(ProvisioningError, match="at least 8"):
+        render_spark_admin_commands("svc", "short")
+
+
+def test_spark_bad_permission_rejected() -> None:
+    with pytest.raises(ProvisioningError, match="invalid permission"):
+        render_spark_admin_commands("svc", "longenough", permission="root")
 
 
 def test_mgmt_api_commands_single_session_and_api_key() -> None:

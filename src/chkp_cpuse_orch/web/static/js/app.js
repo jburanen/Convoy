@@ -2262,12 +2262,16 @@ async function loadFirewalls() {
     stateRow.dataset.firewall = fw.name; // looked up by the "Refresh all" button
     const hasClusterLine = renderStateRow(stateRow, state && state.checked_at ? state : null);
     row.classList.toggle("fw-cluster-member", hasClusterLine);
+    row.dataset.role = fw.role; // read by refreshFirewallState to pick the right bootstrap link
     stateRow
       .querySelector(".srv-refresh-link")
       .addEventListener("click", () => refreshFirewallState(fw.name, row, stateRow));
     stateRow
       .querySelector(".srv-bootstrap-creds-link")
       .addEventListener("click", () => openBootstrapCredsConfirm(fw.name, stateRow));
+    stateRow
+      .querySelector(".srv-spark-bootstrap-link")
+      .addEventListener("click", () => openSparkBootstrapModal(fw.name));
     row.querySelector(".btn-install").addEventListener("click", () => installFirewallPackage(fw.name, row));
     row.querySelector(".btn-uninstall").addEventListener("click", () => openUninstallModal("firewall", fw.name, row));
     // The name itself is the row's only Edit trigger now — Remove lives inside
@@ -2293,11 +2297,14 @@ async function loadFirewalls() {
 async function refreshFirewallState(name, row, stateRow) {
   const link = stateRow.querySelector(".srv-refresh-link");
   const bootstrapLink = stateRow.querySelector(".srv-bootstrap-creds-link");
+  const sparkBootstrapLink = stateRow.querySelector(".srv-spark-bootstrap-link");
+  const isSpark = row.dataset.role === "spark_firewall";
   const summary = stateRow.querySelector(".srv-summary");
   const extra = await operationCredentials(name, "query live state");
   if (extra === null) return; // credential prompt cancelled
   link.disabled = true;
   bootstrapLink.classList.add("hidden"); // re-evaluated fresh on every attempt
+  sparkBootstrapLink.classList.add("hidden");
   summary.textContent = "querying…";
   stateRow.querySelector(".srv-checked").textContent = "";
   try {
@@ -2313,8 +2320,14 @@ async function refreshFirewallState(name, row, stateRow) {
     cacheEvictCreds(name); // a cached wrong/stale password re-prompts next time
     summary.textContent = "detect failed: " + e.message;
     // Loose match (not a literal "Authentication Failed" string) — paramiko's
-    // exact wording isn't a stable contract to pin an exact match to.
-    if (/auth/i.test(e.message)) bootstrapLink.classList.remove("hidden");
+    // exact wording isn't a stable contract to pin an exact match to. Spark
+    // gets the display-only "Show Bootstrap Commands" link instead of the
+    // full-Gaia auto-push one — its clish speaks `add administrator`, not
+    // `add user`/`set user password-hash`, and there's no automated push for
+    // it (see services/gateway_bootstrap.py's module docstring).
+    if (/auth/i.test(e.message)) {
+      (isSpark ? sparkBootstrapLink : bootstrapLink).classList.remove("hidden");
+    }
   } finally {
     link.disabled = false;
   }
@@ -2379,6 +2392,32 @@ document.getElementById("fw-bootstrap-creds-confirm-run").addEventListener("clic
   } catch (e) {
     summary.textContent = "Bootstrap failed to start: " + e.message;
   }
+});
+
+// Spark (Gaia Embedded) equivalent of openBootstrapCredsConfirm above —
+// display-only, no Run button: the operator pastes the command into the
+// device's own clish shell themselves (services/gateway_bootstrap.py's
+// preview_spark_admin_commands has no matching submit_*).
+async function openSparkBootstrapModal(name) {
+  try {
+    const preview = await api(
+      envUrl(`/firewalls/${encodeURIComponent(name)}/spark-bootstrap-admin/preview`),
+    );
+    document.getElementById("fw-spark-bootstrap-target").textContent = name;
+    document.getElementById("fw-spark-bootstrap-output").textContent = preview.commands.join("\n");
+    document.getElementById("fw-spark-bootstrap-modal").classList.remove("hidden");
+  } catch (e) {
+    toast("Could not render command preview: " + e.message);
+  }
+}
+
+function closeSparkBootstrapModal() {
+  document.getElementById("fw-spark-bootstrap-modal").classList.add("hidden");
+}
+document.getElementById("fw-spark-bootstrap-close").addEventListener("click", closeSparkBootstrapModal);
+document.getElementById("fw-spark-bootstrap-ok").addEventListener("click", closeSparkBootstrapModal);
+document.getElementById("fw-spark-bootstrap-modal").addEventListener("click", (ev) => {
+  if (ev.target.id === "fw-spark-bootstrap-modal") closeSparkBootstrapModal();
 });
 
 document.getElementById("fw-refresh-all-btn").addEventListener("click", async () => {

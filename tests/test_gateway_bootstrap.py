@@ -112,6 +112,59 @@ def test_preview_rejects_non_firewall_role(
         service.preview_bootstrap_commands("default", "mgmt-01")
 
 
+def test_preview_rejects_spark_firewall(
+    store: Store, creds: CredentialStore, runner: JobRunner
+) -> None:
+    # Spark uses a different clish command family entirely (add administrator,
+    # not add user/set user password-hash) — see preview_spark_admin_commands.
+    inv = _inventory(Host(name="spark-01", address="192.0.2.30", role=Role.SPARK_FIREWALL))
+    creds.put_set("default", "primary", ssh_username="admin", ssh_password="s3cret-pw!")
+    _assign(store, inv, "spark-01", "primary")
+    service = GatewayBootstrapService(registry=_registry(inv, creds), store=store, runner=runner)
+
+    with pytest.raises(InventoryError, match="Spark firewall"):
+        service.preview_bootstrap_commands("default", "spark-01")
+
+
+def test_submit_bootstrap_rejects_spark_firewall(
+    store: Store, creds: CredentialStore, runner: JobRunner
+) -> None:
+    inv = _inventory(Host(name="spark-01", address="192.0.2.30", role=Role.SPARK_FIREWALL))
+    creds.put_set("default", "primary", ssh_username="admin", ssh_password="s3cret-pw!")
+    _assign(store, inv, "spark-01", "primary")
+    service = GatewayBootstrapService(registry=_registry(inv, creds), store=store, runner=runner)
+
+    with pytest.raises(InventoryError, match="Spark firewall"):
+        service.submit_bootstrap("default", "spark-01")
+
+
+def test_preview_spark_admin_commands_renders_add_administrator(
+    store: Store, creds: CredentialStore, runner: JobRunner
+) -> None:
+    inv = _inventory(Host(name="spark-01", address="192.0.2.30", role=Role.SPARK_FIREWALL))
+    creds.put_set("default", "primary", ssh_username="admin", ssh_password="s3cret-pw!")
+    _assign(store, inv, "spark-01", "primary")
+    service = GatewayBootstrapService(registry=_registry(inv, creds), store=store, runner=runner)
+
+    commands = service.preview_spark_admin_commands("default", "spark-01")
+
+    assert len(commands) == 1
+    assert commands[0].startswith("add administrator username admin password-hash $6$")
+    assert commands[0].endswith('permission "Super Admin"')
+
+
+def test_preview_spark_admin_commands_rejects_non_spark_firewall(
+    store: Store, creds: CredentialStore, runner: JobRunner
+) -> None:
+    inv = _inventory(Host(name="fw-01", address="192.0.2.20", role=Role.GATEWAY))
+    creds.put_set("default", "primary", ssh_username="admin", ssh_password="s3cret-pw!")
+    _assign(store, inv, "fw-01", "primary")
+    service = GatewayBootstrapService(registry=_registry(inv, creds), store=store, runner=runner)
+
+    with pytest.raises(InventoryError, match="not a Spark firewall"):
+        service.preview_spark_admin_commands("default", "fw-01")
+
+
 # -- _do_bootstrap job execution (fake Management API client) ---------------------
 #
 # Response shape below is the REAL show-task payload for a run-script task,

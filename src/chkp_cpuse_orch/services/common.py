@@ -30,10 +30,11 @@ _FW_ROLES = FIREWALL_ROLES
 # Any host this tool can drive through the CPUSE import/install lifecycle
 # directly (management server or firewall) — CDT-only gateway fleets aren't
 # stored here at all, so this gate never needs to exclude them separately.
-# Spark firewalls are excluded: they're a valid, listable firewall role
-# (FIREWALL_ROLES) but standard CPUSE CLI mechanics don't apply to a Gaia
-# Embedded appliance, and Spark-specific patch support doesn't exist yet.
-_PATCHABLE_FW_ROLES = tuple(r for r in _FW_ROLES if r is not Role.SPARK_FIREWALL)
+# Spark firewalls (Gaia Embedded) are patchable directly too (operator-
+# directed, 2026-08-18) — previously excluded here, see git history/
+# .claude/memory/patching-web-design.md for the prior "not wired in yet"
+# state and what changed.
+_PATCHABLE_FW_ROLES = _FW_ROLES
 _PATCHABLE_ROLES = _MGMT_ROLES + _PATCHABLE_FW_ROLES
 
 
@@ -135,11 +136,8 @@ class HostConnector:
 
     def patchable_host(self, host_name: str) -> Host:
         """Resolve any host this tool CPUSE-patches directly — management
-        server or (non-Spark) firewall. Used by PatchingService, which
-        doesn't care which of the two it's talking to; the mechanics are
-        identical — except Spark firewalls, which aren't patched directly
-        yet (see _PATCHABLE_FW_ROLES above) since standard CPUSE CLI
-        mechanics don't apply to a Gaia Embedded appliance."""
+        server or firewall (Spark/Gaia Embedded included). Used by
+        PatchingService, which doesn't care which kind it's talking to."""
         host = self.inventory.host(host_name)  # raises InventoryError if unknown
         if host.role not in _PATCHABLE_ROLES:
             raise InventoryError(

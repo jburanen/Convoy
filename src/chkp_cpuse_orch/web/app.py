@@ -1475,11 +1475,12 @@ def _register_routes(app: FastAPI) -> None:
     def firewall_bootstrap_credentials_preview(
         env: str, name: str, request: Request
     ) -> dict[str, Any]:
-        """Renders the exact clish commands a (not yet implemented) bootstrap
-        run would push via the Management API, so the operator can review
-        them before confirming — same pattern as api-access/repair-preview.
-        The Firewalls panel's "Bootstrap Credentials" link (shown after an
-        SSH auth failure during status refresh) opens this preview first."""
+        """Renders the exact clish commands a bootstrap run would push via
+        the Management API, so the operator can review them before
+        confirming — same pattern as api-access/repair-preview. The
+        Firewalls panel's "Bootstrap Credentials" link (shown after an SSH
+        auth failure during status refresh) opens this preview first. Spark
+        firewalls use the separate, display-only preview below instead."""
         try:
             commands = _gateway_bootstrap(request).preview_bootstrap_commands(env, name)
         except OrchestratorError as exc:
@@ -1491,13 +1492,31 @@ def _register_routes(app: FastAPI) -> None:
         """Pushes the firewall's assigned credential set onto the gateway via
         the Management API's run-script (see services/gateway_bootstrap.py) —
         the "Bootstrap Credentials" link's Run button, after the operator has
-        reviewed the preview above."""
+        reviewed the preview above. Rejects Spark firewalls (no automated
+        push there — see the Spark bootstrap preview route)."""
         try:
             return _gateway_bootstrap(request).submit_bootstrap(
                 env, name, triggered_by=_current_user(request)
             )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
+
+    @app.get("/api/env/{env}/firewalls/{name}/spark-bootstrap-admin/preview")
+    def firewall_spark_bootstrap_admin_preview(
+        env: str, name: str, request: Request
+    ) -> dict[str, Any]:
+        """Renders the Quantum Spark (SMB) `add administrator` clish command
+        for name's assigned credential set — display-only, for the operator
+        to paste into the device's own clish shell (no automated push; see
+        services/gateway_bootstrap.py's module docstring for why). The
+        Firewalls panel shows this instead of the "Bootstrap Credentials"
+        link for Spark firewalls after an SSH auth failure during status
+        refresh."""
+        try:
+            commands = _gateway_bootstrap(request).preview_spark_admin_commands(env, name)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        return {"commands": commands}
 
     @app.post("/api/env/{env}/firewalls/{name}/mds-domain")
     def firewall_set_mds_domain(

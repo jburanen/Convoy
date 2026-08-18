@@ -72,6 +72,58 @@ def render_gaia_user_commands(
     ]
 
 
+_SPARK_PERMISSIONS = frozenset(
+    {"access-policy", "read-write", "readonly", "remote-access", "Super Admin", "networking"}
+)
+# Full admin: CPUSE installer verbs require it, same rationale as DEFAULT_ROLE above.
+DEFAULT_SPARK_PERMISSION = "Super Admin"
+
+
+def render_spark_admin_commands(
+    username: str,
+    password: str,
+    *,
+    permission: str = DEFAULT_SPARK_PERMISSION,
+) -> list[str]:
+    """Clish command to create the service account on a Quantum Spark (SMB)
+    appliance — Gaia Embedded's clish has a completely different account
+    model than full Gaia's (``render_gaia_user_commands`` above): one ``add
+    administrator`` command, no separate uid/rba/shell steps. Reference: SMB
+    R81.10.X CLI Reference, ``add-administrator``
+    (https://sc1.checkpoint.com/documents/SMB_R81.10.X/CLI/EN/Content/Topics/add-administrator.htm).
+
+    Same password-hash approach as ``render_gaia_user_commands`` (classic
+    ``$6$salt$hash``, matching the SMB doc's own ``cryptpw -a sha512``
+    recommendation) — the password never appears in plaintext in the
+    rendered command, so it's safe to display/copy/paste.
+
+    Display-only (operator-directed, 2026-08-18): unlike
+    ``render_bootstrap_script`` (full Gaia), there is no Management-API
+    ``run-script`` push for this — Spark's support for that isn't
+    established, and full Gaia's clish commands aren't valid there anyway.
+    The operator pastes this into the device's own clish shell.
+    """
+    if not _USERNAME_RE.fullmatch(username):
+        raise ProvisioningError(
+            f"invalid username {username!r}: lowercase letters, digits, '_' and '-', "
+            "starting with a letter or '_', max 32 chars"
+        )
+    if len(password) < _MIN_PASSWORD_LEN:
+        raise ProvisioningError(f"password must be at least {_MIN_PASSWORD_LEN} characters")
+    if permission not in _SPARK_PERMISSIONS:
+        raise ProvisioningError(
+            f"invalid permission {permission!r}: must be one of {sorted(_SPARK_PERMISSIONS)}"
+        )
+
+    # types-passlib leaves .using() untyped; the call shape is stable.
+    hasher = sha512_crypt.using(rounds=5000)  # type: ignore[no-untyped-call]
+    password_hash = hasher.hash(password)
+    return [
+        f"add administrator username {username} password-hash {password_hash} "
+        f'permission "{permission}"'
+    ]
+
+
 def render_bootstrap_script(username: str, password: str) -> str:
     """The bash script body for reapplying this account's credentials on a
     gateway via the Management API's ``run-script`` (services/
