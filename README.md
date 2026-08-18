@@ -20,11 +20,11 @@ By design, this tool does NOT support patching:
 ❌ Spark Management Portal *(patched by Check Point)*  
 ❌ Gaia Standalone (self-managed) deployments  *(uncommon)*  
 ❌ Firewalls defined as dynamic IP (DAIP)  *(code limitation)*  
-❌ Spark firewalls managed by above on-prem environments  *(code limitation)*  
 
 This tool does not CURRENTLY support but may one day support:  
 ⏳ Maestro  
 ⏳ ElasticXL  
+⏳ Spark firewalls managed by above on-prem environments  
 
 ## What it does
 
@@ -108,7 +108,7 @@ These gates define the major version releases - the milestones may change in the
 🤞 RADIUS auth option
 
 #### Provisioning  
-Empty is a good sign!  
+⏫ Harden service account practices: move away from /bin/bash for Gaia and away from default bashUser on for Spark  
 
 #### Packages
 🤞 Add a percentage progress display for package upload  
