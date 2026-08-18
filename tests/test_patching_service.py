@@ -132,9 +132,7 @@ def test_management_servers_excludes_gateways(service: PatchingService) -> None:
 
 
 def test_firewalls_lists_all_firewall_role_hosts(service: PatchingService) -> None:
-    # firewalls() lists every FIREWALL_ROLES member — including Spark, which
-    # is listable/discoverable even though it isn't patchable yet (see
-    # test_submit_import_rejects_spark_firewall_host below).
+    # firewalls() lists every FIREWALL_ROLES member, including Spark.
     assert [h.name for h in service.firewalls("default")] == ["fw-01", "spark-01"]
 
 
@@ -181,13 +179,17 @@ def test_submit_import_rejects_unknown_host(service: PatchingService) -> None:
         service.submit_import("default", "nope", PKG)
 
 
-def test_submit_import_rejects_spark_firewall_host(service: PatchingService) -> None:
-    # Spark firewalls are listable (FIREWALL_ROLES) but not yet patchable
-    # directly — standard CPUSE CLI mechanics don't apply to a Gaia Embedded
-    # appliance. patchable_host() rejects it before any credential lookup or
-    # CPUSE command runs.
-    with pytest.raises(InventoryError, match="isn't patched directly"):
-        service.submit_import("default", "spark-01", PKG)
+def test_submit_import_allows_a_credentialed_spark_firewall_host(
+    service: PatchingService, store: Store
+) -> None:
+    # Spark (Gaia Embedded) firewalls are patched directly via CPUSE too now
+    # (operator-directed, 2026-08-18) — patchable_host() no longer carves
+    # them out, same as any other FIREWALL_ROLES member.
+    row = store.get_credential_set_by_name("default", "primary")
+    assert row is not None
+    service.registry.get("default").inventory.host("spark-01").credential_set_id = row.id
+    job = service.submit_import("default", "spark-01", PKG)
+    assert job.target == "spark-01"
 
 
 def test_submit_import_allows_a_credentialed_firewall_host(

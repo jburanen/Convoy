@@ -116,7 +116,10 @@ Empty is a good sign!
 #### Manual Patching (CPUSE)
 ⏫ Add deployment agent upgrade option  
 🤞 Some kind of sledgehammer to swing to release config/job lock from management server and firewalls if a job gets stranded/stuck  
-⏫ Add Spark via the 'upgrade_revert_image.sh filename safe' command
+⏫ Add Spark via the 'upgrade_revert_image.sh filename safe' command. Foreseeable issues are:  
+  Probably requires different clish commands to provision patching user  
+  Patching user cannot be boostrapped via mgmt  
+  Requires the expert command 'bashUser on' to be issued to permit SCP file transfers  
 
 #### Jobs
 ⏫ Add syslog output    

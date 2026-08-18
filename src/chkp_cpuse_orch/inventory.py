@@ -35,9 +35,10 @@ class Role(StrEnum):
     GATEWAY = "gateway"  # Security Gateway
     CLUSTER_MEMBER = "cluster_member"  # Gateway that is part of a ClusterXL/HA cluster
     # Quantum Spark (SMB) appliance, detected via operating-system == "Gaia
-    # Embedded" (see services/discovery.py). Deliberately NOT wired into CDT
-    # bulk-deploy (orchestrator.py) or direct CPUSE patching
-    # (services/common.py) yet — Spark needs different deploy mechanics.
+    # Embedded" (see services/discovery.py). Patched directly via CPUSE like
+    # any other firewall (services/common.py) — still NOT wired into CDT
+    # bulk-deploy (orchestrator.py), which is a separate subsystem gateways
+    # opt into via Role.GATEWAY/CLUSTER_MEMBER only.
     SPARK_FIREWALL = "spark_firewall"  # Quantum Spark (SMB) appliance
 
 
