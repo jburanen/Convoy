@@ -138,6 +138,23 @@ plain and file-based:
   becomes a separate page** (it shares no tab state); RBAC admin likewise if it
   outgrows a tab. Header/footer stay in the one main page — plain HTML has no
   include mechanism worth its cost here.
+- **CSS gotcha: a bare `.foo-link` override loses to `button.link-btn`'s own
+  rule** (operator-reported, 2026-08-18 — the Firewalls table's name-as-button
+  read as indented ~6px vs. its column header). `button.link-btn` sets
+  `margin-left: 0.4rem` (for the inline "Refresh"-style use) at specificity
+  (0,1,1); a later `.fw-name-link { margin-left: 0; }` is only (0,1,0) — class
+  alone loses to element+class regardless of source order, so the override
+  silently never applied despite reading correctly in the stylesheet. Fixed by
+  writing it `button.link-btn.srv-name-link, button.link-btn.fw-name-link`
+  (app.css). Any future `.link-btn` variant needing to override a property
+  `button.link-btn` itself sets must match or exceed that selector's
+  specificity, not just come later in the file. The Management-tab server row
+  (`.srv-name`) got the same button-wrapped name-as-Edit-trigger treatment as
+  the Firewalls table's `.fw-name` in this pass (`loadServers()` now iterates
+  the CRUD `editable` list, cross-referenced via `stateByName` for cached
+  CPUSE state — same split `loadFirewalls()` already used, needed here too
+  since `openEditServerModal` wants `ssh_port`, which the patching-view list
+  doesn't carry).
 
 ## Web UI authentication (LDAP shipped 2026-07-20 — see [[web-auth]])
 LDAP/AD authentication is **built**: `web/auth.py` (`Authenticator` protocol,
@@ -302,11 +319,30 @@ environment RBAC** — environments are DB rows partly for that reason.
     stack, never touching `JobRecord.params`). Routes return `200`, not `202`. The
     "existence read decides add vs edit" and "missing-target delete 404s
     synchronously, no job row" conventions above are unchanged — they just also
-    apply to the rest of the write now, not only the pre-submit check. `prov.*`
-    and `pkgs.*` deliberately still mirror the *old*, queued `cred.*` shape
-    described above (their own docstrings/tests didn't change) — read "matching
-    cred.*" in that context as historical, not current.
+    apply to the rest of the write now, not only the pre-submit check.
     the real name via `list_job_facets()` — only the rendered column lagged).
+
+    **Update, 2026-08-18: `prov.*` no longer queues either** (operator-reported —
+    a `prov.add`/`prov.edit`/`prov.delete` job shared `JobRunner`'s bounded
+    concurrency pool with genuinely slow `cpuse.*`/`cdt.*` device jobs, so e.g.
+    importing a gateway found by discovery could sit queued behind an unrelated
+    server's in-progress JHF install with nothing to do with it). Same
+    conversion as `cred.*`/`pkgs.*` before it: `ProvisioningJobService`
+    (`services/prov_ops.py`) no longer takes a `runner` and calls
+    `EnvironmentManager`/`FirewallManager` directly inside `submit_put_*`/
+    `submit_delete_*`, wrapped in the same `_start`/`_succeed`/`_fail` shape as
+    `CredentialJobService`. Routes (`/api/environments/{env}/servers` and
+    `/firewalls`, add + delete) return `200`, not `202`. Frontend call sites
+    (Add/Edit Server/Firewall modals, row-level Remove, and both discovery
+    bulk-import loops) now check the returned job's `status` immediately
+    instead of only reacting to a network/submit-level failure — a validation
+    failure (bad role, name collision) surfaces right there, not just via a
+    later Jobs-tab poll. `PROV_JOB_KINDS` in `pollJobs()` is unchanged in
+    shape but is now, like `CRED_JOB_KINDS`/`PKGS_JOB_KINDS`, just the "another
+    tab/session" fallback rather than the primary way a submitting tab learns
+    the outcome. `connect_primary.py`'s own `prov.connect_primary` kind is
+    unaffected — it genuinely does SSH + several `mgmt_cli` round-trips and
+    stays a real background job.
 - **Cached CPUSE state per server** (`server_state` table, migration v11,
   2026-07-22). The Management tab no longer queries CPUSE state on page load —
   `GET /servers` returns whatever was last detected (version/JHF/agent build/

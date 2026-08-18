@@ -604,8 +604,9 @@ document.getElementById("env-add-form").addEventListener("submit", async (ev) =>
 // prov.add/prov.edit job the server (add or edit) itself now runs as — see
 // services/prov_ops.py. Undefined serializes to an absent JSON key (leave any
 // existing/default-on-create assignment alone); null explicitly clears it.
-// Returns the (pending) JobRecord — callers prime lastJobStatus with it so
-// pollJobs() reliably catches the job's own terminal transition (PROV_JOB_KINDS).
+// Executes immediately (services/prov_ops.py) — returns the already-finished
+// JobRecord; callers still prime lastJobStatus with it so pollJobs() (and any
+// other tab/session polling) picks up the real outcome without a re-fetch.
 async function addServer({ name, address, role, ssh_user, ssh_port, credential_set }) {
   return await api(`/api/environments/${encodeURIComponent(currentEnv)}/servers`, {
     method: "POST",
@@ -680,10 +681,10 @@ document.getElementById("server-form").addEventListener("submit", async (ev) => 
     ? credSelect.selectedOptions[0]?.dataset.sshUser || "admin"
     : document.getElementById("sm-user").value.trim() || "admin";
   try {
-    // Runs as a prov.add/prov.edit job (services/prov_ops.py) — still a
-    // genuinely "queued, not done" async job, unlike credentials/packages
-    // (which now execute immediately, see services/cred_ops.py/pkgs_ops.py).
-    // PROV_JOB_KINDS in pollJobs() reloads once it actually finishes.
+    // Executes immediately as a tracked prov.add/prov.edit job
+    // (services/prov_ops.py) — the response is already the finished job, so
+    // a validation failure (e.g. bad role, name collision) is known right
+    // here, not just on a later Jobs-tab poll.
     const job = await addServer({
       name,
       address: document.getElementById("sm-address").value.trim(),
@@ -694,7 +695,12 @@ document.getElementById("server-form").addEventListener("submit", async (ev) => 
       // matching this modal's previous always-fires-the-assignment behavior.
       credential_set: storageEnabled() ? (credSet || null) : undefined,
     });
-    lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if it finishes fast
+    lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if another tab is watching
+    if (job.status !== "succeeded") {
+      toast("Save failed: " + (job.error || "unknown error"));
+      await loadJobs();
+      return;
+    }
     closeServerModal();
     await Promise.all([loadJobs(), loadServers(), refreshStatus()]);
   } catch (e) { toast("Save failed: " + e.message); }
@@ -1143,9 +1149,9 @@ document.getElementById("discover-import").addEventListener("click", async () =>
     try {
       // Inherit the discover-from primary's SSH identity: same credential set
       // in a storage-enabled environment, same typed username otherwise.
-      // "ok" here means submitted, not confirmed successful — add is a
-      // prov.add job now (services/prov_ops.py); check the Jobs tab for the
-      // real outcome (e.g. a name collision fails the job, not this request).
+      // Add executes immediately as a prov.add job (services/prov_ops.py), so
+      // the response already carries the real outcome (e.g. a name collision
+      // fails the job right here, not just on a later Jobs-tab poll).
       const job = await api(`/api/environments/${encodeURIComponent(currentEnv)}/servers`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1154,8 +1160,9 @@ document.getElementById("discover-import").addEventListener("click", async () =>
           credential_set: (storageEnabled() && discoverPrimaryCredSet) || undefined,
         }),
       });
-      lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if it finishes fast
-      ok++;
+      lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if another tab is watching
+      if (job.status === "succeeded") ok++;
+      else failed.push(`${name}: ${job.error || "unknown error"}`);
     } catch (e) { failed.push(`${name}: ${e.message}`); }
   }
   await Promise.all([loadJobs(), loadServers(), refreshStatus()]);
@@ -1666,7 +1673,7 @@ function restoreRowSelection(row, hostName, saved) {
 async function loadServers() {
   const tbody = document.querySelector("#servers-table tbody");
   const infoTbody = document.querySelector("#servers-info-table tbody");
-  const savedSelections = captureRowSelections(tbody, ".srv-name");
+  const savedSelections = captureRowSelections(tbody, ".srv-name-link");
 
   tbody.replaceChildren();
   infoTbody.replaceChildren();
@@ -1695,6 +1702,7 @@ async function loadServers() {
   ]);
   await refreshActiveJobTargets();
   const assignedByName = new Map(servers.map((s) => [s.name, s.credential_set]));
+  const stateByName = new Map(servers.map((s) => [s.name, s]));
 
   const bulkPackageSelect = document.getElementById("bulk-import-package");
   bulkPackageSelect.replaceChildren(new Option("— package —", ""));
@@ -1718,42 +1726,55 @@ async function loadServers() {
     info.querySelector(".btn-remove").addEventListener("click", async () => {
       if (!confirm(`Remove server ${srv.name} from ${currentEnv}?`)) return;
       try {
-        // Runs as a prov.delete job (services/prov_ops.py) — see the server
-        // form submit handler above for the same "queued, not done" model.
+        // Executes immediately as a tracked prov.delete job — see the server
+        // form submit handler above for the same immediate-outcome model.
         const job = await api(
           `/api/environments/${encodeURIComponent(currentEnv)}/servers/${encodeURIComponent(srv.name)}`,
           { method: "DELETE" },
         );
-        lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if it finishes fast
+        lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if another tab is watching
+        if (job.status !== "succeeded") toast("Remove failed: " + (job.error || "unknown error"));
         await Promise.all([loadJobs(), loadServers(), refreshStatus()]);
       } catch (e) { toast("Remove failed: " + e.message); }
     });
     infoTbody.appendChild(info);
   }
 
-  for (const srv of sortByRole(servers)) {
+  for (const srv of sortByRole(editable)) {
     // Management tab: the action row. Credential assignment is display-only
-    // here — change it via Edit on the Provisioning tab.
+    // here — change it via Edit on the Provisioning tab. Iterates `editable`
+    // (full CRUD fields, including ssh_port) rather than the patching-view
+    // `servers` list, cross-referenced via stateByName for the cached CPUSE
+    // state — same split loadFirewalls() uses, needed here too now that the
+    // name doubles as the row's Edit trigger (openEditServerModal wants
+    // ssh_port, which the patching view doesn't carry).
+    const state = stateByName.get(srv.name);
     const row = el("tpl-server-row");
     const selectCb = row.querySelector(".srv-select");
     selectCb.dataset.server = srv.name; // read by the bulk-import buttons
     selectCb.addEventListener("change", updateSelectAllState);
     markRowIfJobActive(selectCb, srv.name);
-    row.querySelector(".srv-name").textContent = srv.name;
+    row.querySelector(".srv-name-link").textContent = srv.name;
     row.querySelector(".srv-address").textContent = srv.address;
     row.querySelector(".srv-role").textContent = roleLabel(srv.role);
-    renderInstallSelect(row, srv.installable ?? [], srv.installed ?? [], srv.name);
+    renderInstallSelect(row, state?.installable ?? [], state?.installed ?? [], srv.name);
     row.querySelector(".skip-verify").checked = !!envSkipVerifyDefault[currentEnv];
     restoreRowSelection(row, srv.name, savedSelections);
 
     const stateRow = el("tpl-server-state-row");
     stateRow.dataset.server = srv.name; // looked up by the "Refresh all" button
-    renderStateRow(stateRow, srv.checked_at ? srv : null);
+    renderStateRow(stateRow, state && state.checked_at ? state : null);
     stateRow
       .querySelector(".srv-refresh-link")
       .addEventListener("click", () => refreshState(srv.name, row, stateRow));
     row.querySelector(".btn-install").addEventListener("click", () => installPackage(srv.name, row));
     row.querySelector(".btn-uninstall").addEventListener("click", () => openUninstallModal("server", srv.name, row));
+    // The name itself is a second Edit trigger, mirroring the Firewalls
+    // table below — the Provisioning tab's own Edit button (above) still
+    // works the same way.
+    row.querySelector(".srv-name-link").addEventListener("click", () => {
+      openEditServerModal(srv, assignedByName.get(srv.name));
+    });
     tbody.appendChild(row);
     tbody.appendChild(stateRow);
   }
@@ -2653,10 +2674,10 @@ document.getElementById("firewall-form").addEventListener("submit", async (ev) =
     ? credSelect.selectedOptions[0]?.dataset.sshUser || "admin"
     : document.getElementById("fm-user").value.trim() || "admin";
   try {
-    // Runs as a prov.add/prov.edit job (services/prov_ops.py) — still a
-    // genuinely "queued, not done" async job, unlike credentials/packages
-    // (which now execute immediately, see services/cred_ops.py/pkgs_ops.py).
-    // PROV_JOB_KINDS in pollJobs() reloads once it actually finishes.
+    // Executes immediately as a tracked prov.add/prov.edit job
+    // (services/prov_ops.py) — the response is already the finished job, so
+    // a validation failure (e.g. bad role, name collision) is known right
+    // here, not just on a later Jobs-tab poll.
     const job = await addFirewall({
       name,
       address: document.getElementById("fm-address").value.trim(),
@@ -2667,7 +2688,12 @@ document.getElementById("firewall-form").addEventListener("submit", async (ev) =
       // matching this modal's previous always-fires-the-assignment behavior.
       credential_set: storageEnabled() ? (credSet || null) : undefined,
     });
-    lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if it finishes fast
+    lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if another tab is watching
+    if (job.status !== "succeeded") {
+      toast("Save failed: " + (job.error || "unknown error"));
+      await loadJobs();
+      return;
+    }
     closeFirewallModal();
     await Promise.all([loadJobs(), loadFirewalls()]);
   } catch (e) { toast("Save failed: " + e.message); }
@@ -2677,12 +2703,14 @@ document.getElementById("firewall-modal-remove").addEventListener("click", async
   if (!name || !currentEnv) return;
   if (!confirm(`Remove firewall ${name} from ${currentEnv}?`)) return;
   try {
-    // Runs as a prov.delete job — see the firewall form submit handler above.
+    // Executes immediately as a tracked prov.delete job — see the firewall
+    // form submit handler above.
     const job = await api(
       `/api/environments/${encodeURIComponent(currentEnv)}/firewalls/${encodeURIComponent(name)}`,
       { method: "DELETE" },
     );
-    lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if it finishes fast
+    lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if another tab is watching
+    if (job.status !== "succeeded") toast("Remove failed: " + (job.error || "unknown error"));
     closeFirewallModal();
     await Promise.all([loadJobs(), loadFirewalls()]);
   } catch (e) { toast("Remove failed: " + e.message); }
@@ -2868,9 +2896,9 @@ document.getElementById("discover-firewalls-import").addEventListener("click", a
     const role = r.querySelector(".disc-role").value;
     if (!name || !address) { failed.push(name || address || "(unnamed)"); continue; }
     try {
-      // "ok" here means submitted, not confirmed successful — add is a
-      // prov.add job now (services/prov_ops.py); check the Jobs tab for the
-      // real outcome (e.g. a name collision fails the job, not this request).
+      // Add executes immediately as a prov.add job (services/prov_ops.py), so
+      // the response already carries the real outcome (e.g. a name collision
+      // fails the job right here, not just on a later Jobs-tab poll).
       const job = await api(`/api/environments/${encodeURIComponent(currentEnv)}/firewalls`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -2881,8 +2909,9 @@ document.getElementById("discover-firewalls-import").addEventListener("click", a
           mds_domain: r.dataset.mdsDomain || undefined,
         }),
       });
-      lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if it finishes fast
-      ok++;
+      lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if another tab is watching
+      if (job.status === "succeeded") ok++;
+      else failed.push(`${name}: ${job.error || "unknown error"}`);
     } catch (e) { failed.push(`${name}: ${e.message}`); }
   }
   await Promise.all([loadJobs(), loadFirewalls()]);
