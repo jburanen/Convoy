@@ -716,7 +716,7 @@ def test_servers_list_exposes_cached_state_after_a_refresh(client: TestClient) -
 
 
 def test_credential_sets_roundtrip_never_echoes_secret(client: TestClient) -> None:
-    _put_set(client, api_key="an-api-key")
+    _put_set(client, expert_password="rootpw")
     listing = client.get("/api/env/default/credentials").json()
     assert listing == [
         {
@@ -724,7 +724,8 @@ def test_credential_sets_roundtrip_never_echoes_secret(client: TestClient) -> No
             "environment": "default",
             "ssh_username": "admin",
             "ssh_auth": "password",
-            "has_api": True,
+            "has_expert": True,
+            "has_api": False,
             "is_default": False,
         }
     ]

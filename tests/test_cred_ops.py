@@ -41,6 +41,7 @@ def test_new_name_submits_as_add(
         ssh_username="admin",
         ssh_password="pw",
         ssh_private_key=None,
+        expert_password=None,
         api_key=None,
         default_if_none=False,
     )
@@ -64,6 +65,7 @@ def test_existing_name_submits_as_edit(
         ssh_username=None,
         ssh_password=None,
         ssh_private_key=None,
+        expert_password=None,
         api_key="APIKEY123",
         default_if_none=False,
     )
@@ -85,6 +87,7 @@ def test_default_if_none_sets_default_once(
         ssh_username="admin",
         ssh_password="pw",
         ssh_private_key=None,
+        expert_password=None,
         api_key=None,
         default_if_none=True,
     )
@@ -96,6 +99,7 @@ def test_default_if_none_sets_default_once(
         ssh_username="admin",
         ssh_password="pw2",
         ssh_private_key=None,
+        expert_password=None,
         api_key=None,
         default_if_none=True,
     )
@@ -114,6 +118,7 @@ def test_validation_error_surfaces_as_a_failed_job_not_a_raise(
         ssh_username="admin",
         ssh_password=None,
         ssh_private_key=None,
+        expert_password=None,
         api_key=None,
         default_if_none=False,
     )
@@ -157,6 +162,7 @@ def test_secrets_never_land_in_job_params(service: CredentialJobService, store: 
         ssh_username="admin",
         ssh_password="super-secret-password",
         ssh_private_key=None,
+        expert_password="expert-secret",
         api_key="api-secret",
         default_if_none=False,
     )

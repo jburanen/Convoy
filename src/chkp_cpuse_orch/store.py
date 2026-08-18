@@ -224,6 +224,7 @@ class CredentialSetRow(BaseModel):
     ssh_username: str | None = None
     ssh_password_ct: bytes | None = None
     ssh_private_key_ct: bytes | None = None
+    expert_password_ct: bytes | None = None
     api_key_ct: bytes | None = None
     is_default: bool = False  # the environment's default set (auto-assigned to new servers)
     created_at: datetime = Field(default_factory=utcnow)
@@ -532,6 +533,15 @@ _MIGRATIONS: tuple[str, ...] = (
     """
     ALTER TABLE credential_sets DROP COLUMN expert_password_ct;
     """,
+    # v24: restore the "expert password" secret dropped in v23 — operator
+    # reversed that call the same day; credential sets need the option to
+    # store an expert-mode password again. Re-added as a fresh column (the
+    # v23-dropped one is gone for good in SQLite) rather than undoing v23,
+    # since migrations are append-only. Existing rows get NULL, same as any
+    # other optional secret.
+    """
+    ALTER TABLE credential_sets ADD COLUMN expert_password_ct BLOB;
+    """,
 )
 
 
@@ -587,7 +597,7 @@ class Store:
 
     _CRED_SET_COLS = (
         "id, environment, name, ssh_username, ssh_password_ct, ssh_private_key_ct,"
-        " api_key_ct, is_default, created_at, updated_at"
+        " expert_password_ct, api_key_ct, is_default, created_at, updated_at"
     )
 
     def upsert_credential_set(self, rec: CredentialSetRow) -> CredentialSetRow:
@@ -600,11 +610,12 @@ class Store:
         with self._connect() as conn:
             conn.execute(
                 f"INSERT INTO credential_sets ({self._CRED_SET_COLS})"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (environment, name) DO UPDATE SET"
                 " ssh_username = excluded.ssh_username,"
                 " ssh_password_ct = excluded.ssh_password_ct,"
                 " ssh_private_key_ct = excluded.ssh_private_key_ct,"
+                " expert_password_ct = excluded.expert_password_ct,"
                 " api_key_ct = excluded.api_key_ct,"
                 " updated_at = excluded.updated_at",
                 (
@@ -614,6 +625,7 @@ class Store:
                     rec.ssh_username,
                     rec.ssh_password_ct,
                     rec.ssh_private_key_ct,
+                    rec.expert_password_ct,
                     rec.api_key_ct,
                     int(rec.is_default),
                     rec.created_at.isoformat(),
@@ -1443,6 +1455,7 @@ def _credential_set_from_row(row: sqlite3.Row) -> CredentialSetRow:
         ssh_username=row["ssh_username"],
         ssh_password_ct=row["ssh_password_ct"],
         ssh_private_key_ct=row["ssh_private_key_ct"],
+        expert_password_ct=row["expert_password_ct"],
         api_key_ct=row["api_key_ct"],
         is_default=bool(row["is_default"]),
         created_at=datetime.fromisoformat(row["created_at"]),

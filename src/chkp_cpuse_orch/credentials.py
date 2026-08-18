@@ -1,8 +1,8 @@
 """Encrypted-at-rest credential store.
 
 Gaia auth is mixed (see .claude/memory/patching-web-design.md): an SSH private key
-for transport plus an admin password, plus an optional API key — so a host may
-hold several credentials, one per kind.
+for transport plus admin/expert passwords for privileged CPUSE steps — so a host
+may hold several credentials, one per kind.
 
 Security model:
 - Plaintext secrets exist only in memory (``pydantic.SecretStr``); the SQLite row
@@ -41,10 +41,11 @@ _MIN_PASSPHRASE_LEN = 8
 class CredentialKind(StrEnum):
     SSH_PASSWORD = "ssh_password"  # Gaia admin password (clish login)
     SSH_PRIVATE_KEY = "ssh_private_key"  # key material itself, not a file path
+    EXPERT_PASSWORD = "expert_password"  # Gaia `expert` escalation password
     API_KEY = "api_key"  # Management API / Gaia REST key
 
 
-# The SSH secrets that carry a login username (the API key is secret-only).
+# The SSH secrets that carry a login username (expert/API are secret-only).
 _SSH_KINDS = (CredentialKind.SSH_PASSWORD, CredentialKind.SSH_PRIVATE_KEY)
 
 
@@ -69,6 +70,7 @@ class CredentialSetInfo(BaseModel):
     environment: str = "default"
     ssh_username: str | None = None
     ssh_auth: str  # "password" | "key" | "none" — which SSH secret the set holds
+    has_expert: bool = False
     has_api: bool = False
     is_default: bool = False  # the environment's default set (assigned to new servers)
 
@@ -141,6 +143,7 @@ class CredentialStore:
         ssh_username: str | None = None,
         ssh_password: str | None = None,
         ssh_private_key: str | None = None,
+        expert_password: str | None = None,
         api_key: str | None = None,
     ) -> CredentialSetInfo:
         """Create a named login set, or update an existing one by name.
@@ -161,10 +164,12 @@ class CredentialStore:
             ssh_username = existing.ssh_username if ssh_username is None else ssh_username
             ssh_password_ct = _keep(ssh_password, existing.ssh_password_ct)
             ssh_private_key_ct = _keep(ssh_private_key, existing.ssh_private_key_ct)
+            expert_password_ct = _keep(expert_password, existing.expert_password_ct)
             api_key_ct = _keep(api_key, existing.api_key_ct)
         else:
             ssh_password_ct = self._enc(ssh_password)
             ssh_private_key_ct = self._enc(ssh_private_key)
+            expert_password_ct = self._enc(expert_password)
             api_key_ct = self._enc(api_key)
 
         if ssh_password_ct is not None and ssh_private_key_ct is not None:
@@ -178,6 +183,7 @@ class CredentialStore:
             ssh_username=ssh_username or None,
             ssh_password_ct=ssh_password_ct,
             ssh_private_key_ct=ssh_private_key_ct,
+            expert_password_ct=expert_password_ct,
             api_key_ct=api_key_ct,
         )
         if existing is not None:
@@ -220,6 +226,7 @@ class CredentialStore:
         bundle: CredentialBundle = {}
         self._add(bundle, CredentialKind.SSH_PASSWORD, row.ssh_password_ct, row, server_name)
         self._add(bundle, CredentialKind.SSH_PRIVATE_KEY, row.ssh_private_key_ct, row, server_name)
+        self._add(bundle, CredentialKind.EXPERT_PASSWORD, row.expert_password_ct, row, server_name)
         self._add(bundle, CredentialKind.API_KEY, row.api_key_ct, row, server_name)
         return bundle
 
@@ -247,7 +254,7 @@ class CredentialStore:
     ) -> None:
         if ciphertext is None:
             return
-        # Only the SSH secrets carry the set's username; the API key is secret-only.
+        # Only the SSH secrets carry the set's username; expert/API are secret-only.
         username = row.ssh_username if kind in _SSH_KINDS else None
         bundle[kind] = Credential(
             host=server_name,
@@ -271,6 +278,7 @@ class CredentialStore:
             environment=row.environment,
             ssh_username=row.ssh_username,
             ssh_auth=ssh_auth,
+            has_expert=row.expert_password_ct is not None,
             has_api=row.api_key_ct is not None,
             is_default=row.is_default,
         )
