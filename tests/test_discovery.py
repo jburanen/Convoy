@@ -44,6 +44,12 @@ GATEWAYS_AND_SERVERS = [
     },
     {"name": "fw-01", "type": "simple-gateway", "ipv4-address": "192.0.2.20"},
     {"name": "cluster-01", "type": "CpmiGatewayCluster", "ipv4-address": "192.0.2.21"},
+    {
+        "name": "spark-01",
+        "type": "simple-gateway",
+        "ipv4-address": "192.0.2.22",
+        "operating-system": "Gaia Embedded",
+    },
 ]
 
 
@@ -51,7 +57,8 @@ def test_map_gateways_and_servers_roles() -> None:
     servers = map_gateways_and_servers(GATEWAYS_AND_SERVERS, primary_address="192.0.2.10")
     by_name = {s.name: s for s in servers}
 
-    # Gateways and clusters are dropped.
+    # Gateways and clusters are dropped — spark-01 included, still gateway-hinted
+    # like any other gateway regardless of its operating-system.
     assert set(by_name) == {"mgmt-01", "mgmt-02", "log-01", "se-01"}
 
     assert by_name["mgmt-01"].detected_role is Role.PRIMARY_SMS  # matches primary addr
@@ -96,11 +103,25 @@ def test_map_gateways_only_roles() -> None:
     by_name = {s.name: s for s in firewalls}
 
     # Management-plane objects are dropped — the mirror image of the servers test.
-    assert set(by_name) == {"fw-01", "cluster-01"}
+    assert set(by_name) == {"fw-01", "cluster-01", "spark-01"}
     assert by_name["fw-01"].detected_role is Role.GATEWAY
     assert by_name["cluster-01"].detected_role is Role.CLUSTER_MEMBER
+    assert by_name["spark-01"].detected_role is Role.SPARK_FIREWALL
     assert all(s.source == "api" for s in firewalls)
     assert all(s.needs_review is False for s in firewalls)
+
+
+def test_map_gateways_only_spark_detection_is_case_insensitive() -> None:
+    objects = [
+        {
+            "name": "spark-lower",
+            "type": "simple-gateway",
+            "ipv4-address": "192.0.2.23",
+            "operating-system": "gaia embedded",
+        }
+    ]
+    firewalls = map_gateways_only(objects)
+    assert firewalls[0].detected_role is Role.SPARK_FIREWALL
 
 
 # ---- `mdsquerydb MDSs` parsing (pure) --------------------------------------------
@@ -361,10 +382,11 @@ def test_discover_firewalls_flags_existing_and_maps_roles() -> None:
     result = service.discover_firewalls("default")
     by_name = {s.name: s for s in result.servers}
 
-    assert set(by_name) == {"fw-01", "cluster-01"}
+    assert set(by_name) == {"fw-01", "cluster-01", "spark-01"}
     assert by_name["fw-01"].already_in_inventory is True  # already a firewall in inventory
     assert by_name["cluster-01"].already_in_inventory is False
     assert by_name["cluster-01"].detected_role is Role.CLUSTER_MEMBER
+    assert by_name["spark-01"].detected_role is Role.SPARK_FIREWALL
     assert not result.warnings
 
 
@@ -405,7 +427,7 @@ def test_discover_firewalls_cluster_lookup_failure_keeps_the_gateway_list() -> N
 
     # The gateway/cluster-member list is unaffected — only cluster names are
     # missing, with a warning explaining why.
-    assert set(by_name) == {"fw-01", "cluster-01"}
+    assert set(by_name) == {"fw-01", "cluster-01", "spark-01"}
     assert by_name["cluster-01"].cluster_name is None
     assert any("cluster lookup failed" in w for w in result.warnings)
 
@@ -488,7 +510,7 @@ def test_discover_firewalls_mds_scans_the_chosen_domain() -> None:
 
     assert seen_kwargs[0]["domain"] == "Domain1"
     by_name = {s.name: s for s in result.servers}
-    assert set(by_name) == {"fw-01", "cluster-01"}
+    assert set(by_name) == {"fw-01", "cluster-01", "spark-01"}
     assert not result.warnings
 
 

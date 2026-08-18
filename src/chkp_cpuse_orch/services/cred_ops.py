@@ -46,7 +46,6 @@ class CredentialJobService:
         ssh_username: str | None,
         ssh_password: str | None,
         ssh_private_key: str | None,
-        expert_password: str | None,
         api_key: str | None,
         default_if_none: bool,
         triggered_by: str | None = None,
@@ -69,7 +68,6 @@ class CredentialJobService:
                 ssh_username=ssh_username,
                 ssh_password=ssh_password,
                 ssh_private_key=ssh_private_key,
-                expert_password=expert_password,
                 api_key=api_key,
             )
             no_default_yet = self._credentials.default_set_name(environment) is None

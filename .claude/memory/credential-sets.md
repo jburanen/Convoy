@@ -14,9 +14,22 @@ storage-disabled envs keep the unchanged inline-prompt path (see
 
 ## Shape
 One set bundles everything needed to reach a Gaia server: `ssh_username` + **one of**
-`ssh_password` / `ssh_private_key`, plus optional `expert_password` and `api_key`. Each
-secret is a nullable Fernet-ciphertext column on `credential_sets` (reuses the existing
+`ssh_password` / `ssh_private_key`, plus an optional `api_key`. Each secret is a
+nullable Fernet-ciphertext column on `credential_sets` (reuses the existing
 key/canary machinery in `credentials.py`).
+
+**`expert_password` was removed in migration v23** (2026-08-18, operator-directed):
+it was captured, encrypted, and decrypted into every `CredentialBundle`
+(`CredentialKind.EXPERT_PASSWORD`) but no CPUSE/CDT code path ever read it back
+out — dead since it was added. Removed end-to-end: DB column (`ALTER TABLE
+credential_sets DROP COLUMN expert_password_ct`), `CredentialSetRow`/
+`CredentialSetInfo`/`CredentialKind`, `put_set`/`get_set_bundle`, the
+`CredentialSetIn` API model, and both UI surfaces — the Provisioning tab's
+credential-set add/edit modal (`cs-expert`) *and* the separate storage-disabled
+"Enter credentials" job-time prompt (`cm-expert`, `#cred-modal` — a distinct
+ephemeral-credential path, not a named set). If a real Spark/expert-mode
+escalation need ever comes back, re-add it as a fresh field with an actual
+consumer wired up first, rather than reviving this one.
 
 ## Assignment
 A management server references **one** set; a set is assignable to **many** servers
@@ -34,7 +47,7 @@ A management server references **one** set; a set is assignable to **many** serv
   `list_sets`, `get_set_bundle(set_id, server_name)` → the same `CredentialBundle`
   (`dict[CredentialKind, Credential]`) downstream code already consumes, `set_name`,
   `delete_set`. `CredentialSetInfo` is the secret-free listing view (`ssh_auth` =
-  password|key|none, `has_expert`, `has_api`).
+  password|key|none, `has_api`).
 - `services/common.py::HostConnector.host_credentials` resolves via
   `host.credential_set_id` → `get_set_bundle`; unassigned → `CredentialError("no
   credential assigned … assign on the Management tab")`. `assigned_credential(host)`

@@ -184,13 +184,12 @@ async def _reap_idle_sessions(
 
 class CredentialSetIn(BaseModel):
     """Create/replace a named login set. Exactly one SSH secret (password or
-    private key) is expected; expert password and API key are optional."""
+    private key) is expected; the API key is optional."""
 
     name: str = Field(min_length=1)
     ssh_username: str | None = None
     ssh_password: SecretStr | None = None
     ssh_private_key: SecretStr | None = None
-    expert_password: SecretStr | None = None
     api_key: SecretStr | None = None
     # Make this the environment's default set, but only if none is set yet. Used by
     # the bootstrap flow so the first credentials become the default automatically.
@@ -373,7 +372,7 @@ class DiscoverFirewallsIn(BaseModel):
 class FirewallIn(BaseModel):
     name: str
     address: str
-    # One of the two firewall roles (see inventory.FIREWALL_ROLES).
+    # One of the firewall roles (see inventory.FIREWALL_ROLES).
     role: str = "gateway"
     ssh_user: str = "admin"
     ssh_port: int = 22
@@ -1721,7 +1720,6 @@ def _register_routes(app: FastAPI) -> None:
                 ssh_username=body.ssh_username,
                 ssh_password=_reveal(body.ssh_password),
                 ssh_private_key=_reveal(body.ssh_private_key),
-                expert_password=_reveal(body.expert_password),
                 api_key=_reveal(body.api_key),
                 default_if_none=body.default_if_none,
                 triggered_by=_current_user(request),

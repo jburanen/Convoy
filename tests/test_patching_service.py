@@ -77,6 +77,7 @@ def inventory() -> Inventory:
                     Host(name="mgmt-01", address="192.0.2.10", role=Role.MANAGEMENT),
                     Host(name="mgmt-02", address="192.0.2.11", role=Role.MDS),
                     Host(name="fw-01", address="192.0.2.20", role=Role.GATEWAY),
+                    Host(name="spark-01", address="192.0.2.30", role=Role.SPARK_FIREWALL),
                 ],
             )
         ]
@@ -130,8 +131,11 @@ def test_management_servers_excludes_gateways(service: PatchingService) -> None:
     assert [h.name for h in service.management_servers("default")] == ["mgmt-01", "mgmt-02"]
 
 
-def test_firewalls_lists_only_gateway_role_hosts(service: PatchingService) -> None:
-    assert [h.name for h in service.firewalls("default")] == ["fw-01"]
+def test_firewalls_lists_all_firewall_role_hosts(service: PatchingService) -> None:
+    # firewalls() lists every FIREWALL_ROLES member — including Spark, which
+    # is listable/discoverable even though it isn't patchable yet (see
+    # test_submit_import_rejects_spark_firewall_host below).
+    assert [h.name for h in service.firewalls("default")] == ["fw-01", "spark-01"]
 
 
 def test_detect_parses_live_state_and_closes(
@@ -175,6 +179,15 @@ def test_assigned_credential_summary(service: PatchingService) -> None:
 def test_submit_import_rejects_unknown_host(service: PatchingService) -> None:
     with pytest.raises(InventoryError, match="not found"):
         service.submit_import("default", "nope", PKG)
+
+
+def test_submit_import_rejects_spark_firewall_host(service: PatchingService) -> None:
+    # Spark firewalls are listable (FIREWALL_ROLES) but not yet patchable
+    # directly — standard CPUSE CLI mechanics don't apply to a Gaia Embedded
+    # appliance. patchable_host() rejects it before any credential lookup or
+    # CPUSE command runs.
+    with pytest.raises(InventoryError, match="isn't patched directly"):
+        service.submit_import("default", "spark-01", PKG)
 
 
 def test_submit_import_allows_a_credentialed_firewall_host(

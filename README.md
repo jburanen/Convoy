@@ -42,7 +42,7 @@ Supporting features, all in the UI:
 - **Bootstrapping.** Generates the clish commands to create the tool's service account on a primary management server, then discovery the remaining management servers and firewalls.
 - **Independent environments.** Separate management estates, each with its own inventory and its own credential namespace; package repo is shared.
 - **Web UI authentication.** On by default: a local admin/admin login (change the password from the User Settings modal, or disable it with `BASIC_AUTH_DISABLE`), or LDAP/Active Directory when configured (LDAP always takes priority). See `.env.example`.
-- **Encrypted credential store.** SSH/API/Expert credential store, encrypted at rest with argon2id; the master key is supplied at startup and never persisted. Storing credentials for *any* environment additionally requires authentication to be configured (basic auth or LDAP) — without it, every environment behaves as storage-disabled, regardless of its own setting.
+- **Encrypted credential store.** SSH/API credential store, encrypted at rest with argon2id; the master key is supplied at startup and never persisted. Storing credentials for *any* environment additionally requires authentication to be configured (basic auth or LDAP) — without it, every environment behaves as storage-disabled, regardless of its own setting.
 - **Package store.** Upload CPUSE packages for temporary or permanent storage; upload once, distribute to many.
 - **Background jobs.** Every import/install/CDT action runs as a persisted job with a live progress log, cancellation, and restart recovery.
 
@@ -113,11 +113,12 @@ Empty is a good sign!
 #### Packages
 🤞 Add a percentage progress display for package upload  
 
-#### Direct Patching (CPUSE)
+#### Manual Patching (CPUSE)
 ⏫ Add deployment agent upgrade option  
 🤞 Some kind of sledgehammer to swing to release config/job lock from management server and firewalls if a job gets stranded/stuck  
 ⏫ Offer via text link in info line to use CPRID to provision SSH access to firewalls if status check fails - also management servers?
 ⏫ Add Spark via the 'upgrade_revert_image.sh filename safe' command
+⏫ Build infra to bootstrap individual gateways via CPRID commands to deploy SSH creds
 
 #### Jobs
 ⏫ Add syslog output    
