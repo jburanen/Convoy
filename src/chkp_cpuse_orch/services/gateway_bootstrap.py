@@ -48,7 +48,7 @@ from ..transport.mgmt_api import ManagementAPIClient
 from .common import EnvironmentRegistry, api_auth
 from .provisioning import render_bootstrap_script, render_gaia_user_commands
 
-JOB_BOOTSTRAP_CREDENTIALS = "fw.bootstrap_credentials"
+JOB_BOOTSTRAP_CREDENTIALS = "cred.bootstrap"
 
 # Same generic Management API task-status vocabulary as pkg_repo_ops.py's
 # add-repository-package polling (Check Point's show-task mechanism is shared

@@ -1,50 +1,51 @@
-"""Provisioning jobs: add/edit/delete of management servers and CPUSE-patched
-firewalls — run through the shared job runner, like package actions (see
-.claude/memory/patching-web-design.md), for Jobs-tab visibility and audit
-history. (Credential-set CRUD used to follow this same queued shape but now
-runs synchronously instead — see services/cred_ops.py, operator-directed,
-2026-07-24 — so it's no longer a fair comparison for the *queuing* behavior
-below, only for the existence-check/failed-job conventions noted inline.)
+"""Provisioning: add/edit/delete of management servers and CPUSE-patched
+firewalls.
 
-Local DB writes with no SSH host involved, submitted directly via
-``JobRunner.submit`` rather than ``services.common.submit_host_job`` — same
-shape as PackageJobService. Servers and firewalls share one set of job kinds
-(``prov.add``/``prov.edit``/``prov.delete`` — operator-directed, 2026-07-23:
-no server/firewall split in the Kind column) rather than one pair per entity;
-``params["entity"]`` is the internal discriminator the single handler pair
-uses to call the right manager, invisible on the Jobs tab.
+Unlike CDT/CPUSE operations, these run **synchronously** — a local DB write
+with no SSH host involved, so there's no reason to make the operator wait on
+the async job queue the way a real device operation must (same rationale as
+``services/cred_ops.py`` and ``services/pkgs_ops.py`` before it,
+operator-directed, 2026-08-18). The old queued shape shared ``JobRunner``'s
+concurrency slots with genuinely slow ``cpuse.*``/``cdt.*`` device jobs, so an
+unrelated prov.add (e.g. importing a gateway found by discovery) could sit
+behind an in-progress install with nothing to do with it. Each call still
+records a ``JobRecord`` (already terminal by the time it returns) purely for
+Jobs-tab visibility and audit history — no PENDING state, no background
+pickup, no ``JobRunner`` involvement.
+
+Servers and firewalls share one set of job kinds (``prov.add``/``prov.edit``/
+``prov.delete`` — operator-directed, 2026-07-23: no server/firewall split in
+the Kind column) rather than one pair per entity; ``params["entity"]`` is the
+internal discriminator the single ``_do_put``/``_do_delete`` pair uses to call
+the right manager, invisible on the Jobs tab.
 
 Whether an add is really an add or an edit is decided the same way
 CredentialJobService decides it: a cheap existence read *before* the kind is
-picked, not inside the handler. Unlike credentials, none of these fields are
-secret, so everything — including an explicit credential-set assignment made
-in the same Add/Edit modal submit — rides in ``JobRecord.params``, no vault
-needed. Folding that assignment into the same job (rather than the separate
-``POST .../credential`` call the frontend used to fire right after) closes a
-race: the assignment call could 404 if it landed before the add/edit job
-itself had run. ``credential_set`` is therefore tri-state — omitted (leave
-any existing/default-on-create assignment alone), explicit ``None`` (clear
-it), or a set name — using the ``UNSET`` sentinel below to tell "omitted" from
-"explicitly cleared" apart, since both are spelled ``None`` in Python.
+picked. Unlike credentials, none of these fields are secret, so everything —
+including an explicit credential-set assignment made in the same Add/Edit
+modal submit — rides in ``JobRecord.params``, no vault needed. Folding that
+assignment into the same job (rather than a separate follow-up call) closes a
+race the frontend used to have to work around. ``credential_set`` is
+therefore tri-state — omitted (leave any existing/default-on-create
+assignment alone), explicit ``None`` (clear it), or a set name — using the
+``UNSET`` sentinel below to tell "omitted" from "explicitly cleared" apart,
+since both are spelled ``None`` in Python.
 
 Validation (bad role, name colliding with the other entity table, etc.)
 happens inside ``EnvironmentManager``/``FirewallManager`` as before, which
-means — operator-directed, 2026-07-23, "match credentials" — it surfaces as a
-**failed job**, not a synchronous 400/409, the same tradeoff cred.* made
-while it was still queued (and still keeps, just resolved synchronously now).
-Only environment existence and (for delete) target existence are cheap
-enough to keep as an instant, pre-submit check (mirrors
-CredentialJobService.submit_delete's "don't defer an obviously-doomed job").
+means it still surfaces as a **failed job**, not a synchronous 400/409
+(matches ``cred.*``). Only environment existence and (for delete) target
+existence are cheap enough to keep as an instant, pre-submit check (mirrors
+``CredentialJobService.submit_delete``'s "don't defer an obviously-doomed
+job").
 """
 
 from __future__ import annotations
 
-import asyncio
 from typing import Final
 
 from ..errors import InventoryError
-from ..jobs import JobContext, JobRunner
-from ..store import JobRecord, Store
+from ..store import JobRecord, JobStatus, Store, utcnow
 from .environments import EnvironmentManager
 from .firewalls import FirewallManager
 
@@ -64,7 +65,8 @@ UNSET: Final = _Unset()
 
 
 class ProvisioningJobService:
-    """Wraps EnvironmentManager/FirewallManager server+firewall CRUD as jobs."""
+    """Wraps EnvironmentManager/FirewallManager server+firewall CRUD with
+    immediate execution and Jobs-tab tracking."""
 
     def __init__(
         self,
@@ -72,15 +74,10 @@ class ProvisioningJobService:
         store: Store,
         env_manager: EnvironmentManager,
         firewall_manager: FirewallManager,
-        runner: JobRunner,
     ) -> None:
         self._store = store
         self._env_manager = env_manager
         self._firewall_manager = firewall_manager
-        self.runner = runner
-        runner.register(JOB_ADD, self._put_job)
-        runner.register(JOB_EDIT, self._put_job)
-        runner.register(JOB_DELETE, self._delete_job)
 
     # -- submit: management servers ----------------------------------------------
 
@@ -98,26 +95,33 @@ class ProvisioningJobService:
         triggered_by: str | None = None,
     ) -> JobRecord:
         kind = JOB_ADD if self._store.get_env_host(environment, name) is None else JOB_EDIT
-        return self.runner.submit(
-            kind,
-            target=name,
-            environment=environment,
-            params=_put_params("server", address, role, ssh_user, ssh_port, notes, credential_set),
-            triggered_by=triggered_by,
+        params = _put_params("server", address, role, ssh_user, ssh_port, notes, credential_set)
+        job = self._start(
+            kind, target=name, environment=environment, params=params, triggered_by=triggered_by
         )
+        try:
+            self._do_put(job)
+        except Exception as exc:  # job boundary: record failure, don't raise
+            self._fail(job, exc)
+        return self._store.get_job(job.id)
 
     def submit_delete_server(
         self, environment: str, name: str, *, triggered_by: str | None = None
     ) -> JobRecord:
         if self._store.get_env_host(environment, name) is None:
             raise InventoryError(f"server {name!r} not found in environment {environment!r}")
-        return self.runner.submit(
+        job = self._start(
             JOB_DELETE,
             target=name,
             environment=environment,
             params={"entity": "server"},
             triggered_by=triggered_by,
         )
+        try:
+            self._do_delete(job)
+        except Exception as exc:  # job boundary: record failure, don't raise
+            self._fail(job, exc)
+        return self._store.get_job(job.id)
 
     # -- submit: firewalls --------------------------------------------------------
 
@@ -145,37 +149,40 @@ class ProvisioningJobService:
         # previously-detected cluster name (or MDS domain) back to None.
         params["cluster_name"] = cluster_name
         params["mds_domain"] = mds_domain
-        return self.runner.submit(
-            kind,
-            target=name,
-            environment=environment,
-            params=params,
-            triggered_by=triggered_by,
+        job = self._start(
+            kind, target=name, environment=environment, params=params, triggered_by=triggered_by
         )
+        try:
+            self._do_put(job)
+        except Exception as exc:  # job boundary: record failure, don't raise
+            self._fail(job, exc)
+        return self._store.get_job(job.id)
 
     def submit_delete_firewall(
         self, environment: str, name: str, *, triggered_by: str | None = None
     ) -> JobRecord:
         if self._store.get_firewall(environment, name) is None:
             raise InventoryError(f"firewall {name!r} not found in environment {environment!r}")
-        return self.runner.submit(
+        job = self._start(
             JOB_DELETE,
             target=name,
             environment=environment,
             params={"entity": "firewall"},
             triggered_by=triggered_by,
         )
+        try:
+            self._do_delete(job)
+        except Exception as exc:  # job boundary: record failure, don't raise
+            self._fail(job, exc)
+        return self._store.get_job(job.id)
 
-    # -- handlers -----------------------------------------------------------------
+    # -- execution ------------------------------------------------------------------
 
-    async def _put_job(self, ctx: JobContext) -> None:
-        await asyncio.to_thread(self._do_put, ctx)
-
-    def _do_put(self, ctx: JobContext) -> None:
-        name = ctx.job.target
+    def _do_put(self, job: JobRecord) -> None:
+        name = job.target
         assert name is not None
-        p = ctx.job.params
-        environment = ctx.job.environment
+        p = job.params
+        environment = job.environment
         credential_set = p.get("credential_set", UNSET)
         if p["entity"] == "server":
             self._env_manager.add_server(
@@ -210,27 +217,56 @@ class ProvisioningJobService:
             # SSH port) from wiping out a previously-detected cluster name or
             # MDS domain. Manual correction of either goes through its own
             # dedicated endpoint instead (set_cluster_name / set_domain).
-            if ctx.job.kind == JOB_ADD and cluster_name:
+            if job.kind == JOB_ADD and cluster_name:
                 self._firewall_manager.set_cluster_name(environment, name, cluster_name)
-            if ctx.job.kind == JOB_ADD and mds_domain:
+            if job.kind == JOB_ADD and mds_domain:
                 self._firewall_manager.set_domain(environment, name, mds_domain)
             noun = "firewall"
-        verb = "added" if ctx.job.kind == JOB_ADD else "updated"
-        ctx.log(f"{verb} {noun} {name!r}")
+        verb = "added" if job.kind == JOB_ADD else "updated"
+        self._succeed(job, f"{verb} {noun} {name!r}")
 
-    async def _delete_job(self, ctx: JobContext) -> None:
-        await asyncio.to_thread(self._do_delete, ctx)
-
-    def _do_delete(self, ctx: JobContext) -> None:
-        name = ctx.job.target
+    def _do_delete(self, job: JobRecord) -> None:
+        name = job.target
         assert name is not None
-        if ctx.job.params["entity"] == "server":
-            self._env_manager.remove_server(ctx.job.environment, name)
+        if job.params["entity"] == "server":
+            self._env_manager.remove_server(job.environment, name)
             noun = "management server"
         else:
-            self._firewall_manager.remove_firewall(ctx.job.environment, name)
+            self._firewall_manager.remove_firewall(job.environment, name)
             noun = "firewall"
-        ctx.log(f"deleted {noun} {name!r}")
+        self._succeed(job, f"deleted {noun} {name!r}")
+
+    # -- internals --------------------------------------------------------------
+
+    def _start(
+        self,
+        kind: str,
+        *,
+        target: str,
+        environment: str,
+        params: dict[str, object],
+        triggered_by: str | None,
+    ) -> JobRecord:
+        job = JobRecord(
+            kind=kind,
+            target=target,
+            environment=environment,
+            params=params,
+            username=triggered_by,
+            status=JobStatus.RUNNING,
+            started_at=utcnow(),
+        )
+        self._store.insert_job(job)
+        return job
+
+    def _succeed(self, job: JobRecord, message: str) -> None:
+        self._store.append_event(job.id, message)
+        self._store.finish_job(job.id, JobStatus.SUCCEEDED)
+
+    def _fail(self, job: JobRecord, exc: Exception) -> None:
+        error = f"{type(exc).__name__}: {exc}"
+        self._store.append_event(job.id, f"job failed: {error}", level="error")
+        self._store.finish_job(job.id, JobStatus.FAILED, error=error)
 
 
 def _put_params(

@@ -168,35 +168,34 @@ def _wait_for_job(client: TestClient, job_id: str, timeout: float = 10.0) -> dic
 
 
 def _add_server(client: TestClient, env: str = "default", **body: object) -> dict:
-    """POST a server. Runs as a prov.add/prov.edit job now (see
-    services/prov_ops.py) rather than completing synchronously — waits for it
-    to finish and returns the finished job dict (callers assert its status;
-    validation errors like a bad role or a name collision surface as a
-    *failed* job, not a synchronous 400/409)."""
+    """POST a server. Executes immediately as a tracked prov.add/prov.edit job
+    (see services/prov_ops.py) — the response is already the finished job
+    dict (callers assert its status; validation errors like a bad role or a
+    name collision surface as a *failed* job, not a synchronous 400/409)."""
     resp = client.post(f"/api/environments/{env}/servers", json=body)
-    assert resp.status_code == 202, resp.text
-    return _wait_for_job(client, resp.json()["id"])
+    assert resp.status_code == 200, resp.text
+    return resp.json()
 
 
 def _remove_server(client: TestClient, env: str, name: str) -> dict:
     """DELETE a server. Runs as a prov.delete job — see _add_server above."""
     resp = client.delete(f"/api/environments/{env}/servers/{name}")
-    assert resp.status_code == 202, resp.text
-    return _wait_for_job(client, resp.json()["id"])
+    assert resp.status_code == 200, resp.text
+    return resp.json()
 
 
 def _add_firewall(client: TestClient, env: str = "default", **body: object) -> dict:
     """POST a firewall. Runs as a prov.add/prov.edit job — see _add_server."""
     resp = client.post(f"/api/environments/{env}/firewalls", json=body)
-    assert resp.status_code == 202, resp.text
-    return _wait_for_job(client, resp.json()["id"])
+    assert resp.status_code == 200, resp.text
+    return resp.json()
 
 
 def _remove_firewall(client: TestClient, env: str, name: str) -> dict:
     """DELETE a firewall. Runs as a prov.delete job — see _add_server."""
     resp = client.delete(f"/api/environments/{env}/firewalls/{name}")
-    assert resp.status_code == 202, resp.text
-    return _wait_for_job(client, resp.json()["id"])
+    assert resp.status_code == 200, resp.text
+    return resp.json()
 
 
 # -- basics ----------------------------------------------------------------------
@@ -423,8 +422,8 @@ def test_invalid_environment_name_is_400(client: TestClient) -> None:
 
 
 def test_add_gateway_role_server_rejected(client: TestClient) -> None:
-    # Validation now happens inside the prov.add job (services/prov_ops.py),
-    # so it surfaces as a failed job, not a synchronous 400 (matches cred.*).
+    # Validation happens inside the prov.add job (services/prov_ops.py), so it
+    # surfaces as a failed job, not a synchronous 400 (matches cred.*).
     job = _add_server(client, name="fw-x", address="192.0.2.70", role="gateway")
     assert job["status"] == "failed"
     assert "not a management server role" in job["error"]
@@ -1423,7 +1422,7 @@ def test_firewall_bootstrap_credentials_submit_queues_a_job(client: TestClient) 
     resp = client.post("/api/env/default/firewalls/fw-x/bootstrap-credentials")
     assert resp.status_code == 202, resp.text
     job = resp.json()
-    assert job["kind"] == "fw.bootstrap_credentials"
+    assert job["kind"] == "cred.bootstrap"
     assert job["target"] == "fw-x"
 
 

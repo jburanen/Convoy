@@ -504,9 +504,10 @@ def create_app(
             else None
         )
         # No credential store dependency (no secrets involved), unlike cred_jobs —
-        # always constructed.
+        # always constructed. No runner: server/firewall CRUD runs synchronously
+        # (services/prov_ops.py).
         prov_jobs = ProvisioningJobService(
-            store=store, env_manager=env_manager, firewall_manager=firewall_manager, runner=runner
+            store=store, env_manager=env_manager, firewall_manager=firewall_manager
         )
         primary_connect = PrimaryConnectService(
             registry=registry,
@@ -933,12 +934,12 @@ def _register_routes(app: FastAPI) -> None:
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
-    @app.post("/api/environments/{env}/servers", status_code=202)
+    @app.post("/api/environments/{env}/servers")
     def add_env_server(env: str, body: EnvServerIn, request: Request) -> JobRecord:
-        """Runs as a prov.add/prov.edit job (services/prov_ops.py) for Jobs-tab
-        visibility and audit history — same model as credentials/packages.
-        Validation errors (bad role, name collision with a firewall, ...)
-        surface as a failed job, not a synchronous 400/409."""
+        """Executes immediately as a tracked prov.add/prov.edit job
+        (services/prov_ops.py) — same model as credentials/packages. Validation
+        errors (bad role, name collision with a firewall, ...) surface as a
+        failed job, not a synchronous 400/409."""
         _require_env(request, env)
         try:
             return _prov_jobs(request).submit_put_server(
@@ -957,9 +958,10 @@ def _register_routes(app: FastAPI) -> None:
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
-    @app.delete("/api/environments/{env}/servers/{name}", status_code=202)
+    @app.delete("/api/environments/{env}/servers/{name}")
     def remove_env_server(env: str, name: str, request: Request) -> JobRecord:
-        """Runs as a prov.delete job — see add_env_server above."""
+        """Executes immediately as a tracked prov.delete job — see
+        add_env_server above."""
         _require_env(request, env)
         try:
             return _prov_jobs(request).submit_delete_server(
@@ -1018,9 +1020,10 @@ def _register_routes(app: FastAPI) -> None:
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
-    @app.post("/api/environments/{env}/firewalls", status_code=202)
+    @app.post("/api/environments/{env}/firewalls")
     def add_firewall(env: str, body: FirewallIn, request: Request) -> JobRecord:
-        """Runs as a prov.add/prov.edit job — see add_env_server above."""
+        """Executes immediately as a tracked prov.add/prov.edit job — see
+        add_env_server above."""
         _require_env(request, env)
         try:
             return _prov_jobs(request).submit_put_firewall(
@@ -1041,9 +1044,10 @@ def _register_routes(app: FastAPI) -> None:
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
-    @app.delete("/api/environments/{env}/firewalls/{name}", status_code=202)
+    @app.delete("/api/environments/{env}/firewalls/{name}")
     def remove_firewall(env: str, name: str, request: Request) -> JobRecord:
-        """Runs as a prov.delete job — see add_env_server above."""
+        """Executes immediately as a tracked prov.delete job — see
+        add_env_server above."""
         _require_env(request, env)
         try:
             return _prov_jobs(request).submit_delete_firewall(
