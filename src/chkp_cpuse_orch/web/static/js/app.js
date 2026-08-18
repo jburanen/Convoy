@@ -2244,6 +2244,9 @@ async function loadFirewalls() {
     stateRow
       .querySelector(".srv-refresh-link")
       .addEventListener("click", () => refreshFirewallState(fw.name, row, stateRow));
+    stateRow
+      .querySelector(".srv-bootstrap-creds-link")
+      .addEventListener("click", () => openBootstrapCredsConfirm(fw.name, stateRow));
     row.querySelector(".btn-install").addEventListener("click", () => installFirewallPackage(fw.name, row));
     row.querySelector(".btn-uninstall").addEventListener("click", () => openUninstallModal("firewall", fw.name, row));
     // The name itself is the row's only Edit trigger now — Remove lives inside
@@ -2268,10 +2271,12 @@ async function loadFirewalls() {
 
 async function refreshFirewallState(name, row, stateRow) {
   const link = stateRow.querySelector(".srv-refresh-link");
+  const bootstrapLink = stateRow.querySelector(".srv-bootstrap-creds-link");
   const summary = stateRow.querySelector(".srv-summary");
   const extra = await operationCredentials(name, "query live state");
   if (extra === null) return; // credential prompt cancelled
   link.disabled = true;
+  bootstrapLink.classList.add("hidden"); // re-evaluated fresh on every attempt
   summary.textContent = "querying…";
   stateRow.querySelector(".srv-checked").textContent = "";
   try {
@@ -2286,10 +2291,74 @@ async function refreshFirewallState(name, row, stateRow) {
   } catch (e) {
     cacheEvictCreds(name); // a cached wrong/stale password re-prompts next time
     summary.textContent = "detect failed: " + e.message;
+    // Loose match (not a literal "Authentication Failed" string) — paramiko's
+    // exact wording isn't a stable contract to pin an exact match to.
+    if (/auth/i.test(e.message)) bootstrapLink.classList.remove("hidden");
   } finally {
     link.disabled = false;
   }
 }
+
+let fwBootstrapCredsCtx = null;
+
+async function openBootstrapCredsConfirm(name, stateRow) {
+  try {
+    const preview = await api(
+      envUrl(`/firewalls/${encodeURIComponent(name)}/bootstrap-credentials/preview`),
+    );
+    fwBootstrapCredsCtx = { name, stateRow };
+    document.getElementById("fw-bootstrap-creds-confirm-target").textContent = name;
+    document.getElementById("fw-bootstrap-creds-confirm-output").textContent =
+      preview.commands.join("\n");
+    document.getElementById("fw-bootstrap-creds-confirm-modal").classList.remove("hidden");
+  } catch (e) {
+    toast("Could not render command preview: " + e.message);
+  }
+}
+
+function closeBootstrapCredsConfirmModal() {
+  document.getElementById("fw-bootstrap-creds-confirm-modal").classList.add("hidden");
+  fwBootstrapCredsCtx = null;
+}
+document.getElementById("fw-bootstrap-creds-confirm-close").addEventListener(
+  "click", closeBootstrapCredsConfirmModal,
+);
+document.getElementById("fw-bootstrap-creds-confirm-cancel").addEventListener(
+  "click", closeBootstrapCredsConfirmModal,
+);
+document.getElementById("fw-bootstrap-creds-confirm-modal").addEventListener("click", (ev) => {
+  if (ev.target.id === "fw-bootstrap-creds-confirm-modal") closeBootstrapCredsConfirmModal();
+});
+
+document.getElementById("fw-bootstrap-creds-confirm-run").addEventListener("click", async () => {
+  if (!fwBootstrapCredsCtx) return;
+  const { name, stateRow } = fwBootstrapCredsCtx;
+  closeBootstrapCredsConfirmModal();
+  const summary = stateRow.querySelector(".srv-summary");
+  summary.textContent = "bootstrapping credentials…";
+  try {
+    const job = await api(envUrl(`/firewalls/${encodeURIComponent(name)}/bootstrap-credentials`), {
+      method: "POST",
+    });
+    lastJobStatus.set(job.id, job.status);
+    await loadJobs();
+    const finished = await waitForJobDone(job.id, { timeoutMs: 30000 });
+    if (!finished) {
+      summary.textContent = "Still running — check the Jobs tab for progress.";
+      return;
+    }
+    await loadJobs();
+    if (finished.status !== "succeeded") {
+      summary.textContent = `Bootstrap failed: ${finished.error || "see the Jobs tab for details"}`;
+      return;
+    }
+    // Confirm the fix worked by re-running the same refresh that surfaced the failure.
+    const row = stateRow.previousElementSibling;
+    await refreshFirewallState(name, row, stateRow);
+  } catch (e) {
+    summary.textContent = "Bootstrap failed to start: " + e.message;
+  }
+});
 
 document.getElementById("fw-refresh-all-btn").addEventListener("click", async () => {
   const btn = document.getElementById("fw-refresh-all-btn");

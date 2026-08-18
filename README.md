@@ -116,9 +116,7 @@ Empty is a good sign!
 #### Manual Patching (CPUSE)
 ⏫ Add deployment agent upgrade option  
 🤞 Some kind of sledgehammer to swing to release config/job lock from management server and firewalls if a job gets stranded/stuck  
-⏫ Offer via text link in info line to use CPRID to provision SSH access to firewalls if status check fails - also management servers?
 ⏫ Add Spark via the 'upgrade_revert_image.sh filename safe' command
-⏫ Build infra to bootstrap individual gateways via CPRID commands to deploy SSH creds
 
 #### Jobs
 ⏫ Add syslog output    
@@ -129,6 +127,7 @@ Empty is a good sign!
 ✨ Show current percentage when available in the output column so I don't have to expand the full job progress to see it
 
 #### Squashed Bugs
+v0.51.0 Manual Patching (CPUSE) Firewalls panel now offers a "Bootstrap Credentials" text link next to Refresh, shown when a status check fails with an authentication error - pushes the firewall's assigned credential set onto the gateway via the Management API's `run-script` (CPRID-backed, no SSH access needed to recover), reusing the same clish commands as the Provisioning tab's bootstrap panel  
 v0.49.5 Packages tab now extracts and displays compatible major version, Take number, category, arch, and a free-text compatibility/prerequisite note from the package file itself (`hf.config` + `conditions_set.json`) at upload time - also fixed a latent bug where BUNDLE-type packages' per-component `hf.config` files (missing Take/category) could be picked up instead of the authoritative bundle-level one  
 v0.49.4 Package verify command was invoked with the identifier from `show installer packages all` instead of the display name from `show installer packages imported` - `installer verify`/`installer install` need the latter, and CPUSE doesn't always render the same identifier across the two scopes  
 v0.49.4 Install button on the Direct Patching (CPUSE) tab failed to register the first click - a background poll could land between picking a package and clicking Install, silently resetting the row's selection and re-disabling the button (disabled buttons don't dispatch click at all)  

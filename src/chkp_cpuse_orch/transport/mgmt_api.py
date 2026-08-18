@@ -240,6 +240,24 @@ class ManagementAPIClient:
             raise TransportError("add-repository-package returned no task-id")
         return task_id
 
+    def run_script(
+        self, script: str, targets: list[str], *, script_name: str = "chkp-cpuse-orch-run"
+    ) -> str:
+        """Execute ``script`` (bash) on each of ``targets`` (gateway names)
+        via SIC — no SSH needed. Returns a ``task-id`` to poll via
+        ``show_task``. Requires a write-capable (``read_only=False``)
+        session — this mutates the target(s). Request/response shape
+        confirmed against live gear 2026-08-18 (see
+        services/gateway_bootstrap.py, the first caller)."""
+        data = self._post(
+            "run-script",
+            {"script-name": script_name, "script": script, "targets": targets},
+        )
+        task_id = data.get("task-id")
+        if not isinstance(task_id, str) or not task_id:
+            raise TransportError("run-script returned no task-id")
+        return task_id
+
     def show_task(self, task_id: str) -> dict[str, Any]:
         """Poll one async task's status/progress (e.g. from
         ``add_repository_package``)."""

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 
 from passlib.hash import sha512_crypt
 
@@ -69,6 +70,17 @@ def render_gaia_user_commands(
         f"set user {username} gid 100 shell /bin/bash",
         "save config",
     ]
+
+
+def render_bootstrap_script(username: str, password: str) -> str:
+    """The bash script body for reapplying this account's credentials on a
+    gateway via the Management API's ``run-script`` (services/
+    gateway_bootstrap.py) — the same clish commands ``render_gaia_user_commands``
+    renders for the Provisioning tab's bootstrap panel, each wrapped
+    ``clish -c "..."`` since ``run-script`` executes as bash, not clish (same
+    idiom as ``GaiaShell.EXPERT`` in cpuse.py)."""
+    commands = render_gaia_user_commands(username, password)
+    return "\n".join(f"clish -c {shlex.quote(cmd)}" for cmd in commands)
 
 
 PROVISIONING_NOTES = [

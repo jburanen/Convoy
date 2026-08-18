@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import shlex
+
 import pytest
 from passlib.hash import sha512_crypt
 
@@ -8,6 +10,7 @@ from chkp_cpuse_orch.services.provisioning import (
     parse_api_key_from_add_api_key_output,
     render_add_administrator_command,
     render_add_api_key_command,
+    render_bootstrap_script,
     render_gaia_user_commands,
     render_mgmt_api_commands,
     render_mgmt_login_command,
@@ -41,6 +44,31 @@ def test_custom_uid_and_role() -> None:
     cmds = render_gaia_user_commands("ops", "longenough", uid=4321, role="monitorRole")
     assert "uid 4321" in cmds[0]
     assert cmds[2].endswith("roles monitorRole")
+
+
+def test_render_bootstrap_script_wraps_every_command_in_clish_dash_c() -> None:
+    # render_gaia_user_commands salts its hash randomly each call, so this
+    # doesn't compare against a second independent call — it checks the
+    # wrapping shape of render_bootstrap_script's own single output instead.
+    script = render_bootstrap_script("svc-patch", "s3cret-pw!")
+    lines = script.split("\n")
+    assert lines[0] == "clish -c 'add user svc-patch uid 0 homedir /home/svc-patch'"
+    assert lines[1].startswith("clish -c 'set user svc-patch password-hash $6$")
+    assert lines[1].endswith("'")
+    assert lines[2] == "clish -c 'add rba user svc-patch roles adminRole'"
+    assert lines[3] == "clish -c 'set user svc-patch gid 100 shell /bin/bash'"
+    assert lines[4] == "clish -c 'save config'"
+
+
+def test_render_bootstrap_script_quotes_shell_metacharacters_safely() -> None:
+    # password-hash's $6$salt$hash contains characters a naive wrapper could
+    # mangle if passed to bash unquoted — shlex.quote must protect it.
+    script = render_bootstrap_script("svc-patch", "correct horse battery")
+    for line in script.split("\n"):
+        assert line.startswith("clish -c ")
+        # Every wrapped command round-trips through shlex back to the original.
+        (inner,) = shlex.split(line[len("clish -c ") :])
+        assert "\n" not in inner
 
 
 def test_invalid_usernames_rejected() -> None:

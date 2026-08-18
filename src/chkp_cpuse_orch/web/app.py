@@ -67,6 +67,7 @@ from ..services.cred_ops import CredentialJobService
 from ..services.discovery import DiscoveryService, MgmtClientFactory
 from ..services.environments import EnvironmentManager
 from ..services.firewalls import FirewallManager
+from ..services.gateway_bootstrap import GatewayBootstrapService
 from ..services.patching import PatchingService
 from ..services.pkg_repo_ops import PackageRepoService, RepoClientFactory
 from ..services.pkgs_ops import PackageJobService
@@ -517,6 +518,7 @@ def create_app(
         )
         discovery = DiscoveryService(registry=registry, mgmt_client_factory=mgmt_client_factory)
         api_access = ApiAccessService(registry=registry, runner=runner)
+        gateway_bootstrap = GatewayBootstrapService(registry=registry, store=store, runner=runner)
         pkg_repo = PackageRepoService(
             registry=registry,
             packages=packages,
@@ -544,6 +546,7 @@ def create_app(
         app.state.primary_connect = primary_connect
         app.state.discovery = discovery
         app.state.api_access = api_access
+        app.state.gateway_bootstrap = gateway_bootstrap
         app.state.pkg_repo = pkg_repo
 
         interrupted = runner.recover()
@@ -674,6 +677,11 @@ def _primary_connect(request: Request) -> PrimaryConnectService:
 
 def _api_access(request: Request) -> ApiAccessService:
     service: ApiAccessService = request.app.state.api_access
+    return service
+
+
+def _gateway_bootstrap(request: Request) -> GatewayBootstrapService:
+    service: GatewayBootstrapService = request.app.state.gateway_bootstrap
     return service
 
 
@@ -1458,6 +1466,34 @@ def _register_routes(app: FastAPI) -> None:
                 raise _map_error(exc) from exc
             return {"cluster_name": cluster_name, "resolved": True}
         return {"cluster_name": fw_row.cluster_name if fw_row else None, "resolved": False}
+
+    @app.get("/api/env/{env}/firewalls/{name}/bootstrap-credentials/preview")
+    def firewall_bootstrap_credentials_preview(
+        env: str, name: str, request: Request
+    ) -> dict[str, Any]:
+        """Renders the exact clish commands a (not yet implemented) bootstrap
+        run would push via the Management API, so the operator can review
+        them before confirming — same pattern as api-access/repair-preview.
+        The Firewalls panel's "Bootstrap Credentials" link (shown after an
+        SSH auth failure during status refresh) opens this preview first."""
+        try:
+            commands = _gateway_bootstrap(request).preview_bootstrap_commands(env, name)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        return {"commands": commands}
+
+    @app.post("/api/env/{env}/firewalls/{name}/bootstrap-credentials", status_code=202)
+    def firewall_bootstrap_credentials(env: str, name: str, request: Request) -> JobRecord:
+        """Pushes the firewall's assigned credential set onto the gateway via
+        the Management API's run-script (see services/gateway_bootstrap.py) —
+        the "Bootstrap Credentials" link's Run button, after the operator has
+        reviewed the preview above."""
+        try:
+            return _gateway_bootstrap(request).submit_bootstrap(
+                env, name, triggered_by=_current_user(request)
+            )
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
 
     @app.post("/api/env/{env}/firewalls/{name}/mds-domain")
     def firewall_set_mds_domain(
