@@ -249,7 +249,7 @@ function promptCredentials(host, purpose) {
   document.getElementById("cred-modal-hint").textContent =
     `This environment doesn't store credentials. Enter them to ${purpose} on ${host} — ` +
     "kept in memory only until the operation finishes, never written to disk.";
-  for (const id of ["cm-password", "cm-key"]) document.getElementById(id).value = "";
+  for (const id of ["cm-password", "cm-key", "cm-expert"]) document.getElementById(id).value = "";
   document.getElementById("cm-remember").checked = false;
   document.getElementById("cm-more").open = false;
   modal.classList.remove("hidden");
@@ -283,6 +283,7 @@ document.getElementById("cred-modal-form").addEventListener("submit", (ev) => {
   const fields = [
     ["ssh_password", document.getElementById("cm-password").value],
     ["ssh_private_key", document.getElementById("cm-key").value],
+    ["expert_password", document.getElementById("cm-expert").value],
   ];
   const creds = fields.filter(([, s]) => s).map(([kind, secret]) => ({ kind, secret }));
   if (!creds.some((c) => c.kind === "ssh_password" || c.kind === "ssh_private_key")) {
@@ -3432,6 +3433,7 @@ async function loadCredentialSets() {
     });
     row.querySelector(".cs-user").textContent = set.ssh_username ?? "";
     row.querySelector(".cs-auth").textContent = set.ssh_auth; // password | key | none
+    row.querySelector(".cs-expert").textContent = tick(set.has_expert);
     row.querySelector(".cs-api").textContent = tick(set.has_api);
     row.querySelector(".btn-edit").addEventListener("click", () => openCredEditModal(set));
     // Executes immediately as a tracked cred.delete job (services/cred_ops.py).
@@ -3475,6 +3477,7 @@ document.getElementById("credential-form").addEventListener("submit", async (ev)
   // the existing ones (e.g. adding only the API key to a bootstrap entry).
   if (!password && !key && !credEditMode) { toast("Enter an SSH password or a private key."); return; }
   if (password && key) { toast("Enter an SSH password OR a private key, not both."); return; }
+  const expertInput = document.getElementById("cs-expert");
   const apiInput = document.getElementById("cs-api");
   try {
     // Executes immediately (services/cred_ops.py) — the response is already
@@ -3488,6 +3491,7 @@ document.getElementById("credential-form").addEventListener("submit", async (ev)
         ssh_username: document.getElementById("cs-ssh-user").value.trim() || null,
         ssh_password: password || null,
         ssh_private_key: key || null,
+        expert_password: expertInput.value || null,
         api_key: apiInput.value || null,
       }),
     });

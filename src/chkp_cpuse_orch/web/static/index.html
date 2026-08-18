@@ -202,8 +202,9 @@
       </div>
       <p class="hint">
         Named login sets, stored encrypted at rest using <strong>argon2id</strong>; secrets are never
-        displayed again after saving. Give one an SSH password <em>or</em> a private key,
-        then assign it to servers below. One set can be assigned to many servers.
+        displayed again after saving. Give one an SSH password <em>or</em> a private key
+        (plus an optional expert password for privileged CPUSE steps), then assign it to
+        servers below. One set can be assigned to many servers.
       </p>
       <p class="hint warn hidden" id="cred-storage-notice">
         Credential storage is <strong>disabled</strong> for this environment, so
@@ -213,7 +214,7 @@
       </p>
       <table id="credentials-table">
         <thead>
-          <tr><th>Name</th><th>SSH user</th><th>SSH auth</th><th>API</th><th></th></tr>
+          <tr><th>Name</th><th>SSH user</th><th>SSH auth</th><th>Expert</th><th>API</th><th></th></tr>
         </thead>
         <tbody><!-- tpl-credential-row instances --></tbody>
       </table>
@@ -605,7 +606,8 @@
     </div>
     <p class="hint" id="cred-add-hint">
       A named <strong>login set</strong>, stored encrypted at rest; secrets are never
-      displayed again after saving. Give it an SSH password <em>or</em> a private key.
+      displayed again after saving. Give it an SSH password <em>or</em> a private key,
+      plus an optional expert password for privileged CPUSE steps.
     </p>
     <p class="hint hidden" id="cred-edit-hint"></p>
     <form id="credential-form" class="stacked">
@@ -613,6 +615,7 @@
       <label>SSH username<input type="text" id="cs-ssh-user" placeholder="admin"></label>
       <label>SSH password<input type="password" id="cs-ssh-password" autocomplete="new-password"></label>
       <label>SSH private key (instead of a password)<textarea id="cs-ssh-key" rows="3" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea></label>
+      <label>Expert password (optional)<input type="password" id="cs-expert" autocomplete="new-password"></label>
       <label>API key (optional)<input type="password" id="cs-api" autocomplete="new-password"></label>
       <div class="cred-modal-actions">
         <button type="submit">Save credential set</button>
@@ -638,9 +641,12 @@
         <input type="password" id="cm-password" autocomplete="off">
       </label>
       <details id="cm-more">
-        <summary>Use a private key instead</summary>
+        <summary>Use a private key instead / add an expert password</summary>
         <label>SSH private key
           <textarea id="cm-key" rows="3" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
+        </label>
+        <label>Expert password
+          <input type="password" id="cm-expert" autocomplete="off">
         </label>
       </details>
       <label class="cm-remember">
@@ -1257,6 +1263,7 @@
     <td><span class="cs-name-text"></span><span class="cs-default-pill pill hidden">default</span></td>
     <td class="cs-user"></td>
     <td class="cs-auth"></td>
+    <td class="cs-expert"></td>
     <td class="cs-api"></td>
     <td class="cs-actions row-actions">
       <button class="btn-default small secondary">Make default</button>
