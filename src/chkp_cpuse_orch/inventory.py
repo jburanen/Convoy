@@ -34,6 +34,11 @@ class Role(StrEnum):
     # subsystem that discovers its own targets and never stores them here.
     GATEWAY = "gateway"  # Security Gateway
     CLUSTER_MEMBER = "cluster_member"  # Gateway that is part of a ClusterXL/HA cluster
+    # Quantum Spark (SMB) appliance, detected via operating-system == "Gaia
+    # Embedded" (see services/discovery.py). Deliberately NOT wired into CDT
+    # bulk-deploy (orchestrator.py) or direct CPUSE patching
+    # (services/common.py) yet — Spark needs different deploy mechanics.
+    SPARK_FIREWALL = "spark_firewall"  # Quantum Spark (SMB) appliance
 
 
 # Roles that make a host a "management-plane" box this tool connects to and patches
@@ -58,6 +63,7 @@ MANAGEMENT_PLANE_ROLES: tuple[Role, ...] = (
 FIREWALL_ROLES: tuple[Role, ...] = (
     Role.GATEWAY,
     Role.CLUSTER_MEMBER,
+    Role.SPARK_FIREWALL,
 )
 
 

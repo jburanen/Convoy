@@ -51,14 +51,14 @@ def test_put_set_and_bundle_roundtrip(creds: CredentialStore, store: Store) -> N
         "primary",
         ssh_username="admin",
         ssh_password="hunter22",
-        expert_password="rootpw",
+        api_key="apikey123",
     )
     bundle = creds.get_set_bundle(_set_id(store), "mgmt-01")
     assert bundle[CredentialKind.SSH_PASSWORD].reveal() == "hunter22"
     assert bundle[CredentialKind.SSH_PASSWORD].username == "admin"
-    assert bundle[CredentialKind.EXPERT_PASSWORD].reveal() == "rootpw"
-    # Expert secret carries no username.
-    assert bundle[CredentialKind.EXPERT_PASSWORD].username is None
+    assert bundle[CredentialKind.API_KEY].reveal() == "apikey123"
+    # API key carries no username.
+    assert bundle[CredentialKind.API_KEY].username is None
 
 
 def test_ciphertext_on_disk_is_not_plaintext(creds: CredentialStore, store: Store) -> None:
@@ -95,7 +95,7 @@ def test_same_key_reopens_fine(store: Store) -> None:
 
 def test_ssh_secret_required(creds: CredentialStore) -> None:
     with pytest.raises(CredentialError, match="SSH password or private key"):
-        creds.put_set("default", "noauth", expert_password="only-expert")
+        creds.put_set("default", "noauth", api_key="only-an-api-key")
 
 
 def test_update_merges_and_preserves_id(creds: CredentialStore, store: Store) -> None:
@@ -170,7 +170,6 @@ def test_list_sets_is_secret_free(creds: CredentialStore) -> None:
     assert info.ssh_username == "admin"
     assert info.ssh_auth == "password"
     assert info.has_api is True
-    assert info.has_expert is False
     assert "classified" not in repr(infos)
 
 
@@ -212,9 +211,9 @@ def _bundle(kind: CredentialKind = CredentialKind.SSH_PASSWORD) -> dict:
 def test_ensure_ssh_credential_requires_ssh() -> None:
     with pytest.raises(CredentialError, match="provide an SSH"):
         ensure_ssh_credential({}, "mgmt-01", "dmz")
-    # An expert password alone is not enough to open a session.
+    # An API key alone is not enough to open a session.
     with pytest.raises(CredentialError, match="provide an SSH"):
-        ensure_ssh_credential(_bundle(CredentialKind.EXPERT_PASSWORD), "mgmt-01", "dmz")
+        ensure_ssh_credential(_bundle(CredentialKind.API_KEY), "mgmt-01", "dmz")
     # A password or a private key each satisfy it (no raise).
     ensure_ssh_credential(_bundle(CredentialKind.SSH_PASSWORD), "mgmt-01", "dmz")
     ensure_ssh_credential(_bundle(CredentialKind.SSH_PRIVATE_KEY), "mgmt-01", "dmz")

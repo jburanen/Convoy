@@ -71,6 +71,9 @@ class Orchestrator:
         mgmt = [h.name for h in self.inventory.hosts_by_role(Role.MANAGEMENT)]
         gateways = [h.name for h in self.inventory.hosts_by_role(Role.GATEWAY)]
         gateways += [h.name for h in self.inventory.hosts_by_role(Role.CLUSTER_MEMBER)]
+        # Role.SPARK_FIREWALL is deliberately excluded — CDT bulk-deploy
+        # mechanics don't apply to Quantum Spark (Gaia Embedded) appliances
+        # yet. Not an oversight; see inventory.py's Role.SPARK_FIREWALL note.
 
         if mgmt:
             plan.steps.append(Step(StepKind.PRECHECK, mgmt, "pre-checks on management servers"))

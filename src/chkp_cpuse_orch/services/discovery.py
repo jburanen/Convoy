@@ -476,9 +476,17 @@ def map_gateways_only(objects: list[dict[str, Any]]) -> list[DiscoveredServer]:
         address = str(obj.get("ipv4-address") or obj.get("ipv6-address") or "").strip()
         if not name and not address:
             continue
-        is_cluster = any(h in type_ for h in ("cluster", "vs-cluster", "gateway-cluster"))
-        role = Role.CLUSTER_MEMBER if is_cluster else Role.GATEWAY
-        note = "VSX" if "vsx" in type_ else None
+        os_ = str(obj.get("operating-system") or "").strip().lower()
+        if os_ == "gaia embedded":
+            # Quantum Spark (SMB) appliance. Checked ahead of the cluster/VSX
+            # hints below on the assumption Spark never reports those tokens
+            # through this API shape — revisit if Spark HA/cluster support
+            # is ever added.
+            role, note = Role.SPARK_FIREWALL, None
+        else:
+            is_cluster = any(h in type_ for h in ("cluster", "vs-cluster", "gateway-cluster"))
+            role = Role.CLUSTER_MEMBER if is_cluster else Role.GATEWAY
+            note = "VSX" if "vsx" in type_ else None
         out.append(
             DiscoveredServer(
                 name=name or address,
