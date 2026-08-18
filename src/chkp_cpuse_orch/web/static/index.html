@@ -730,6 +730,37 @@
   </div>
 </div>
 
+<!-- ============ Bootstrap credentials confirm modal (CPUSE tab, Firewalls) === -->
+<!-- Opened from the Firewalls panel's "Bootstrap Credentials" link, shown
+     only after a status-refresh SSH authentication failure. Pushes the
+     firewall's currently-assigned credential set onto the gateway via the
+     Management API (run-script) instead of SSH — the same clish commands
+     the Provisioning tab's bootstrap panel generates, since SSH is exactly
+     what's broken here. Same preview-then-confirm pattern as
+     api-access-repair-confirm-modal above. -->
+<div id="fw-bootstrap-creds-confirm-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="fw-bootstrap-creds-confirm-title">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2 id="fw-bootstrap-creds-confirm-title">Confirm: bootstrap credentials</h2>
+      <button id="fw-bootstrap-creds-confirm-close" class="small" title="Close">✕</button>
+    </div>
+    <p class="hint warn">
+      These commands will run via the Management API now, resetting
+      <strong id="fw-bootstrap-creds-confirm-target"></strong>'s local admin user/password to
+      match its assigned credential set. No SSH connection is needed for this.
+    </p>
+    <div class="output-pane">
+      <div class="output-body">
+        <pre id="fw-bootstrap-creds-confirm-output" class="job-events mono"></pre>
+      </div>
+    </div>
+    <div class="cred-modal-actions">
+      <button type="button" id="fw-bootstrap-creds-confirm-run">Run</button>
+      <button type="button" id="fw-bootstrap-creds-confirm-cancel" class="secondary">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <!-- ============ API key reveal modal (Provisioning tab) ====================== -->
 <!-- Shown once, right after a successful connect-primary job — the key is
      fetched via GET /api/jobs/{id}/reveal-api-key, which returns it exactly
@@ -1096,6 +1127,7 @@
     <td colspan="5" class="srv-agent muted"><span class="srv-summary"></span>
       <span class="srv-checked"></span>
       <button type="button" class="link-btn srv-refresh-link">Refresh</button>
+      <button type="button" class="link-btn srv-bootstrap-creds-link hidden">Bootstrap Credentials</button>
     </td>
   </tr>
 </template>

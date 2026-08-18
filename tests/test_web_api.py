@@ -1375,6 +1375,65 @@ def test_api_access_repair_widens_accessibility(
     assert "api restart" in transport.commands
 
 
+# -- gateway credential bootstrap (Firewalls panel auth-failure recovery) ---------
+
+
+def test_firewall_bootstrap_credentials_preview_renders_commands(client: TestClient) -> None:
+    _put_set(client, name="primary", ssh_username="admin", ssh_password="s3cret-pw!")
+    _add_firewall(client, name="fw-x", address="192.0.2.70", role="gateway")
+    resp = client.post("/api/env/default/firewalls/fw-x/credential", json={"set": "primary"})
+    assert resp.status_code == 200, resp.text
+
+    resp = client.get("/api/env/default/firewalls/fw-x/bootstrap-credentials/preview")
+    assert resp.status_code == 200, resp.text
+    commands = resp.json()["commands"]
+    assert commands[0] == "add user admin uid 0 homedir /home/admin"
+    assert commands[1].startswith("set user admin password-hash $6$")
+
+
+def test_firewall_bootstrap_credentials_preview_rejects_key_only_set(client: TestClient) -> None:
+    _put_set(
+        client, name="keyset", ssh_username="admin", ssh_password=None, ssh_private_key="KEYDATA"
+    )
+    _add_firewall(client, name="fw-x", address="192.0.2.70", role="gateway")
+    client.post("/api/env/default/firewalls/fw-x/credential", json={"set": "keyset"})
+
+    resp = client.get("/api/env/default/firewalls/fw-x/bootstrap-credentials/preview")
+    assert resp.status_code == 409, resp.text
+    assert "private key, not a" in resp.json()["detail"]
+
+
+def test_firewall_bootstrap_credentials_preview_requires_assigned_credential(
+    client: TestClient,
+) -> None:
+    _add_firewall(client, name="fw-x", address="192.0.2.70", role="gateway")
+    resp = client.get("/api/env/default/firewalls/fw-x/bootstrap-credentials/preview")
+    assert resp.status_code == 409, resp.text
+    assert "no credential assigned" in resp.json()["detail"]
+
+
+def test_firewall_bootstrap_credentials_submit_queues_a_job(client: TestClient) -> None:
+    # Full run-script execution against a real Management API is covered at
+    # the service layer (test_gateway_bootstrap.py, with a fake mgmt client) —
+    # this only confirms the endpoint queues the right job kind/target.
+    _put_set(client, name="primary", ssh_username="admin", ssh_password="s3cret-pw!")
+    _add_firewall(client, name="fw-x", address="192.0.2.70", role="gateway")
+    client.post("/api/env/default/firewalls/fw-x/credential", json={"set": "primary"})
+
+    resp = client.post("/api/env/default/firewalls/fw-x/bootstrap-credentials")
+    assert resp.status_code == 202, resp.text
+    job = resp.json()
+    assert job["kind"] == "fw.bootstrap_credentials"
+    assert job["target"] == "fw-x"
+
+
+def test_firewall_bootstrap_credentials_submit_rejects_unknown_firewall(
+    client: TestClient,
+) -> None:
+    resp = client.post("/api/env/default/firewalls/nope/bootstrap-credentials")
+    assert resp.status_code == 404, resp.text
+
+
 # -- jobs -------------------------------------------------------------------------
 
 
