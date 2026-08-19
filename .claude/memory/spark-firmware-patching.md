@@ -80,6 +80,30 @@ locks the package picker to match. The Management Servers panel's
 equivalent selectors are untouched (separate element ids, separate
 `loadServers()` code path).
 
+## Refresh (`detect`) is Spark-specific too
+
+Added 2026-08-19. Firewalls-panel Refresh (`POST /api/env/{env}/firewalls/
+{name}/state`) used to always call `PatchingService.detect()`, which issues
+CPUSE-only queries (`show installer status build`/`show installer packages
+...`/`show cluster state`) — meaningless on Spark, which has no CPUSE agent.
+The web handler (`web/app.py`'s `firewall_state`) now checks the host's role
+first (`PatchingService.host_role()`, a plain inventory lookup, added so the
+handler can pick a service *before* committing to either one's host-
+resolution/credential path) and routes Spark rows to
+`SparkPatchingService.detect()` instead — a synchronous method mirroring
+`PatchingService.detect()`'s shape (not a job), that runs plain `fw ver`
+over a bare SSH exec (no `expert` escalation — unvalidated against real
+hardware, same caveat as the two above) and truncates the banner
+(`spark_patching.parse_fw_ver()`): `"This is Check Point's 1550 Appliance
+R81.10.17 - Build 892"` → `"1550 Appliance R81.10.17 - Build 892"`. Both
+detect() methods persist into the same `ServerStateRow` cache table, so the
+response-building code after the branch is shared; Spark rows just get
+`jhf`/`agent_build`/`cluster_role` = None and `installable`/`installed` = []
+written there instead of real values. `app.js`'s `renderStateRow()` takes a
+new `isSpark` param (Firewalls-panel call sites only — Servers are never
+Spark) and shows just the truncated `fw ver` text instead of the
+"Running X w/JHF Y | CPUSE Agent Z" line, which doesn't apply here.
+
 ## Shared helpers extracted for this
 
 `services/common.py` gained `ensure_host_free` (promoted from

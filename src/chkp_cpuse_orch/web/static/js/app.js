@@ -1849,14 +1849,24 @@ function formatAgentBuild(raw) {
 // Detected-state summary row: version/JHF/agent build are derived server-side
 // (cpuse.summarize_jumbo) and cached in the DB, so `data` here is either a
 // server record carrying those fields (from GET /servers, or a fresh /state
-// response) or null when nothing has been checked yet.
-function renderStateRow(stateRow, data) {
+// response) or null when nothing has been checked yet. `isSpark` is only
+// ever true for a Firewalls-panel row (Servers are never Spark) — Spark has
+// no CPUSE agent, so none of version/JHF/CPUSE-Agent/cluster-role apply the
+// way they do for a Gaia host; the summary is just the truncated `fw ver`
+// banner text SparkPatchingService.detect() cached (see spark-patching's
+// module docstring / .claude/memory/spark-firmware-patching.md).
+function renderStateRow(stateRow, data, isSpark) {
   const summary = stateRow.querySelector(".srv-summary");
   const checked = stateRow.querySelector(".srv-checked");
   summary.replaceChildren();
   if (data == null) {
     summary.textContent = "Not yet checked.";
     checked.textContent = "";
+    return false;
+  }
+  if (isSpark) {
+    summary.textContent = data.version || "—";
+    checked.textContent = data.checked_at ? ` | Refreshed ${fmtTime(data.checked_at)}` : "";
     return false;
   }
   // ClusterXL role, when this host is a live cluster member. cluster_role is
@@ -1889,14 +1899,18 @@ function renderStateRow(stateRow, data) {
   ));
   // The DA build normally reports "(Agent build is up to date)". Any other
   // status — a newer build available, an error string — warrants the operator's
-  // eye, so render that text in orange instead of the normal muted colour.
-  if (agentBuild !== "—" && !/agent build is up to date/i.test(data.agent_build || "")) {
+  // eye, so render just the parenthetical status text in orange; the build
+  // number itself (before the "(") stays the normal muted colour.
+  const upToDate = /agent build is up to date/i.test(data.agent_build || "");
+  const parenIdx = agentBuild.indexOf("(");
+  if (agentBuild === "—" || upToDate || parenIdx === -1) {
+    summary.appendChild(document.createTextNode(agentBuild));
+  } else {
+    summary.appendChild(document.createTextNode(agentBuild.slice(0, parenIdx)));
     const attn = document.createElement("span");
     attn.className = "agent-build-attention";
-    attn.textContent = agentBuild;
+    attn.textContent = agentBuild.slice(parenIdx);
     summary.appendChild(attn);
-  } else {
-    summary.appendChild(document.createTextNode(agentBuild));
   }
   checked.textContent = data.checked_at ? ` | Refreshed ${fmtTime(data.checked_at)}` : "";
   return hasClusterLine;
@@ -2367,7 +2381,11 @@ async function loadFirewalls() {
 
     const stateRow = el("tpl-firewall-state-row");
     stateRow.dataset.firewall = fw.name; // looked up by the "Refresh all" button
-    const hasClusterLine = renderStateRow(stateRow, state && state.checked_at ? state : null);
+    const hasClusterLine = renderStateRow(
+      stateRow,
+      state && state.checked_at ? state : null,
+      fw.role === "spark_firewall",
+    );
     row.classList.toggle("fw-cluster-member", hasClusterLine);
     row.dataset.role = fw.role; // read by refreshFirewallState to pick the right bootstrap link
     stateRow
@@ -2427,7 +2445,7 @@ async function refreshFirewallState(name, row, stateRow) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(extra),
     });
-    const hasClusterLine = renderStateRow(stateRow, state);
+    const hasClusterLine = renderStateRow(stateRow, state, isSpark);
     row.classList.toggle("fw-cluster-member", hasClusterLine);
     renderInstallSelect(row, state.installable ?? [], state.installed ?? [], name);
   } catch (e) {

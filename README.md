@@ -13,7 +13,7 @@ Patching is supported for:
 ✅ On-Premise Smart Center (SMS) servers  
 ✅ On-Premise Multi-Domain Management (MDM/MDSM) servers  
 ✅ Gaia (Force) firewalls managed by on-prem environments  
-✅ Quantum Spark (Gaia Embedded) firewalls managed by on-prem environments — firmware transfer + upgrade via `upgrade_revert_image.sh`, not CPUSE (Spark doesn't run it) and not CDT (Spark isn't a CDT target)  
+✅ Quantum Spark (Gaia Embedded) firewalls managed by on-prem environments — firmware transfer + upgrade via `upgrade_revert_image.sh`, not CPUSE (Spark doesn't run it) and not CDT (Spark isn't a CDT target); Refresh reads version via `fw ver` instead of CPUSE's `show installer status`, since Spark has no CPUSE agent to query  
 
 ### NOT Supported
 By design, this tool does NOT support patching:  

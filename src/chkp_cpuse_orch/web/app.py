@@ -1430,7 +1430,31 @@ def _register_routes(app: FastAPI) -> None:
         creds = _op_creds(body, name, env)
         service = _service(request)
         try:
-            detected = await asyncio.to_thread(service.detect, env, name, credentials=creds)
+            # Spark (Gaia Embedded) has no CPUSE agent, so its refresh skips
+            # PatchingService.detect() entirely (show installer .../show
+            # cluster state) in favor of SparkPatchingService.detect()'s
+            # plain `fw ver` — see spark_patching.py's module docstring.
+            # Both persist into the same ServerStateRow cache, so the
+            # response below reads from there either way.
+            if service.host_role(env, name) == "spark_firewall":
+                await asyncio.to_thread(
+                    _spark_service(request).detect, env, name, credentials=creds
+                )
+                agent_build: str | None = None
+                packages: list[dict[str, Any]] = []
+            else:
+                detected = await asyncio.to_thread(service.detect, env, name, credentials=creds)
+                agent_build = detected.agent_build
+                packages = [
+                    {
+                        "identifier": p.identifier,
+                        "status": p.status,
+                        "description": p.description,
+                        "is_installed": p.is_installed,
+                        "is_imported": p.is_imported,
+                    }
+                    for p in detected.packages
+                ]
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
         store: Store = request.app.state.store
@@ -1438,8 +1462,8 @@ def _register_routes(app: FastAPI) -> None:
         assert cached is not None  # detect() just persisted it
         fw_row = store.get_firewall(env, name)
         return {
-            "host": detected.host,
-            "agent_build": detected.agent_build,
+            "host": name,
+            "agent_build": agent_build,
             "version": cached.version,
             "jhf": cached.jhf,
             "checked_at": cached.checked_at.isoformat(),
@@ -1448,16 +1472,7 @@ def _register_routes(app: FastAPI) -> None:
             "cluster_role": cached.cluster_role,
             "cluster_name": fw_row.cluster_name if fw_row else None,
             "mds_domain": fw_row.mds_domain if fw_row else None,
-            "packages": [
-                {
-                    "identifier": p.identifier,
-                    "status": p.status,
-                    "description": p.description,
-                    "is_installed": p.is_installed,
-                    "is_imported": p.is_imported,
-                }
-                for p in detected.packages
-            ],
+            "packages": packages,
         }
 
     @app.post("/api/env/{env}/firewalls/{name}/cluster-recheck")

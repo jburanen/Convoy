@@ -259,6 +259,13 @@ class PatchingService:
         """Name of the credential set assigned to a server, or None if unassigned."""
         return self.registry.get(environment).assigned_credential(host_name)
 
+    def host_role(self, environment: str, host_name: str) -> str:
+        """A host's inventory role, as its string value (e.g. "spark_firewall")
+        — lets the web layer pick between this service's CPUSE-based detect()
+        and SparkPatchingService's fw-ver-based one before committing to
+        either's host-resolution/credential path."""
+        return self.registry.get(environment).inventory.host(host_name).role.value
+
     def detect(
         self,
         environment: str,

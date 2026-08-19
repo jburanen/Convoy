@@ -26,6 +26,14 @@ Two job kinds:
   cannot and does not confirm the upgrade actually completed — Spark has
   nothing like CPUSE's ``show installer package`` to poll — success here only
   means the command was issued.
+
+Refresh (``detect``, not a job — synchronous, mirrors ``PatchingService.
+detect()``'s shape) is also Spark-specific: there's no CPUSE agent on Gaia
+Embedded, so none of ``show installer status``/``show installer packages
+...``/``show cluster state`` apply. Version comes from plain ``fw ver``
+instead (operator-specified, 2026-08-19) — assumed to work over a bare SSH
+exec without needing ``expert`` escalation first, unvalidated against real
+hardware like the two assumptions above.
 """
 
 from __future__ import annotations
@@ -33,6 +41,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import posixpath
+import re
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -41,8 +50,8 @@ from ..errors import CredentialError, ExpertModeError, JobError, TransportError
 from ..inventory import Host
 from ..jobs import JobContext, JobRunner
 from ..packages import PackageStore, package_kind
-from ..store import JobRecord, Store
-from ..transport.ssh import GaiaExpertSession, InteractiveShell
+from ..store import JobRecord, ServerStateRow, Store, utcnow
+from ..transport.ssh import GaiaExpertSession, InteractiveShell, require_ok
 from .common import (
     EnvironmentRegistry,
     HostConnector,
@@ -71,6 +80,23 @@ _STORAGE_DIR = "/storage"
 # Generous — the script validates the image and may take a while before
 # either printing something or the device drops the connection to reboot.
 _UPGRADE_TIMEOUT = 120.0
+
+# `fw ver`'s banner opens with "This is Check Point's " before the actual
+# model/version/build text we want — strip it. `.` (not a literal `'`)
+# tolerates either a straight or a typographic apostrophe in case CPUSE
+# renders the latter on some builds.
+_FW_VER_PREFIX_RE = re.compile(r"^\s*this is check point.s\s+", re.IGNORECASE)
+
+
+def parse_fw_ver(stdout: str) -> str:
+    """Truncate `fw ver`'s output to the descriptive tail the Firewalls
+    table shows as this Spark firewall's version — e.g. "This is Check
+    Point's 1550 Appliance R81.10.17 - Build 892" becomes "1550 Appliance
+    R81.10.17 - Build 892". Falls back to the trimmed first line as-is if
+    the expected prefix isn't there, rather than raising — this only feeds
+    a display string, not a decision."""
+    first_line = next((line.strip() for line in stdout.splitlines() if line.strip()), "")
+    return _FW_VER_PREFIX_RE.sub("", first_line).strip()
 
 
 class ExpertCapableTransport(Transport, Protocol):
@@ -112,6 +138,44 @@ class SparkPatchingService:
         self._store = store
         runner.register(JOB_TEST_CREDENTIALS, self._test_credentials_job)
         runner.register(JOB_TRANSFER_UPGRADE, self._transfer_upgrade_job)
+
+    # -- queries --------------------------------------------------------------------
+
+    def detect(
+        self,
+        environment: str,
+        host_name: str,
+        *,
+        credentials: CredentialBundle | None = None,
+    ) -> str:
+        """Live-query a Spark firewall's version via `fw ver` — the Refresh
+        action's Spark counterpart to ``PatchingService.detect()``, which
+        this deliberately does not call into: none of its CPUSE queries
+        (`show installer status`/`show installer packages ...`/`show
+        cluster state`) apply to a device with no CPUSE agent. Blocking
+        (SSH) — call via ``asyncio.to_thread`` from async contexts. Caches
+        the result the same way PatchingService does, into the same
+        ``ServerStateRow`` table, so the Firewalls list reflects it without
+        a separate read; jhf/agent_build/cluster_role are left None and
+        installable/installed empty since none of those concepts apply."""
+        connector = self.registry.get(environment)
+        host = connector.spark_firewall_host(host_name)
+        creds = connector.require_credentials(host, credentials)
+        client = connector.connect(host, creds)
+        try:
+            result = require_ok(client.run("fw ver"))
+            version = parse_fw_ver(result.stdout)
+            self._store.upsert_server_state(
+                ServerStateRow(
+                    environment=environment,
+                    host=host.name,
+                    version=version,
+                    checked_at=utcnow(),
+                )
+            )
+            return version
+        finally:
+            client.close()
 
     # -- job submission -----------------------------------------------------------
 
