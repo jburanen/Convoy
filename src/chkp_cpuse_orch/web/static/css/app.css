@@ -45,7 +45,7 @@ body {
   color: var(--text);
 }
 
-header, main, footer {
+header, main, footer, #tabs, #tab-guide-viewport {
   max-width: 1100px;
   margin: 0 auto;
   padding: 0 1.25rem;
@@ -124,11 +124,21 @@ footer {
 #env-picker { font-weight: 600; }
 
 /* ---- tabs ---- */
+/* Pinned to the top of the viewport on scroll so the tab bar (and the active
+   tab, for switching without scrolling back up) stays reachable on long
+   pages — the descriptive guide row below it is NOT pinned, just the tabs
+   themselves. Needs its own background since page content now scrolls
+   underneath; z-index only needs to clear ordinary content, well below the
+   modal layer (100+, see .modal-card z-index rules further down). */
 #tabs {
   display: flex;
   gap: 0.25rem;
   margin-top: 1rem;
   border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--bg);
 }
 .tab-btn {
   background: transparent;
@@ -461,6 +471,17 @@ input, select, button {
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 0.35rem 0.6rem;
+}
+/* Checkboxes/radios render themselves — the text-field box styling above
+   (padding/border/background) just inflates their native control into an
+   oversized, misaligned blob instead of leaving it alone. */
+input[type="checkbox"], input[type="radio"] {
+  width: 1rem;
+  height: 1rem;
+  padding: 0;
+  border: none;
+  background: none;
+  accent-color: var(--accent);
 }
 input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 
@@ -949,7 +970,7 @@ button.link-btn.fw-name-link {
   gap: 0.2rem;
   font-size: 0.9rem;
 }
-.stacked input,
+.stacked input:not([type="checkbox"]):not([type="radio"]),
 .stacked select,
 .stacked textarea { width: 100%; }
 .stacked textarea { font-family: var(--mono); resize: vertical; }

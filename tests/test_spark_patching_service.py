@@ -283,10 +283,55 @@ def test_transfer_then_install_full_flow(
     finished = store.get_job(install_job.id)
     assert finished.status is JobStatus.SUCCEEDED
     events = [e.message for e in store.events(install_job.id)]
-    assert any("bashUser off output" in e and "Done." in e for e in events)
+    # bashUser off is transfer's job (already ran above) — install doesn't
+    # repeat it.
+    assert not any("bashUser" in e for e in events)
     assert any("upgrade_revert_image.sh" in e for e in events)
-    assert any("does not and cannot confirm" in e for e in events)
+    assert any("does not and cannot fully confirm" in e for e in events)
     assert store.get_server_state("default", "spark-01").installable == []
+
+
+def test_install_fails_on_stale_mount(
+    store: Store,
+    creds: CredentialStore,
+    packages: PackageStore,
+    inventory: Inventory,
+) -> None:
+    """Real-hardware-confirmed 2026-08-19 (see upgrade_revert_image.sh's own
+    mount_pfrm_inactive_part(), which checks `mount`'s exit status, not
+    mke2fs's): mke2fs refusing because the inactive partition is already
+    mounted doesn't necessarily abort the script, so this must fail the job
+    itself rather than let a silently-stale upgrade report as succeeded."""
+    remote_path = f"/storage/{IMG}"
+    transport = FakeTransport(
+        expert_command_outputs={
+            "bashUser on": "Done.",
+            "bashUser off": "Done.",
+            f"upgrade_revert_image.sh {remote_path} upgrade safe": (
+                "mke2fs 1.44.1 (24-Mar-2018)\n"
+                "/dev/mmcblk1p6 is mounted; will not make a filesystem here!\n"
+                "yes: Broken pipe\n"
+                "tune2fs 1.44.1 (24-Mar-2018)"
+            ),
+        },
+    )
+    _assign(store, inventory, "spark-01", "spark-primary")
+    registry = EnvironmentRegistry()
+    registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
+    service = SparkPatchingService(
+        registry=registry,
+        packages=packages,
+        runner=JobRunner(store),
+        vault=JobCredentialVault(),
+        store=store,
+    )
+    job = service.submit_install("default", "spark-01", IMG, confirmed=True)
+    _run(service)
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.FAILED
+    assert finished.error is not None
+    assert "already mounted" in finished.error or "mke2fs" in finished.error
+    assert "stale mount" in finished.error
 
 
 def test_install_succeeds_when_connection_drops_on_upgrade(
