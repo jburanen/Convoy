@@ -97,6 +97,7 @@ class SSHClient:
         self,
         host: Host,
         *,
+        username: str | None = None,  # override; falls back to host.ssh_user
         password: str | None = None,
         private_key: str | None = None,  # key MATERIAL (from the credential store)
         key_passphrase: str | None = None,
@@ -104,6 +105,7 @@ class SSHClient:
         auto_add_host_key: bool = True,
     ) -> None:
         self.host = host
+        self._username = username
         self._password = password
         self._private_key = private_key
         self._key_passphrase = key_passphrase
@@ -125,7 +127,7 @@ class SSHClient:
             client.connect(
                 self.host.address,
                 port=self.host.ssh_port,
-                username=self.host.ssh_user,
+                username=self._username or self.host.ssh_user,
                 password=self._password,
                 pkey=pkey,
                 timeout=self._connect_timeout,

@@ -61,8 +61,17 @@ ClientFactory = Callable[[Host, dict[CredentialKind, Credential]], Transport]
 def default_client_factory(host: Host, creds: dict[CredentialKind, Credential]) -> Transport:
     key = creds.get(CredentialKind.SSH_PRIVATE_KEY)
     password = creds.get(CredentialKind.SSH_PASSWORD)
+    # The credential's own username — from a stored credential set's
+    # ssh_username, or an inline per-job credential's username — is the
+    # single source of truth for SSH login once one is assigned; host.ssh_user
+    # is only a fallback (storage-disabled hosts, or a credential with no
+    # username attached). See .claude/memory/ssh-username-source-of-truth.md —
+    # this used to always use host.ssh_user, which could silently diverge
+    # from whichever credential set was actually assigned.
+    cred = password or key
     client = SSHClient(
         host,
+        username=cred.username if cred and cred.username else None,
         password=password.reveal() if password else None,
         private_key=key.reveal() if key else None,
     )

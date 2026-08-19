@@ -637,7 +637,6 @@ async function populateServerCredSelect(assignedSetName) {
     const opt = document.createElement("option");
     opt.value = set.name;
     opt.textContent = set.name;
-    opt.dataset.sshUser = set.ssh_username || "";
     select.appendChild(opt);
   }
   select.value = assignedSetName || "";
@@ -678,8 +677,14 @@ document.getElementById("server-form").addEventListener("submit", async (ev) => 
   const name = document.getElementById("sm-name").value.trim();
   const credSelect = document.getElementById("sm-cred-select");
   const credSet = storageEnabled() ? credSelect.value : null;
+  // Storage-enabled: the assigned credential set's own ssh_username is what
+  // actually gets used to connect (see services/common.py's
+  // default_client_factory) — sending a derived ssh_user here would just be
+  // stale data nobody reads, and the field can't be edited independently of
+  // the credential set anyway. Storage-disabled: no credential set exists,
+  // so this free-text field is still the only username source.
   const sshUser = storageEnabled()
-    ? credSelect.selectedOptions[0]?.dataset.sshUser || "admin"
+    ? undefined
     : document.getElementById("sm-user").value.trim() || "admin";
   try {
     // Executes immediately as a tracked prov.add/prov.edit job
@@ -1148,8 +1153,13 @@ document.getElementById("discover-import").addEventListener("click", async () =>
     const role = r.querySelector(".disc-role").value;
     if (!name || !address) { failed.push(name || address || "(unnamed)"); continue; }
     try {
-      // Inherit the discover-from primary's SSH identity: same credential set
-      // in a storage-enabled environment, same typed username otherwise.
+      // Inherit the discover-from primary's SSH identity: in a storage-
+      // enabled environment that means the same credential set — its own
+      // ssh_username is what's actually used to connect (see
+      // services/common.py's default_client_factory), so ssh_user is left
+      // unset rather than stamped from the primary's (possibly unrelated)
+      // stored value. Storage-disabled has no credential set to inherit, so
+      // the primary's typed username is still the only thing to carry over.
       // Add executes immediately as a prov.add job (services/prov_ops.py), so
       // the response already carries the real outcome (e.g. a name collision
       // fails the job right here, not just on a later Jobs-tab poll).
@@ -1157,7 +1167,8 @@ document.getElementById("discover-import").addEventListener("click", async () =>
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name, address, role, ssh_user: discoverPrimarySshUser,
+          name, address, role,
+          ssh_user: storageEnabled() ? undefined : discoverPrimarySshUser,
           credential_set: (storageEnabled() && discoverPrimaryCredSet) || undefined,
         }),
       });
@@ -1713,6 +1724,7 @@ async function loadServers() {
   infoTbody.replaceChildren();
   const assignedByName = new Map(servers.map((s) => [s.name, s.credential_set]));
   const stateByName = new Map(servers.map((s) => [s.name, s]));
+  const credSetByName = new Map(sets.map((s) => [s.name, s]));
 
   const bulkPackageSelect = document.getElementById("bulk-import-package");
   bulkPackageSelect.replaceChildren(new Option("— package —", ""));
@@ -1726,7 +1738,13 @@ async function loadServers() {
     info.querySelector(".srv-name").textContent = srv.name;
     info.querySelector(".srv-address").textContent = srv.address;
     info.querySelector(".srv-role").textContent = roleLabel(srv.role);
-    info.querySelector(".srv-user").textContent = srv.ssh_user;
+    // Once a credential set is assigned, ITS ssh_username is what's actually
+    // used to connect (see services/common.py's default_client_factory) —
+    // show that live value, not the stored (and now potentially stale)
+    // srv.ssh_user, which only still matters when nothing is assigned
+    // (storage-disabled environments, or an unassigned host).
+    const assignedSet = credSetByName.get(assignedByName.get(srv.name));
+    info.querySelector(".srv-user").textContent = assignedSet?.ssh_username || srv.ssh_user;
     info.querySelector(".srv-port").textContent = srv.ssh_port;
     info.querySelector(".srv-creds").textContent =
       assignedByName.get(srv.name) || "none — not assigned";
@@ -2788,7 +2806,6 @@ async function populateFirewallCredSelect(assignedSetName) {
     const opt = document.createElement("option");
     opt.value = set.name;
     opt.textContent = set.name;
-    opt.dataset.sshUser = set.ssh_username || "";
     select.appendChild(opt);
   }
   select.value = assignedSetName || "";
@@ -2987,8 +3004,14 @@ document.getElementById("firewall-form").addEventListener("submit", async (ev) =
   const name = document.getElementById("fm-name").value.trim();
   const credSelect = document.getElementById("fm-cred-select");
   const credSet = storageEnabled() ? credSelect.value : null;
+  // Storage-enabled: the assigned credential set's own ssh_username is what
+  // actually gets used to connect (see services/common.py's
+  // default_client_factory) — sending a derived ssh_user here would just be
+  // stale data nobody reads, and the field can't be edited independently of
+  // the credential set anyway. Storage-disabled: no credential set exists,
+  // so this free-text field is still the only username source.
   const sshUser = storageEnabled()
-    ? credSelect.selectedOptions[0]?.dataset.sshUser || "admin"
+    ? undefined
     : document.getElementById("fm-user").value.trim() || "admin";
   try {
     // Executes immediately as a tracked prov.add/prov.edit job
@@ -3233,11 +3256,21 @@ document.getElementById("discover-firewalls-import").addEventListener("click", a
       // Add executes immediately as a prov.add job (services/prov_ops.py), so
       // the response already carries the real outcome (e.g. a name collision
       // fails the job right here, not just on a later Jobs-tab poll).
+      // Storage-enabled: whichever credential set ends up assigned above (the
+      // primary's, or a Spark-specific one just created) is what's actually
+      // used to connect — its own ssh_username, live, not a stamped-on value
+      // (see services/common.py's default_client_factory). Stamping every
+      // row with the primary's ssh_user regardless of which set it ends up
+      // with was the actual bug behind a diverged Spark firewall failing SSH
+      // auth with the right password/wrong username. Storage-disabled has no
+      // credential set to inherit, so the primary's typed username still
+      // carries over there.
       const job = await api(`/api/environments/${encodeURIComponent(currentEnv)}/firewalls`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name, address, role, ssh_user: discoverFwPrimarySshUser,
+          name, address, role,
+          ssh_user: storageEnabled() ? undefined : discoverFwPrimarySshUser,
           credential_set: credentialSet,
           cluster_name: r.dataset.clusterName || undefined,
           mds_domain: r.dataset.mdsDomain || undefined,
