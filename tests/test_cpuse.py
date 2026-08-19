@@ -130,6 +130,29 @@ def test_shell_suspicious_package_id_rejected() -> None:
         cpuse.install("pkg; reboot")
 
 
+def test_shell_metacharacters_rejected_individually() -> None:
+    cpuse = CPUSE(FakeRunner())
+    for suspicious in ["pkg`whoami`", "pkg$(whoami)", "pkg | cat", "pkg & cat", 'pkg"', "pkg'"]:
+        with pytest.raises(CPUSEError, match="suspicious package identifier"):
+            cpuse.install(suspicious)
+
+
+def test_real_display_name_with_spaces_is_accepted() -> None:
+    # Regression: an earlier allowlist-only version of _check_id rejected
+    # real CPUSE display names as "suspicious" purely for containing spaces
+    # — e.g. this exact R82.10 JHA name, reported live. Spaces reach clish
+    # safely either way (see test_expert_shell_wraps_with_clish/
+    # test_clish_shell_sends_bare_command), so they were never actually
+    # unsafe here.
+    runner = FakeRunner()
+    package_id = "R82.10 Jumbo Hotfix Accumulator Recommended Jumbo Take 40"
+    CPUSE(runner, shell=GaiaShell.CLISH).install(package_id)
+    assert runner.commands == [
+        "lock database override",
+        f"installer install {package_id} not-interactive",
+    ]
+
+
 # -- parsing ------------------------------------------------------------------------
 
 TABULAR = """\
