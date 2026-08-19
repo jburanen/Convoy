@@ -1222,6 +1222,10 @@
            above on an auth failure, since Spark bootstrap is display-only
            (see fw-spark-bootstrap-modal). -->
       <button type="button" class="link-btn srv-spark-bootstrap-link hidden">Show Bootstrap Commands</button>
+      <!-- Spark firewalls only — shown unconditionally (not just after an
+           auth failure): SSH login + expert-mode escalation, on demand. See
+           services/spark_patching.py. -->
+      <button type="button" class="link-btn srv-spark-test-creds-link hidden">Test Credentials</button>
     </td>
   </tr>
 </template>

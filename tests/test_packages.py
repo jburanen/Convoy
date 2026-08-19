@@ -10,7 +10,7 @@ from typing import Literal
 import pytest
 
 from chkp_cpuse_orch.errors import PackageError
-from chkp_cpuse_orch.packages import PackageStore
+from chkp_cpuse_orch.packages import PackageStore, package_kind
 from chkp_cpuse_orch.store import Store, utcnow
 
 CONTENT = b"pretend this is a multi-gigabyte JHF bundle"
@@ -201,3 +201,20 @@ def test_add_stream_leaves_metadata_none_for_a_non_archive_upload(
     assert rec.category is None
     assert rec.arch is None
     assert rec.compatibility_note is None
+
+
+@pytest.mark.parametrize(
+    ("filename", "expected"),
+    [
+        ("spark_firmware.img", "spark_image"),
+        ("Spark_Firmware.IMG", "spark_image"),
+        ("jhf_t99.tgz", "archive"),
+        ("jhf_t99.tar", "archive"),
+        ("jhf_t99.tar.gz", "archive"),
+        ("JHF_T99.TGZ", "archive"),
+        ("readme.txt", "unknown"),
+        ("no_extension", "unknown"),
+    ],
+)
+def test_package_kind(filename: str, expected: str) -> None:
+    assert package_kind(filename) == expected

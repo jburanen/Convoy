@@ -98,9 +98,12 @@ from .common import (
     ClientFactory,
     EnvironmentRegistry,
     HostConnector,
+    ProgressReporter,
     Transport,
+    ensure_host_free,
     job_run_credentials,
     submit_host_job,
+    verify_uploaded_file,
 )
 
 __all__ = [
@@ -113,6 +116,7 @@ __all__ = [
     "EnvironmentRegistry",
     "HostConnector",
     "PatchingService",
+    "ProgressReporter",
     "Transport",
 ]
 
@@ -370,27 +374,6 @@ class PatchingService:
 
     # -- job submission ------------------------------------------------------------
 
-    def _ensure_host_free(self, environment: str, host_name: str) -> None:
-        """Refuse to start a new job while one is already pending/running for
-        this host — two operations touching the same box's CPUSE/SSH state at
-        once is unsafe. Mirrors the Management/CPUSE tab's UI, which replaces
-        a busy host's selection checkbox with a status glyph for the same
-        reason (see app.js markRowIfJobActive) — this is the enforcement
-        behind that, since a stale page or a direct API call could otherwise
-        still race two jobs onto the same host. Scoped to the environment too
-        — host names are only unique within one, not globally."""
-        active = self._store.list_jobs(
-            targets=[host_name],
-            environments=[environment],
-            statuses=[JobStatus.PENDING, JobStatus.RUNNING],
-            limit=1,
-        )
-        if active:
-            raise JobError(
-                f"a job is already {active[0].status.value} for {host_name!r} — wait for it "
-                "to finish before starting another"
-            )
-
     def submit_import(
         self,
         environment: str,
@@ -409,7 +392,7 @@ class PatchingService:
         _MIN_OVERRIDE_MULTIPLIER, no override can cross that floor."""
         connector = self.registry.get(environment)
         host = connector.patchable_host(host_name)
-        self._ensure_host_free(environment, host_name)
+        ensure_host_free(self._store, environment, host_name)
         self._packages.path_for(package_filename)  # validates record + content file
         return submit_host_job(
             self.runner,
@@ -436,7 +419,7 @@ class PatchingService:
         the host needs outbound internet access."""
         connector = self.registry.get(environment)
         host = connector.patchable_host(host_name)
-        self._ensure_host_free(environment, host_name)
+        ensure_host_free(self._store, environment, host_name)
         return submit_host_job(
             self.runner,
             self._vault,
@@ -468,7 +451,7 @@ class PatchingService:
             )
         connector = self.registry.get(environment)
         host = connector.patchable_host(host_name)
-        self._ensure_host_free(environment, host_name)
+        ensure_host_free(self._store, environment, host_name)
         return submit_host_job(
             self.runner,
             self._vault,
@@ -502,7 +485,7 @@ class PatchingService:
             )
         connector = self.registry.get(environment)
         host = connector.patchable_host(host_name)
-        self._ensure_host_free(environment, host_name)
+        ensure_host_free(self._store, environment, host_name)
         return submit_host_job(
             self.runner,
             self._vault,
@@ -547,20 +530,14 @@ class PatchingService:
             ctx.log(f"uploading {package} ({local_size} bytes) to {host.name}:{remote_path}")
             reporter = ProgressReporter(ctx, local_size)
             remote_size = client.put(str(local_path), remote_path, progress=reporter)
-            if remote_size != local_size:
-                raise TransportError(
-                    f"size mismatch after upload: local {local_size}, remote {remote_size}"
-                )
-            ctx.log("upload complete and size-verified")
-
-            ctx.log("verifying sha1 of the uploaded copy before import")
-            remote_sha1 = self._remote_sha1(client, remote_path)
-            if remote_sha1 != expected_sha1.lower():
-                raise TransportError(
-                    f"sha1 mismatch after upload: expected {expected_sha1}, "
-                    f"remote copy at {remote_path} hashes to {remote_sha1}"
-                )
-            ctx.log("sha1 verified — remote copy matches the stored package")
+            verify_uploaded_file(
+                client,
+                remote_path,
+                remote_size=remote_size,
+                expected_size=local_size,
+                expected_sha1=expected_sha1,
+                ctx=ctx,
+            )
 
             ctx.raise_if_cancelled()  # last safe stop before mutating CPUSE state
             ctx.log("importing into CPUSE repository (installer import local)")
@@ -695,21 +672,6 @@ class PatchingService:
         except ValueError as exc:
             raise TransportError(f"unexpected `df` output for {path}: {result.stdout!r}") from exc
         return available_kb * 1024
-
-    def _remote_sha1(self, client: Transport, remote_path: str) -> str:
-        """sha1 of the just-uploaded file, computed on the host itself — catches
-        a corrupted/truncated transfer before `installer import` ever runs
-        (the size check alone wouldn't notice bit-level corruption)."""
-        result = client.run(f"sha1sum {remote_path}")
-        if not result.ok:
-            detail = result.stderr.strip() or result.stdout.strip()
-            raise TransportError(f"could not compute remote sha1 for {remote_path}: {detail}")
-        digest = result.stdout.split()[0] if result.stdout.split() else ""
-        if not digest:
-            raise TransportError(
-                f"unexpected `sha1sum` output for {remote_path}: {result.stdout!r}"
-            )
-        return digest.lower()
 
     def _wait_until_imported(
         self, cpuse: CPUSE, package_filename: str, hf_config: HfConfig | None, ctx: JobContext
@@ -1095,18 +1057,3 @@ class PatchingService:
             )
         self._store.set_install_log(ctx.job.id, text, path)
         ctx.log(f"captured installation log from {path} ({len(text)} bytes)")
-
-
-class ProgressReporter:
-    """Paramiko progress callback that logs at ~10% steps, not every chunk."""
-
-    def __init__(self, ctx: JobContext, total: int) -> None:
-        self._ctx = ctx
-        self._total = max(total, 1)
-        self._last_decile = 0
-
-    def __call__(self, transferred: int, _total: int) -> None:
-        decile = (transferred * 10) // self._total
-        if decile > self._last_decile:
-            self._last_decile = decile
-            self._ctx.log(f"upload progress: {min(decile * 10, 100)}%")

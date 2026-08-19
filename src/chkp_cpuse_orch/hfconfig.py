@@ -155,9 +155,7 @@ def _find_metadata(fileobj: io.IOBase, depth: int) -> tuple[bytes, bytes | None]
     try:
         with tarfile.open(fileobj=fileobj, mode="r:*") as tar:
             members = tar.getmembers()
-            root_hf = next(
-                (m for m in members if m.isfile() and m.name == _HF_CONFIG_NAME), None
-            )
+            root_hf = next((m for m in members if m.isfile() and m.name == _HF_CONFIG_NAME), None)
             if root_hf is not None:
                 extracted = tar.extractfile(root_hf)
                 if extracted is not None:

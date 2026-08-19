@@ -2230,6 +2230,71 @@ document.getElementById("bulk-import-cloud-btn").addEventListener("click", () =>
 // CDT bulk gateway-fleet push below. Reuses renderStateRow/renderInstallSelect
 // (already generic over row/data shape) and the shared bulkImport() helper.
 
+// Mirrors packages.py's package_kind() — same three-line extension check,
+// kept in sync by hand (packages.py can't import this, and this can't
+// import Python; see .claude/memory/spark-firmware-patching.md). Drives the
+// Firewalls-panel package/firewall mutual filtering below — the Management
+// Servers panel's equivalent selectors are untouched.
+function packageKind(filename) {
+  const lower = filename.toLowerCase();
+  if (lower.endsWith(".img")) return "spark_image";
+  if (lower.endsWith(".tar") || lower.endsWith(".tgz") || lower.endsWith(".tar.gz")) return "archive";
+  return "unknown";
+}
+
+function firewallRowKind(role) {
+  return role === "spark_firewall" ? "spark_image" : "archive";
+}
+
+// Disables (never removes) any firewall row whose kind doesn't match `kind`
+// (null = no lock, nothing disabled by kind) and unchecks it if it was
+// checked — a row already job-active (markRowIfJobActive hid its checkbox)
+// is left alone, that disable reason is independent of this one. Shared by
+// both filtering directions below so there's one source of truth for what
+// "locked" means on a row.
+function setFirewallRowLock(kind) {
+  for (const cb of document.querySelectorAll("#firewalls-table .fw-select")) {
+    if (cb.classList.contains("hidden")) continue; // job-active — not ours to touch
+    const row = cb.closest("tr");
+    const mismatched = kind !== null && firewallRowKind(row.dataset.role) !== kind;
+    cb.disabled = mismatched;
+    if (mismatched && cb.checked) cb.checked = false;
+  }
+  updateFirewallSelectAllState();
+}
+
+function checkedFirewallRowKind() {
+  const cb = document.querySelector("#firewalls-table .fw-select:checked");
+  return cb ? firewallRowKind(cb.closest("tr").dataset.role) : null;
+}
+
+// Row-driven direction: called on loadFirewalls() rebuild and on every row
+// checkbox change. Derives the locked kind from whichever rows are already
+// checked, then filters the bulk-import package <select> to match (clearing
+// the current pick if it no longer qualifies) and locks the remaining rows.
+function applyFirewallPackageFilter() {
+  const kind = checkedFirewallRowKind();
+  const select = document.getElementById("fw-bulk-import-package");
+  let selectionStillMatches = !select.value;
+  for (const opt of select.options) {
+    if (!opt.value) continue; // the "— package —" placeholder
+    const mismatched = kind !== null && packageKind(opt.value) !== kind;
+    opt.disabled = mismatched;
+    if (opt.value === select.value) selectionStillMatches = !mismatched;
+  }
+  if (!selectionStillMatches) {
+    select.value = "";
+    toast("Cleared the package selection — it no longer matches the firewalls you've selected.");
+  }
+  setFirewallRowLock(kind);
+}
+
+// Package-driven direction: called on #fw-bulk-import-package's own change.
+function applyFirewallRowLockFromPackage() {
+  const value = document.getElementById("fw-bulk-import-package").value;
+  setFirewallRowLock(value ? packageKind(value) : null);
+}
+
 // Bumped on every call, checked after the awaits below — any two callers
 // racing loadFirewalls() (e.g. the firewall-remove handler's own reload
 // landing mid-flight with a pollJobs()-triggered loadServers()->loadFirewalls()
@@ -2271,7 +2336,7 @@ async function loadFirewalls() {
     const row = el("tpl-firewall-row");
     const selectCb = row.querySelector(".fw-select");
     selectCb.dataset.firewall = fw.name; // read by the bulk-import buttons
-    selectCb.addEventListener("change", updateFirewallSelectAllState);
+    selectCb.addEventListener("change", applyFirewallPackageFilter);
     markRowIfJobActive(selectCb, fw.name);
     row.querySelector(".fw-name-link").textContent = fw.name;
     row.querySelector(".fw-address").textContent = fw.address;
@@ -2296,6 +2361,11 @@ async function loadFirewalls() {
     stateRow
       .querySelector(".srv-spark-bootstrap-link")
       .addEventListener("click", () => openSparkBootstrapModal(fw.name));
+    const sparkTestCredsLink = stateRow.querySelector(".srv-spark-test-creds-link");
+    // Shown proactively for every Spark row (not just reactively after an
+    // auth failure like the bootstrap link above) — it's useful any time.
+    sparkTestCredsLink.classList.toggle("hidden", fw.role !== "spark_firewall");
+    sparkTestCredsLink.addEventListener("click", () => testSparkCredentials(fw.name));
     row.querySelector(".btn-install").addEventListener("click", () => installFirewallPackage(fw.name, row));
     row.querySelector(".btn-uninstall").addEventListener("click", () => openUninstallModal("firewall", fw.name, row));
     // The name itself is the row's only Edit trigger now — Remove lives inside
@@ -2315,7 +2385,9 @@ async function loadFirewalls() {
   if (!editable.length) {
     emptyRow(tbody, 6, "No firewalls yet — add one manually or discover from a primary.");
   }
-  updateFirewallSelectAllState(); // rows were just rebuilt — reset to "none selected"
+  // Rows were just rebuilt — reset select-all state and the package/row kind
+  // lock together (restored selections may already imply a lock).
+  applyFirewallPackageFilter();
 }
 
 async function refreshFirewallState(name, row, stateRow) {
@@ -2354,6 +2426,26 @@ async function refreshFirewallState(name, row, stateRow) {
     }
   } finally {
     link.disabled = false;
+  }
+}
+
+// Spark rows' "Test Credentials" link — SSH login + expert-mode escalation,
+// nothing more (see services/spark_patching.py). Submit-and-toast, like
+// every other job-submitting action in this app; progress/result show up on
+// the Jobs tab rather than an inline poll here.
+async function testSparkCredentials(name) {
+  const extra = await operationCredentials(name, "test SSH login and the expert-mode password");
+  if (extra === null) return; // credential prompt cancelled
+  try {
+    const job = await api(envUrl(`/firewalls/${encodeURIComponent(name)}/spark-test-credentials`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(extra),
+    });
+    lastJobStatus.set(job.id, job.status);
+    toast(`Credential test started for ${name} — see the Jobs tab for the result.`);
+  } catch (e) {
+    toast("Could not start the credential test: " + e.message);
   }
 }
 
@@ -2623,13 +2715,35 @@ document.getElementById("fw-select-all").addEventListener("change", (ev) => {
   for (const cb of document.querySelectorAll("#firewalls-table .fw-select:not(:disabled)")) {
     cb.checked = ev.target.checked;
   }
-  updateFirewallSelectAllState();
+  // Rows of only one kind were enabled to begin with (see setFirewallRowLock)
+  // unless nothing was locked yet, in which case this re-derives a lock from
+  // whichever kind ends up first and corrects the rest.
+  applyFirewallPackageFilter();
 });
+
+document.getElementById("fw-bulk-import-package").addEventListener("change", applyFirewallRowLockFromPackage);
 
 document.getElementById("fw-bulk-import-btn").addEventListener("click", () => {
   const btn = document.getElementById("fw-bulk-import-btn");
   const pkg = document.getElementById("fw-bulk-import-package").value;
   if (!pkg) { toast("Choose a package first."); return; }
+  if (packageKind(pkg) === "spark_image") {
+    bulkImport(btn, selectedFirewallNames, async (name) => {
+      const extra = await operationCredentials(name, "transfer and upgrade a Spark firmware image");
+      if (extra === null) { toast(`Skipped ${name}: credentials not provided.`); return; }
+      if (!confirm(
+        `Upgrade ${name} to ${pkg}?\n\nThe firewall reboots on its own once the transfer ` +
+        "completes — this cannot be undone or cancelled after the upgrade command is issued."
+      )) return;
+      const job = await api(envUrl(`/firewalls/${encodeURIComponent(name)}/spark-transfer-upgrade`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ package: pkg, confirmed: true, ...extra }),
+      });
+      lastJobStatus.set(job.id, job.status);
+    });
+    return;
+  }
   bulkImport(btn, selectedFirewallNames, async (name) => {
     const extra = await operationCredentials(name, "import a package");
     if (extra === null) { toast(`Skipped ${name}: credentials not provided.`); return; }
