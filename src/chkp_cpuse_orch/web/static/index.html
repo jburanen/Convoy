@@ -56,35 +56,45 @@
     <span id="cred-cache-text"></span>
     <button id="cred-cache-forget" class="small">Forget now</button>
   </div>
-  <nav id="tabs">
-    <button class="tab-btn" data-tab="provisioning">Provisioning</button>
-    <button class="tab-btn" data-tab="packages">Packages</button>
-    <button class="tab-btn" data-tab="management">Manual Patching (CPUSE)</button>
-    <button class="tab-btn wip" data-tab="gateways" disabled
-            title="Work in progress — coming soon">Bulk Patching (CDT) Firewalls only</button>
-    <button class="tab-btn" data-tab="jobs">Jobs<span id="jobs-badge" class="tab-badge hidden"></span></button>
-  </nav>
-
-  <!-- Descriptive guide under the tab bar: one block per tab, always visible on
-       every tab, distributed in five equal columns with a right-pointing chevron
-       between them to signal the intended left-to-right sequential workflow. The
-       whole row slides horizontally (positionTabGuide in app.js) so the active
-       tab's block centers under its tab; content sliding off the left edge fades
-       out via the viewport's mask. -->
-  <div id="tab-guide-viewport">
-    <div id="tab-guide">
-      <p class="tab-guide-item" data-tab="provisioning">Bootstrap initial access to primary management and discover other servers</p>
-      <span class="tab-guide-chevron" aria-hidden="true">&rsaquo;</span>
-      <p class="tab-guide-item" data-tab="packages">Upload, stage, and manage packages for deployment</p>
-      <span class="tab-guide-chevron" aria-hidden="true">&rsaquo;</span>
-      <p class="tab-guide-item" data-tab="management">Deploy patches to management servers and a few firewalls using CPUSE</p>
-      <span class="tab-guide-chevron" aria-hidden="true">&rsaquo;</span>
-      <p class="tab-guide-item" data-tab="gateways">Version 2.0 will add bulk patching on firewalls using the Central Deployment Tool</p>
-      <span class="tab-guide-chevron" aria-hidden="true">&rsaquo;</span>
-      <p class="tab-guide-item" data-tab="jobs">Monitor job status and results</p>
-    </div>
-  </div>
 </header>
+
+<!-- Tabs live OUTSIDE <header> on purpose: a position:sticky element can only
+     stay pinned within the height of its containing block, and <header> is
+     short (title + status chips) — nested there, #tabs would run out of room
+     to stick a screen's height into any tab's content and just scroll away
+     with the rest of the header. As a sibling of <header>/<main>/<footer>
+     directly under <body> (tall as the whole page), it has room to stay
+     pinned to the top of the viewport for the full scroll. The descriptive
+     guide row below it deliberately does NOT get the same treatment — only
+     the tabs themselves need to stay reachable while scrolling. -->
+<nav id="tabs">
+  <button class="tab-btn" data-tab="provisioning">Provisioning</button>
+  <button class="tab-btn" data-tab="packages">Packages</button>
+  <button class="tab-btn" data-tab="management">Manual Patching (CPUSE)</button>
+  <button class="tab-btn wip" data-tab="gateways" disabled
+          title="Work in progress — coming soon">Bulk Patching (CDT) Firewalls only</button>
+  <button class="tab-btn" data-tab="jobs">Jobs<span id="jobs-badge" class="tab-badge hidden"></span></button>
+</nav>
+
+<!-- Descriptive guide under the tab bar: one block per tab, always visible on
+     every tab, distributed in five equal columns with a right-pointing chevron
+     between them to signal the intended left-to-right sequential workflow. The
+     whole row slides horizontally (positionTabGuide in app.js) so the active
+     tab's block centers under its tab; content sliding off the left edge fades
+     out via the viewport's mask. -->
+<div id="tab-guide-viewport">
+  <div id="tab-guide">
+    <p class="tab-guide-item" data-tab="provisioning">Bootstrap initial access to primary management and discover other servers</p>
+    <span class="tab-guide-chevron" aria-hidden="true">&rsaquo;</span>
+    <p class="tab-guide-item" data-tab="packages">Upload, stage, and manage packages for deployment</p>
+    <span class="tab-guide-chevron" aria-hidden="true">&rsaquo;</span>
+    <p class="tab-guide-item" data-tab="management">Deploy patches to management servers and a few firewalls using CPUSE</p>
+    <span class="tab-guide-chevron" aria-hidden="true">&rsaquo;</span>
+    <p class="tab-guide-item" data-tab="gateways">Version 2.0 will add bulk patching on firewalls using the Central Deployment Tool</p>
+    <span class="tab-guide-chevron" aria-hidden="true">&rsaquo;</span>
+    <p class="tab-guide-item" data-tab="jobs">Monitor job status and results</p>
+  </div>
+</div>
 
 <main>
 

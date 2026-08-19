@@ -2711,10 +2711,16 @@ async function installFirewallPackage(name, row) {
   if (!select.value) { toast("Choose a package first."); return; }
   const packageId = select.value;
   const verifyFirst = !row.querySelector(".skip-verify").checked;
+  // Spark ignores verify_first server-side (no `installer verify` step on
+  // Gaia Embedded — see services/spark_patching.py's submit_install) and its
+  // skip-verify checkbox is hidden (syncActionButtons), but the underlying
+  // input still carries the environment's default checked state — don't
+  // surface a CPUSE-only line about it here either.
+  const isSpark = row.dataset.role === "spark_firewall";
   // Installs can REBOOT the firewall — always confirm explicitly.
   const sure = confirm(
     `Install ${packageId} on ${name}?\n\n` +
-    (verifyFirst ? "" : "Skipping `installer verify` — installing directly.\n\n") +
+    (!isSpark && !verifyFirst ? "Skipping `installer verify` — installing directly.\n\n" : "") +
     "This may reboot the firewall when it completes. " +
     "Make sure this is inside a maintenance window and any HA peer is healthy."
   );

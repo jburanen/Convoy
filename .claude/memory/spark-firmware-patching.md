@@ -10,11 +10,14 @@ Spark (Quantum Spark / Gaia Embedded) firewalls don't go through CPUSE or CDT
 sequence, 2026-08-19): SSH in, `expert`, `bashUser on`, exit expert, log out;
 SCP a `.img` firmware file to `/storage`, verify it, then SSH back in,
 `expert`, `bashUser off` again — that's the whole **transfer** job
-(`spark.scp`). **install** (`spark.install`) is a separate, later job: SSH
-in, `expert`, `bashUser off` (idempotent — already off from transfer, done
-again here regardless since install doesn't assume transfer ever ran),
+(`spark.scp`), and the only place bashUser gets turned back off. **install**
+(`spark.install`) is a separate, later job: SSH in, `expert`,
 `upgrade_revert_image.sh <path> upgrade safe`, which reboots the device on
-its own a minute or two later. Split into two jobs 2026-08-19 (operator-
+its own a minute or two later — it does NOT repeat `bashUser off` (removed
+2026-08-19, same day as the split below; it was a leftover from when
+transfer+install were one combined job and turning it off was the last step
+before the upgrade command, not two independent jobs each responsible for
+their own device-state cleanup). Split into two jobs 2026-08-19 (operator-
 reported: the Firewalls panel's "Upload and import" button was firing the
 upgrade too, when it should only stage the file — see "The three jobs"
 below). Implemented in `services/spark_patching.py` (`SparkPatchingService`),
@@ -89,14 +92,68 @@ Both are called out in code comments at their definition site.
   `firewall_install` dispatches on `host_role()` the same way the `/state`
   endpoint already did for Refresh). Requires `confirmed=True` (the device
   reboots on its own once the upgrade command is issued — that can't be
-  undone or cancelled after the fact). **Cannot confirm the upgrade
+  undone or cancelled after the fact). **Cannot fully confirm the upgrade
   actually completed** — Spark has nothing like CPUSE's `show installer
-  package` to poll — the job's success only means the command was issued; a
-  `TransportError` raised specifically while waiting on
-  `upgrade_revert_image.sh`'s output is treated as an expected outcome (the
-  device may drop the connection mid-reboot), not a failure. On success it
-  drops the filename from `installable` again — best-effort UI hygiene, not
-  a confirmed-uninstalled guarantee, same caveat as above.
+  package` to poll — success mostly just means the command was issued and
+  returned control, *except* one specific case it does fail closed on: see
+  "Real-hardware finding" below. A `TransportError` raised specifically
+  while waiting on `upgrade_revert_image.sh`'s output is treated as an
+  expected outcome, not a failure — though per that same finding, a
+  dropped connection is actually the *less* likely of the two ways this
+  command normally ends (see below). On success it drops the filename
+  from `installable` again — best-effort UI hygiene, not a confirmed-
+  uninstalled guarantee, same caveat as above.
+
+### Real-hardware finding 2026-08-19: a normal return isn't a success signal, and reboot timing was wrong
+
+An install run against `lab02-1550` returned "job succeeded" after output
+ending in `mke2fs 1.44.1 ... /dev/mmcblk1p6 is mounted; will not make a
+filesystem here! ... tune2fs 1.44.1 (24-Mar-2018)`, while manually running
+the identical command moments later got much further (full `mke2fs`
+success, filesystem creation, then a *different*, later failure inside
+`preboot.sh`: `"unitVer" not defined`, `rc=-11`). The operator supplied
+Check Point's actual `upgrade_revert_image.sh` source for comparison
+(not committed to this repo — vendor script, can't be redistributed here;
+ask the operator if you need to see it again). Two things it revealed,
+neither a truncated-capture artifact — `expect()` only returns once the
+literal prompt reappears, so the tool's session genuinely got everything
+the device sent:
+
+1. **The mount conflict likely wasn't fatal to the script**, which is worse
+   than it failing outright. `mount_pfrm_inactive_part()` runs `mke2fs`,
+   then unconditionally runs `tune2fs`, then runs `mount` — and checks
+   *`mount`'s* exit status, not `mke2fs`'s. If the partition's already
+   mounted (a stale mount from an earlier, incomplete attempt on the same
+   device — plausible operational history, not something this tool caused
+   directly), `mke2fs` refuses but the subsequent `mount` likely succeeds
+   as a no-op, so the function returns success and the script proceeds to
+   extract the new rootfs onto a partition that was never reformatted.
+   Fixed: `_run_upgrade` now scans the captured output for `mke2fs`'s own
+   fixed refusal text (`_STALE_MOUNT_MARKER`, e2fsprogs wording, not a
+   Check Point string) and raises `JobError` — job reported FAILED, not
+   SUCCEEDED — telling the operator to reboot the firewall to clear the
+   stale mount before retrying. This is the one specific case the job can
+   detect; anything else Check Point's script might do wrong internally is
+   still invisible to us.
+2. **The "wait for the connection to drop, that means it's rebooting"
+   framing was wrong.** `quit_upgrade_revert_image()` — the script's single
+   exit function, called on both success and failure — *schedules* the
+   reboot (writes a DB flag, default `rebootTime` ~60s out) and then exits
+   immediately; it does not wait for the reboot itself. So the SSH session
+   returning control normally is the *expected* outcome on success, not
+   evidence against it — the actual reboot happens up to ~60s later,
+   asynchronously, well after this tool has already disconnected. Fixed:
+   reworded `_run_upgrade`'s log messages away from "the firewall will
+   reboot in ~1-2 minutes, this job cannot wait for that" (implying we're
+   the ones giving up early) to reflect that the script itself returns
+   before the reboot on every path, success included.
+
+Do not add further success/failure text-scanning beyond `_STALE_MOUNT_MARKER`
+without new real-hardware evidence for each specific string — `mke2fs`'s
+message is safe to match because it's a well-known third-party tool's fixed
+wording, not a guess at this vendor script's internal, unseen conventions
+(`write_log`/`output_error`'s exact terminal-visibility is still unknown —
+`image_common.sh`, which defines them, hasn't been seen).
 
 All three require the assigned credential set to carry an expert-mode
 password (`CredentialKind.EXPERT_PASSWORD` — see [[credential-sets]] and

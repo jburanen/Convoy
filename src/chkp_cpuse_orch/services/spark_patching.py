@@ -40,10 +40,14 @@ Three job kinds:
   always — nothing stops issuing install against a file staged some other
   way, same as CPUSE's install trusts its own picker rather than re-checking
   device state). Requires ``confirmed=True``: the device reboots on its own
-  once the upgrade command is issued, and that can't be undone or cancelled
-  after the fact. The job cannot and does not confirm the upgrade actually
-  completed — Spark has nothing like CPUSE's ``show installer package`` to
-  poll — success here only means the command was issued.
+  once the upgrade command is issued (scheduled by the script itself for
+  ~1 minute out — it returns control on both success and failure well
+  before that, it doesn't wait for the reboot), and that can't be undone or
+  cancelled after the fact. The job cannot and does not fully confirm the
+  upgrade actually completed — Spark has nothing like CPUSE's ``show
+  installer package`` to poll — but it does fail closed on one specific,
+  confirmed-on-real-hardware bad outcome (see ``_STALE_MOUNT_MARKER``);
+  beyond that, success only means the command was issued.
 
 Refresh (``detect``, not a job — synchronous, mirrors ``PatchingService.
 detect()``'s shape) is also Spark-specific: there's no CPUSE agent on Gaia
@@ -98,9 +102,25 @@ JOB_INSTALL = "spark.install"
 # Gaia Embedded's fixed staging location for upgrade_revert_image.sh.
 _STORAGE_DIR = "/storage"
 
-# Generous — the script validates the image and may take a while before
-# either printing something or the device drops the connection to reboot.
+# Generous — the script validates the image and copies/extracts a large
+# rootfs before returning control, which can take a while. Per
+# upgrade_revert_image.sh's own quit_upgrade_revert_image(), the script exits
+# (and this returns) on BOTH success and failure — it only *schedules* the
+# reboot (a DB flag, default ~60s out) before exiting, it doesn't wait for
+# it — so a normal return here is expected either way, not just on failure;
+# the device rebooting is a separate, later event this SSH session won't
+# see. A dropped connection mid-response is still handled below as a
+# plausible (if less likely, given the above) outcome, not assumed away.
 _UPGRADE_TIMEOUT = 120.0
+
+# mke2fs's own refusal message (not a Check Point string — e2fsprogs' fixed
+# wording) when the inactive partition is already mounted — confirmed via
+# the actual upgrade_revert_image.sh source: mount_pfrm_inactive_part()
+# only checks the *following* `mount` command's exit status, not mke2fs's,
+# so this failure doesn't necessarily abort the script — it can silently
+# extract the new rootfs onto a partition that was never reformatted. Real-
+# hardware-confirmed 2026-08-19, see .claude/memory/spark-firmware-patching.md.
+_STALE_MOUNT_MARKER = "is mounted; will not make a filesystem here"
 
 # `fw ver`'s banner opens with "This is Check Point's " before the actual
 # model/version/build text we want — strip it. `.` (not a literal `'`)
@@ -284,9 +304,10 @@ class SparkPatchingService:
         credentials: CredentialBundle | None = None,
         triggered_by: str | None = None,
     ) -> JobRecord:
-        """Enqueue: expert mode -> bashUser off -> upgrade_revert_image.sh
-        ... upgrade safe, against a ``.img`` expected to already be staged
-        in ``/storage`` by a prior transfer job. ``confirmed`` must be True —
+        """Enqueue: expert mode -> upgrade_revert_image.sh ... upgrade safe,
+        against a ``.img`` expected to already be staged in ``/storage`` by
+        a prior transfer job (which already left bashUser off — this job
+        doesn't repeat that). ``confirmed`` must be True —
         the device reboots on its own once the upgrade command is issued,
         and that can't be undone or cancelled. Doesn't re-check device state
         before enqueuing (same trust-the-picker posture as CPUSE's
@@ -408,11 +429,10 @@ class SparkPatchingService:
         self._transfer_image(
             connector, host, bundle, local_path, local_size, expected_sha1, remote_path, ctx
         )
-        # Restore the device to its normal (bashUser off) state now rather than
-        # leaving SCP/shell access enabled until whenever install eventually
-        # runs — install re-disables it itself right before the upgrade command
-        # anyway (see _run_upgrade), so this is just cleanup, not a functional
-        # prerequisite for either job.
+        # Restore the device to its normal (bashUser off) state now rather
+        # than leaving SCP/shell access enabled until whenever install
+        # eventually runs — install (_run_upgrade) does NOT repeat this, so
+        # it's the only place bashUser gets turned back off.
         self._disable_bash_user(connector, host, bundle, expert_password, ctx)
 
         self._mark_staged(ctx.job.environment, host.name, package)
@@ -566,9 +586,10 @@ class SparkPatchingService:
         self._unmark_staged(ctx.job.environment, host.name, package)
 
         ctx.log(
-            "upgrade command issued — the firewall is expected to reboot on its own within "
-            "1-2 minutes; this job does not and cannot confirm the upgrade's outcome, use "
-            "Refresh to check post-reboot state once it's back up",
+            "upgrade_revert_image.sh returned control and scheduled a reboot (~1 minute "
+            "out per the script's own default) — this job does not and cannot fully "
+            "confirm the upgrade's outcome from its output alone, use Refresh to check "
+            "post-reboot state once it's back up",
             level="warning",
         )
 
@@ -591,18 +612,31 @@ class SparkPatchingService:
             # LAST safe stop — the upgrade command below cannot be undone or
             # cancelled once issued.
             ctx.raise_if_cancelled()
-            output = session.run_expert("bashUser off")
-            if output:
-                ctx.log(f"bashUser off output:\n{output}")
+            # bashUser off is _do_transfer's job (its last step, before this
+            # one is ever triggered) — not this job's; re-running it here was
+            # leftover from when transfer+install were one combined job.
             upgrade_cmd = f"upgrade_revert_image.sh {remote_path} upgrade safe"
             ctx.log(
-                f"starting upgrade: {upgrade_cmd} — the firewall will reboot on its own "
-                "in ~1-2 minutes; this job cannot wait for that"
+                f"starting upgrade: {upgrade_cmd} — waiting for it to return control "
+                "(the script exits on success too, well before the reboot it schedules "
+                "for ~1 minute later; this session isn't expected to see that reboot)"
             )
             try:
                 output = session.run_expert(upgrade_cmd, timeout=_UPGRADE_TIMEOUT)
                 if output:
                     ctx.log(f"upgrade command output:\n{output}")
+                if _STALE_MOUNT_MARKER in output:
+                    raise JobError(
+                        "mke2fs refused to format the inactive partition — "
+                        f"{_STALE_MOUNT_MARKER!r} — it was already mounted, almost "
+                        "certainly a stale mount left by an earlier, incomplete upgrade "
+                        "attempt on this device. upgrade_revert_image.sh's own "
+                        "mount_pfrm_inactive_part() only checks the *following* `mount` "
+                        "command's exit status, not mke2fs's, so it likely continued "
+                        "anyway and extracted the new image onto a partition that was "
+                        "never actually reformatted — do not trust this upgrade; reboot "
+                        "the firewall to clear the stale mount before retrying"
+                    )
             except TransportError as exc:
                 # Expected outcome, not a failure: the device may drop the
                 # connection mid-response as it begins rebooting.
