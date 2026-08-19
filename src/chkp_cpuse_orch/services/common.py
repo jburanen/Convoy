@@ -19,10 +19,10 @@ from ..credentials import (
     JobCredentialVault,
     ensure_ssh_credential,
 )
-from ..errors import CredentialError, InventoryError
+from ..errors import CredentialError, InventoryError, JobError, TransportError
 from ..inventory import FIREWALL_ROLES, MANAGEMENT_PLANE_ROLES, Host, Inventory, Role
-from ..jobs import JobRunner
-from ..store import JobRecord, new_id
+from ..jobs import JobContext, JobRunner
+from ..store import JobRecord, JobStatus, Store, new_id
 from ..transport.ssh import CommandResult, SSHClient
 
 _MGMT_ROLES = MANAGEMENT_PLANE_ROLES
@@ -132,6 +132,18 @@ class HostConnector:
         host = self.inventory.host(host_name)  # raises InventoryError if unknown
         if host.role not in _FW_ROLES:
             raise InventoryError(f"host {host_name!r} is a {host.role.value}, not a firewall")
+        return host
+
+    def spark_firewall_host(self, host_name: str) -> Host:
+        """Resolve a host that must specifically be a Spark (Gaia Embedded)
+        firewall — stricter than patchable_host() (which accepts any
+        CPUSE-patchable host, Spark included): the expert-mode SSH commands
+        the Spark patching service issues are meaningless on a Gaia gateway
+        or management server, so this fails closed rather than let a
+        mis-targeted job run them there."""
+        host = self.inventory.host(host_name)  # raises InventoryError if unknown
+        if host.role != Role.SPARK_FIREWALL:
+            raise InventoryError(f"host {host_name!r} is a {host.role.value}, not a Spark firewall")
         return host
 
     def patchable_host(self, host_name: str) -> Host:
@@ -247,6 +259,92 @@ def job_run_credentials(
     if connector.credential_storage_enabled:
         return None
     return vault.require(job.id)
+
+
+def ensure_host_free(store: Store, environment: str, host_name: str) -> None:
+    """Refuse to start a new job while one is already pending/running for this
+    host — two operations touching the same box's CPUSE/SSH (or, for Spark,
+    expert-mode) state at once is unsafe. Mirrors the Firewalls/Management tab
+    UI, which replaces a busy host's selection checkbox with a status glyph
+    for the same reason (see app.js markRowIfJobActive) — this is the
+    enforcement behind that, since a stale page or a direct API call could
+    otherwise still race two jobs onto the same host. Scoped to the
+    environment too — host names are only unique within one, not globally.
+    Shared by every host-job-submitting service (PatchingService,
+    SparkPatchingService)."""
+    active = store.list_jobs(
+        targets=[host_name],
+        environments=[environment],
+        statuses=[JobStatus.PENDING, JobStatus.RUNNING],
+        limit=1,
+    )
+    if active:
+        raise JobError(
+            f"a job is already {active[0].status.value} for {host_name!r} — wait for it "
+            "to finish before starting another"
+        )
+
+
+class ProgressReporter:
+    """Paramiko progress callback that logs at ~10% steps, not every chunk.
+    Shared by PatchingService's CPUSE import and SparkPatchingService's
+    firmware-image transfer — both upload a large file over the same
+    ``Transport.put()`` mechanism."""
+
+    def __init__(self, ctx: JobContext, total: int) -> None:
+        self._ctx = ctx
+        self._total = max(total, 1)
+        self._last_decile = 0
+
+    def __call__(self, transferred: int, _total: int) -> None:
+        decile = (transferred * 10) // self._total
+        if decile > self._last_decile:
+            self._last_decile = decile
+            self._ctx.log(f"upload progress: {min(decile * 10, 100)}%")
+
+
+def remote_sha1(client: Transport, remote_path: str) -> str:
+    """sha1 of a just-uploaded file, computed on the host itself — catches a
+    corrupted/truncated transfer before it's acted on (the size check alone
+    wouldn't notice bit-level corruption). Shared by PatchingService and
+    SparkPatchingService."""
+    result = client.run(f"sha1sum {remote_path}")
+    if not result.ok:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise TransportError(f"could not compute remote sha1 for {remote_path}: {detail}")
+    digest = result.stdout.split()[0] if result.stdout.split() else ""
+    if not digest:
+        raise TransportError(f"unexpected `sha1sum` output for {remote_path}: {result.stdout!r}")
+    return digest.lower()
+
+
+def verify_uploaded_file(
+    client: Transport,
+    remote_path: str,
+    *,
+    remote_size: int,
+    expected_size: int,
+    expected_sha1: str,
+    ctx: JobContext,
+) -> None:
+    """Fail closed on either a size mismatch (from the upload's own return
+    value — the caller passes it in rather than re-stat'ing) or a host-side
+    sha1 recompute mismatch, before the caller acts on the uploaded file.
+    Shared by PatchingService's CPUSE import and SparkPatchingService's
+    firmware-image transfer."""
+    if remote_size != expected_size:
+        raise TransportError(
+            f"size mismatch after upload: local {expected_size}, remote {remote_size}"
+        )
+    ctx.log("upload complete and size-verified")
+    ctx.log("verifying integrity of the uploaded copy")
+    digest = remote_sha1(client, remote_path)
+    if digest != expected_sha1.lower():
+        raise TransportError(
+            f"sha1 mismatch after upload: expected {expected_sha1}, "
+            f"remote copy at {remote_path} hashes to {digest}"
+        )
+    ctx.log("sha1 verified — remote copy matches the stored file")
 
 
 def api_auth(bundle: CredentialBundle) -> dict[str, Any]:

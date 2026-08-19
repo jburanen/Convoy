@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 
+from chkp_cpuse_orch.errors import TransportError
 from chkp_cpuse_orch.transport.ssh import CommandResult
 
 # Canned CPUSE output used across tests: one imported, one installed package.
@@ -23,11 +24,19 @@ Resp = str | tuple[int, str]
 
 
 class FakeTransport:
-    """Satisfies services.common.Transport. Replies come from ``responses``:
-    the first key found as a substring of the command wins."""
+    """Satisfies services.common.Transport (and, via open_interactive_shell,
+    services.spark_patching.ExpertCapableTransport). Replies come from
+    ``responses``: the first key found as a substring of the command wins."""
 
     def __init__(
-        self, responses: dict[str, Resp | list[Resp]] | None = None, fail_rc: int = 0
+        self,
+        responses: dict[str, Resp | list[Resp]] | None = None,
+        fail_rc: int = 0,
+        *,
+        expert_password: str = "expert-pw",
+        expert_wrong_password: bool = False,
+        expert_command_outputs: dict[str, str] | None = None,
+        expert_drop_on: str | None = None,
     ) -> None:
         self.responses = responses or {}
         self.fail_rc = fail_rc  # set non-zero to make every command fail
@@ -36,6 +45,15 @@ class FakeTransport:
         self.closed = False
         # Override to fake a bad upload (e.g. lambda local: 0 for a size mismatch).
         self.put_size: Callable[[str], int] = lambda local: os.path.getsize(local)
+        # -- expert-mode (Spark) scripting — see FakeInteractiveShell below --
+        self.expert_password = expert_password
+        self.expert_wrong_password = expert_wrong_password
+        self.expert_command_outputs = expert_command_outputs or {}
+        # Substring of a run_expert() command that should raise TransportError
+        # from expect() instead of returning — simulates the device dropping
+        # the connection mid-reboot.
+        self.expert_drop_on = expert_drop_on
+        self.interactive_shells: list[FakeInteractiveShell] = []
 
     def run(self, command: str, *, timeout: float | None = None) -> CommandResult:
         self.commands.append(command)
@@ -75,6 +93,69 @@ class FakeTransport:
         if progress is not None:
             progress(size, size)  # single 100% callback
         return size
+
+    def close(self) -> None:
+        self.closed = True
+
+    def open_interactive_shell(self) -> FakeInteractiveShell:
+        shell = FakeInteractiveShell(
+            expert_password=self.expert_password,
+            wrong_password=self.expert_wrong_password,
+            command_outputs=self.expert_command_outputs,
+            drop_on=self.expert_drop_on,
+        )
+        self.interactive_shells.append(shell)
+        return shell
+
+
+class FakeInteractiveShell:
+    """Fakes transport.ssh.InteractiveShell for GaiaExpertSession tests,
+    without a real pty — same three methods (expect/send_line/send_secret),
+    scripted against a tiny state machine that mimics Gaia's actual
+    expert-mode conversation closely enough to drive the real
+    GaiaExpertSession unchanged: `expert` -> password prompt -> correct/wrong
+    password -> expert prompt (or another password prompt) -> commands echo
+    their scripted output -> `exit` -> login prompt."""
+
+    def __init__(
+        self,
+        *,
+        expert_password: str = "expert-pw",
+        wrong_password: bool = False,
+        command_outputs: dict[str, str] | None = None,
+        drop_on: str | None = None,
+    ) -> None:
+        self._expert_password = expert_password
+        self._wrong_password = wrong_password
+        self._command_outputs = command_outputs or {}
+        self._drop_on = drop_on
+        self._last = ""
+        self._last_secret: str | None = None
+        self.sent: list[str] = []
+        self.closed = False
+
+    def send_line(self, text: str) -> None:
+        self.sent.append(text)
+        self._last = text
+
+    def send_secret(self, text: str) -> None:
+        self.sent.append("***")
+        self._last_secret = text
+
+    def expect(self, pattern: str, *, timeout: float | None = None) -> str:
+        if self._drop_on is not None and self._drop_on in self._last:
+            raise TransportError(f"fake: connection dropped while waiting for {pattern!r}")
+        if self._last_secret is not None:
+            password, self._last_secret = self._last_secret, None
+            if password == self._expert_password and not self._wrong_password:
+                return "[Expert@host]# "
+            return "wrong password\nPassword: "
+        if self._last == "expert":
+            return "Password: "
+        if self._last == "exit":
+            return "host> "
+        output = self._command_outputs.get(self._last, "")
+        return f"{self._last}\n{output}\n[Expert@host]# "
 
     def close(self) -> None:
         self.closed = True

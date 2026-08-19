@@ -31,6 +31,13 @@ class ManagementAPIForbidden(TransportError):
     triggers in the discovery UI."""
 
 
+class ExpertModeError(TransportError):
+    """Gaia `expert` escalation failed: wrong expert password, or an
+    unexpected prompt/output. Distinct from a bare timeout so callers (the
+    Spark test-credentials/transfer jobs) can report "expert password
+    rejected" rather than a generic connectivity failure."""
+
+
 class CDTError(OrchestratorError):
     """The Central Deployment Tool reported a failure."""
 

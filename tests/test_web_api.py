@@ -1523,6 +1523,90 @@ def test_firewall_spark_bootstrap_admin_preview_rejects_non_spark_firewall(
     assert "not a Spark firewall" in resp.json()["detail"]
 
 
+# -- Spark firmware patching (services/spark_patching.py) -------------------------
+
+
+def test_firewall_spark_test_credentials_succeeds(client: TestClient) -> None:
+    # FakeTransport's default expert_password ("expert-pw") matches this set.
+    _put_set(client, ssh_username="admin", ssh_password="s3cret-pw!", expert_password="expert-pw")
+    _add_firewall(client, name="spark-x", address="192.0.2.80", role="spark_firewall")
+    client.post("/api/env/default/firewalls/spark-x/credential", json={"set": "primary"})
+
+    resp = client.post("/api/env/default/firewalls/spark-x/spark-test-credentials")
+    assert resp.status_code == 202, resp.text
+    job = _wait_for_job(client, resp.json()["id"])
+    assert job["status"] == "succeeded", job["error"]
+
+
+def test_firewall_spark_test_credentials_fails_without_expert_password(
+    client: TestClient,
+) -> None:
+    _put_set(client, ssh_username="admin", ssh_password="s3cret-pw!")  # no expert_password
+    _add_firewall(client, name="spark-x", address="192.0.2.80", role="spark_firewall")
+    client.post("/api/env/default/firewalls/spark-x/credential", json={"set": "primary"})
+
+    resp = client.post("/api/env/default/firewalls/spark-x/spark-test-credentials")
+    assert resp.status_code == 202, resp.text
+    job = _wait_for_job(client, resp.json()["id"])
+    assert job["status"] == "failed"
+    assert "no expert-mode password" in job["error"]
+
+
+def test_firewall_spark_test_credentials_rejects_non_spark_firewall(client: TestClient) -> None:
+    _put_set(client, ssh_username="admin", ssh_password="s3cret-pw!")
+    _add_firewall(client, name="fw-x", address="192.0.2.70", role="gateway")
+    client.post("/api/env/default/firewalls/fw-x/credential", json={"set": "primary"})
+
+    resp = client.post("/api/env/default/firewalls/fw-x/spark-test-credentials")
+    assert resp.status_code == 400, resp.text
+    assert "not a Spark firewall" in resp.json()["detail"]
+
+
+def test_firewall_spark_transfer_upgrade_requires_confirmation(client: TestClient) -> None:
+    _put_set(client, ssh_username="admin", ssh_password="s3cret-pw!", expert_password="expert-pw")
+    _add_firewall(client, name="spark-x", address="192.0.2.80", role="spark_firewall")
+    client.post("/api/env/default/firewalls/spark-x/credential", json={"set": "primary"})
+    _upload_package(client, name="spark.img", content=b"x" * 64)
+
+    resp = client.post(
+        "/api/env/default/firewalls/spark-x/spark-transfer-upgrade",
+        json={"package": "spark.img", "confirmed": False},
+    )
+    assert resp.status_code == 400, resp.text
+    assert "confirmation" in resp.json()["detail"]
+
+
+def test_firewall_spark_transfer_upgrade_rejects_non_image_package(client: TestClient) -> None:
+    _put_set(client, ssh_username="admin", ssh_password="s3cret-pw!", expert_password="expert-pw")
+    _add_firewall(client, name="spark-x", address="192.0.2.80", role="spark_firewall")
+    client.post("/api/env/default/firewalls/spark-x/credential", json={"set": "primary"})
+    _upload_package(client, name="jhf.tgz")
+
+    resp = client.post(
+        "/api/env/default/firewalls/spark-x/spark-transfer-upgrade",
+        json={"package": "jhf.tgz", "confirmed": True},
+    )
+    assert resp.status_code == 400, resp.text
+    assert "Spark firmware image" in resp.json()["detail"]
+
+
+def test_firewall_spark_transfer_upgrade_succeeds(client: TestClient) -> None:
+    # sha1 of b"x" * 64 matches the transport fixture's canned `sha1sum` reply
+    # regardless of filename (it hashes content, not the path echoed back).
+    _put_set(client, ssh_username="admin", ssh_password="s3cret-pw!", expert_password="expert-pw")
+    _add_firewall(client, name="spark-x", address="192.0.2.80", role="spark_firewall")
+    client.post("/api/env/default/firewalls/spark-x/credential", json={"set": "primary"})
+    _upload_package(client, name="spark.img", content=b"x" * 64)
+
+    resp = client.post(
+        "/api/env/default/firewalls/spark-x/spark-transfer-upgrade",
+        json={"package": "spark.img", "confirmed": True},
+    )
+    assert resp.status_code == 202, resp.text
+    job = _wait_for_job(client, resp.json()["id"])
+    assert job["status"] == "succeeded", job["error"]
+
+
 # -- jobs -------------------------------------------------------------------------
 
 

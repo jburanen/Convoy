@@ -13,6 +13,7 @@ Patching is supported for:
 ✅ On-Premise Smart Center (SMS) servers  
 ✅ On-Premise Multi-Domain Management (MDM/MDSM) servers  
 ✅ Gaia (Force) firewalls managed by on-prem environments  
+✅ Quantum Spark (Gaia Embedded) firewalls managed by on-prem environments — firmware transfer + upgrade via `upgrade_revert_image.sh`, not CPUSE (Spark doesn't run it) and not CDT (Spark isn't a CDT target)  
 
 ### NOT Supported
 By design, this tool does NOT support patching:  
@@ -24,7 +25,6 @@ By design, this tool does NOT support patching:
 This tool does not CURRENTLY support but may one day support:  
 ⏳ Maestro  
 ⏳ ElasticXL  
-⏳ Spark firewalls managed by above on-prem environments  
 
 ## What it does
 
@@ -92,6 +92,7 @@ These gates define the major version releases - the milestones may change in the
 ◻️ Test firewall cluster name discovery in SMS  
 ✅ Test firewall cluster name discovery in MDS  
 ✅ Test Gaia/Force Gateway patching via CPUSE  
+◻️ Test Spark (Gaia Embedded) firmware patching via upgrade_revert_image.sh  
 ◻️ Packaged deployment release that doesn't require git clone and --build  
 ◻️ Independent agentic code security review  
 
@@ -116,10 +117,6 @@ These gates define the major version releases - the milestones may change in the
 #### Manual Patching (CPUSE)
 ⏫ Add deployment agent upgrade option  
 🤞 Some kind of sledgehammer to swing to release config/job lock from management server and firewalls if a job gets stranded/stuck  
-⏫ Add Spark via the 'upgrade_revert_image.sh filename safe' command. Foreseeable issues are:  
-  Probably requires different clish commands to provision patching user  
-  Patching user cannot be boostrapped via mgmt  
-  Requires the expert command 'bashUser on' to be issued to permit SCP file transfers  
 
 #### Jobs
 ⏫ Add syslog output    
@@ -130,6 +127,7 @@ These gates define the major version releases - the milestones may change in the
 ✨ Show current percentage when available in the output column so I don't have to expand the full job progress to see it
 
 #### Squashed Bugs
+v0.56.0 Added Spark (Gaia Embedded) firmware patching: a "Test Credentials" link on Spark rows proves SSH login and `expert`-mode escalation work before you rely on them, and the Firewalls panel's bulk package selector now enforces compatibility - picking a `.tgz`/`.tar` package only allows selecting Gaia firewalls and vice versa for `.img`, picking a firewall of one kind first locks the package picker and the remaining rows to match (Management Servers panel unchanged). The transfer job follows the documented sequence (SSH, expert, `bashUser on`, log out, SCP the image to `/storage`, verify, SSH back in, expert, `bashUser off`, `upgrade_revert_image.sh ... upgrade safe`) and can't confirm the upgrade actually completes since Spark has nothing like CPUSE's `show installer package` to poll - only that the command was issued, same "not yet validated against live hardware" posture as the rest of this project's CPUSE/CDT parsers, with the two riskiest guesses (whether SFTP works over Spark's SSH server, and the `expert` password-prompt's exact text) isolated behind narrow interfaces so a wrong guess is a contained fix, not a rewrite - see `.claude/memory/spark-firmware-patching.md`  
 v0.55.1 Removing a firewall (or any other action that reloads the Firewalls/Management-Servers tables while a background poll lands at the same moment) could duplicate every row in the table until a manual page refresh - `loadFirewalls()`/`loadServers()` each cleared and rebuilt their table on every call with no guard against two overlapping calls racing each other; v0.35.1 fixed one specific instance of this (a redundant reload inside `pollJobs()` itself) but left every other caller vulnerable to the same race, so it kept resurfacing - both functions now bail out of a stale call instead of rendering on top of a newer one  
 v0.51.0 Manual Patching (CPUSE) Firewalls panel now offers a "Bootstrap Credentials" text link next to Refresh, shown when a status check fails with an authentication error - pushes the firewall's assigned credential set onto the gateway via the Management API's `run-script` (CPRID-backed, no SSH access needed to recover), reusing the same clish commands as the Provisioning tab's bootstrap panel  
 v0.49.5 Packages tab now extracts and displays compatible major version, Take number, category, arch, and a free-text compatibility/prerequisite note from the package file itself (`hf.config` + `conditions_set.json`) at upload time - also fixed a latent bug where BUNDLE-type packages' per-component `hf.config` files (missing Take/category) could be picked up instead of the authoritative bundle-level one  

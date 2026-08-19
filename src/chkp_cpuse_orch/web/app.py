@@ -79,6 +79,7 @@ from ..services.provisioning import (
     render_gaia_user_commands,
     render_mgmt_api_commands,
 )
+from ..services.spark_patching import SparkPatchingService
 from ..store import JobEvent, JobRecord, JobStatus, PackageRecord, Store
 from .auth import (
     SESSION_COOKIE_NAME,
@@ -247,6 +248,11 @@ class InstallRequest(OperationCredentials):
 class UninstallRequest(OperationCredentials):
     package_id: str  # CPUSE identifier as shown by detect (must be Installed)
     confirmed: bool = False  # UI must send True after the operator types the host's name
+
+
+class SparkTransferRequest(OperationCredentials):
+    package: str  # .img filename in the package store
+    confirmed: bool = False  # UI must send True after an explicit operator confirm — reboots
 
 
 class RetentionRequest(BaseModel):
@@ -496,6 +502,9 @@ def create_app(
         service = PatchingService(
             registry=registry, packages=packages, runner=runner, vault=vault, store=store
         )
+        spark_service = SparkPatchingService(
+            registry=registry, packages=packages, runner=runner, vault=vault, store=store
+        )
         cdt_service = CDTService(registry=registry, packages=packages, runner=runner, vault=vault)
         # No runner: package CRUD runs synchronously (services/pkgs_ops.py).
         pkgs_jobs = PackageJobService(packages=packages, store=store)
@@ -546,6 +555,7 @@ def create_app(
         app.state.firewall_manager = firewall_manager
         app.state.runner = runner
         app.state.service = service
+        app.state.spark_service = spark_service
         app.state.cdt = cdt_service
         app.state.pkgs_jobs = pkgs_jobs
         app.state.cred_jobs = cred_jobs
@@ -609,6 +619,11 @@ def _register_auth_middleware(app: FastAPI) -> None:
 
 def _service(request: Request) -> PatchingService:
     service: PatchingService = request.app.state.service
+    return service
+
+
+def _spark_service(request: Request) -> SparkPatchingService:
+    service: SparkPatchingService = request.app.state.spark_service
     return service
 
 
@@ -1636,6 +1651,43 @@ def _register_routes(app: FastAPI) -> None:
                 env,
                 name,
                 body.package_id,
+                confirmed=body.confirmed,
+                credentials=_build_credentials(body.credentials, name, env),
+                triggered_by=_current_user(request),
+            )
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+
+    @app.post("/api/env/{env}/firewalls/{name}/spark-test-credentials", status_code=202)
+    def firewall_spark_test_credentials(
+        env: str, name: str, request: Request, body: QueryRequest | None = None
+    ) -> JobRecord:
+        """SSH login + `expert`-mode escalation, nothing more — the Firewalls
+        panel's "Test Credentials" link for a Spark row. Never touches device
+        state, so no confirmation is required, unlike spark-transfer-upgrade
+        below."""
+        try:
+            return _spark_service(request).submit_test_credentials(
+                env,
+                name,
+                credentials=_op_creds(body, name, env),
+                triggered_by=_current_user(request),
+            )
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+
+    @app.post("/api/env/{env}/firewalls/{name}/spark-transfer-upgrade", status_code=202)
+    def firewall_spark_transfer_upgrade(
+        env: str, name: str, body: SparkTransferRequest, request: Request
+    ) -> JobRecord:
+        """Transfers a `.img` firmware image to a Spark firewall and runs
+        `upgrade_revert_image.sh` — see services/spark_patching.py. Reboots
+        the device on its own once issued, so ``confirmed`` must be True."""
+        try:
+            return _spark_service(request).submit_transfer_upgrade(
+                env,
+                name,
+                body.package,
                 confirmed=body.confirmed,
                 credentials=_build_credentials(body.credentials, name, env),
                 triggered_by=_current_user(request),

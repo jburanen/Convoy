@@ -8,11 +8,18 @@ Auth is mixed (see .claude/memory/patching-web-design.md): an SSH private key
 where installed, admin password otherwise — both may be supplied and Paramiko
 tries the key first. Key material comes from the encrypted credential store as a
 *string*, never from a file inside the repo.
+
+Also home to InteractiveShell/GaiaExpertSession: a pty-backed session for
+scripted `expert`-mode escalation, which exec_command() can't do (see
+.claude/memory/spark-firmware-patching.md). Still transport, not orchestration
+— they send bytes and wait for prompts, nothing more.
 """
 
 from __future__ import annotations
 
 import io
+import re
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from types import TracebackType
@@ -20,7 +27,7 @@ from typing import Protocol
 
 import paramiko
 
-from ..errors import TransportError
+from ..errors import ExpertModeError, TransportError
 from ..inventory import Host
 
 
@@ -169,6 +176,19 @@ class SSHClient:
             raise TransportError(f"SFTP upload to {self.host.name}:{remote_path}: no remote size")
         return attrs.st_size
 
+    def open_interactive_shell(self, *, width: int = 200, height: int = 50) -> InteractiveShell:
+        """Open a pty-backed interactive session on the same connection, for
+        scripted escalation (Gaia `expert` mode) that exec_command can't do —
+        see InteractiveShell / GaiaExpertSession below."""
+        client = self._require_connected()
+        try:
+            channel = client.invoke_shell(term="vt100", width=width, height=height)
+        except (paramiko.SSHException, OSError) as exc:
+            raise TransportError(
+                f"failed to open an interactive shell on {self.host.name}: {exc}"
+            ) from exc
+        return InteractiveShell(channel, host_name=self.host.name)
+
     def close(self) -> None:
         if self._client is not None:
             self._client.close()
@@ -199,3 +219,122 @@ def require_ok(result: CommandResult) -> CommandResult:
             f"command failed (rc={result.exit_status}): {result.command}\n{result.stderr.strip()}"
         )
     return result
+
+
+class InteractiveShell:
+    """A pty-backed, stateful SSH session (``invoke_shell``) for scripted
+    interactive escalation — Gaia's ``expert`` command included.
+
+    ``SSHClient.run()`` uses ``exec_command()``, which spawns a fresh,
+    non-interactive shell per call and has no way to see or answer a prompt
+    (e.g. the ``expert`` command's password prompt). This class instead sends
+    bytes to one long-lived channel and waits for a pattern to appear in the
+    output, one conversation turn at a time. It has no Gaia-specific
+    vocabulary of its own — that lives in GaiaExpertSession below — so a
+    wrong assumption about prompt text/timing is a contained fix in one
+    place, not a rewrite of any job logic built on top of it.
+    """
+
+    def __init__(
+        self, channel: paramiko.Channel, *, host_name: str = "", read_timeout: float = 15.0
+    ) -> None:
+        self._channel = channel
+        self._host_name = host_name
+        self._read_timeout = read_timeout
+
+    def expect(self, pattern: str, *, timeout: float | None = None) -> str:
+        """Read until ``pattern`` (a regex) matches the tail of accumulated
+        output, or ``timeout`` elapses. Returns everything read. Raises
+        TransportError, with the captured output included, on timeout or if
+        the channel closes first — deliberately no fuzzy retry, a clear
+        failure with the actual bytes seen is more debuggable than one that
+        silently guesses again."""
+        regex = re.compile(pattern)
+        deadline = time.monotonic() + (self._read_timeout if timeout is None else timeout)
+        collected = ""
+        while not regex.search(collected):
+            if self._channel.recv_ready():
+                collected += self._channel.recv(4096).decode("utf-8", errors="replace")
+                continue
+            if self._channel.closed:
+                raise TransportError(
+                    f"SSH channel to {self._host_name} closed while waiting for "
+                    f"{pattern!r}; output so far: {collected!r}"
+                )
+            if time.monotonic() >= deadline:
+                raise TransportError(
+                    f"timed out waiting for {pattern!r} on {self._host_name}; "
+                    f"output so far: {collected!r}"
+                )
+            time.sleep(0.1)
+        return collected
+
+    def send_line(self, text: str) -> None:
+        self._channel.send((text + "\n").encode("utf-8"))
+
+    def send_secret(self, text: str) -> None:
+        """Same as send_line — named separately so a reader (and any future
+        change to this method) knows the argument must never be logged."""
+        self._channel.send((text + "\n").encode("utf-8"))
+
+    def close(self) -> None:
+        self._channel.close()
+
+
+class GaiaExpertSession:
+    """Drives a Gaia ``expert``-mode escalation over an InteractiveShell:
+    send ``expert``, answer the password prompt, land at the expert prompt
+    (or fail if rejected), run commands, ``exit`` back to the login shell.
+
+    This is the ONLY place that encodes Gaia's actual prompt text. The
+    regexes below are a first guess — **unvalidated against real Spark
+    (Gaia Embedded) hardware**, see .claude/memory/spark-firmware-patching.md.
+    Isolating them here means a wrong guess is a contained fix, not a change
+    to any job's sequencing or logging.
+    """
+
+    _PASSWORD_PROMPT = r"[Pp]assword\s*:\s*$"
+    _EXPERT_PROMPT = r"\[Expert@[^\]]+\]#\s*$"
+    _LOGIN_PROMPT = r"[>#]\s*$"
+    _WRONG_PASSWORD_RE = re.compile(
+        r"wrong password|incorrect password|access denied", re.IGNORECASE
+    )
+
+    def __init__(self, shell: InteractiveShell) -> None:
+        self._shell = shell
+
+    def enter_expert(self, expert_password: str, *, timeout: float = 20.0) -> None:
+        self._shell.send_line("expert")
+        first = self._shell.expect(
+            f"(?:{self._PASSWORD_PROMPT})|(?:{self._EXPERT_PROMPT})", timeout=timeout
+        )
+        if re.search(self._EXPERT_PROMPT, first):
+            return  # already in expert mode
+        self._shell.send_secret(expert_password)
+        result = self._shell.expect(
+            f"(?:{self._EXPERT_PROMPT})|(?:{self._PASSWORD_PROMPT})", timeout=timeout
+        )
+        if re.search(self._EXPERT_PROMPT, result):
+            return
+        detail = "wrong password" if self._WRONG_PASSWORD_RE.search(result) else "unexpected prompt"
+        raise ExpertModeError(
+            f"expert-mode escalation failed ({detail}) — check the credential set's "
+            "expert password; prompt matching is unvalidated against real Spark "
+            "hardware, see .claude/memory/spark-firmware-patching.md"
+        )
+
+    def run_expert(self, command: str, *, timeout: float = 60.0) -> str:
+        """Run one command while already in expert mode; returns its output
+        with the echoed command line and trailing prompt stripped."""
+        self._shell.send_line(command)
+        output = self._shell.expect(self._EXPERT_PROMPT, timeout=timeout)
+        lines = output.splitlines()
+        if lines and command.strip() in lines[0]:
+            lines = lines[1:]
+        if lines and re.search(self._EXPERT_PROMPT, lines[-1]):
+            lines = lines[:-1]
+        return "\n".join(lines).strip()
+
+    def exit_expert(self, *, timeout: float = 15.0) -> None:
+        self._shell.send_line("exit")
+        self._shell.expect(self._LOGIN_PROMPT, timeout=timeout)

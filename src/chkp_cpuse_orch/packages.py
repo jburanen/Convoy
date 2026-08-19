@@ -15,7 +15,7 @@ import uuid
 from collections.abc import Iterator
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, Literal
 
 from .config import DEFAULT_PACKAGE_RETENTION_DAYS
 from .errors import PackageError
@@ -183,6 +183,27 @@ class PackageStore:
                 "content was modified or corrupted on the data volume"
             )
         return rec
+
+
+PackageKind = Literal["spark_image", "archive", "unknown"]
+
+
+def package_kind(filename: str) -> PackageKind:
+    """Best-effort package kind from its filename extension — the only signal
+    available, no dedicated 'kind' field is stored. ``"archive"`` is CPUSE's
+    tar/tgz convention (same extension set as hfconfig._looks_like_archive,
+    kept in sync by hand rather than a shared import — hfconfig.py is
+    imported *by* this module, so the reverse import would be circular).
+    ``"spark_image"`` is a bare ``.img``, Gaia Embedded's
+    upgrade_revert_image.sh convention. Used both by the Spark transfer job
+    (to reject a mismatched package before enqueuing) and mirrored in
+    app.js as packageKind() for the Firewalls-panel selector filtering."""
+    lower = filename.lower()
+    if lower.endswith(".img"):
+        return "spark_image"
+    if lower.endswith((".tar", ".tgz", ".tar.gz")):
+        return "archive"
+    return "unknown"
 
 
 def _chunks(fh: BinaryIO) -> Iterator[bytes]:
