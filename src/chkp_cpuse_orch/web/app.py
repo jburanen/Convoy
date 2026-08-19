@@ -250,9 +250,9 @@ class UninstallRequest(OperationCredentials):
     confirmed: bool = False  # UI must send True after the operator types the host's name
 
 
-class SparkTransferRequest(OperationCredentials):
-    package: str  # .img filename in the package store
-    confirmed: bool = False  # UI must send True after an explicit operator confirm — reboots
+class SparkImportRequest(OperationCredentials):
+    package: str  # .img filename in the package store — SCP to /storage only, no confirm
+    # needed: unlike install (InstallRequest, shared with CPUSE), this doesn't reboot anything.
 
 
 class RetentionRequest(BaseModel):
@@ -1644,8 +1644,23 @@ def _register_routes(app: FastAPI) -> None:
 
     @app.post("/api/env/{env}/firewalls/{name}/install", status_code=202)
     def firewall_install(env: str, name: str, body: InstallRequest, request: Request) -> JobRecord:
+        """Shared by CPUSE-patched firewalls and Spark ones — the row-level
+        Install button and package picker are the same widget for both (see
+        app.js renderInstallSelect); this just dispatches on host role, same
+        as the /state endpoint above. Spark ignores verify_first — Gaia
+        Embedded has no `installer verify` step."""
+        service = _service(request)
         try:
-            return _service(request).submit_install(
+            if service.host_role(env, name) == "spark_firewall":
+                return _spark_service(request).submit_install(
+                    env,
+                    name,
+                    body.package_id,
+                    confirmed=body.confirmed,
+                    credentials=_build_credentials(body.credentials, name, env),
+                    triggered_by=_current_user(request),
+                )
+            return service.submit_install(
                 env,
                 name,
                 body.package_id,
@@ -1679,8 +1694,7 @@ def _register_routes(app: FastAPI) -> None:
     ) -> JobRecord:
         """SSH login + `expert`-mode escalation, nothing more — the Firewalls
         panel's "Test Credentials" link for a Spark row. Never touches device
-        state, so no confirmation is required, unlike spark-transfer-upgrade
-        below."""
+        state, so no confirmation is required, unlike spark-import below."""
         try:
             return _spark_service(request).submit_test_credentials(
                 env,
@@ -1691,19 +1705,20 @@ def _register_routes(app: FastAPI) -> None:
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
-    @app.post("/api/env/{env}/firewalls/{name}/spark-transfer-upgrade", status_code=202)
-    def firewall_spark_transfer_upgrade(
-        env: str, name: str, body: SparkTransferRequest, request: Request
+    @app.post("/api/env/{env}/firewalls/{name}/spark-import", status_code=202)
+    def firewall_spark_import(
+        env: str, name: str, body: SparkImportRequest, request: Request
     ) -> JobRecord:
-        """Transfers a `.img` firmware image to a Spark firewall and runs
-        `upgrade_revert_image.sh` — see services/spark_patching.py. Reboots
-        the device on its own once issued, so ``confirmed`` must be True."""
+        """SCPs a `.img` firmware image to a Spark firewall's /storage and
+        nothing else — see services/spark_patching.py. Doesn't reboot
+        anything, so no confirmation is required; running the actual upgrade
+        against the staged file is a separate, confirmed /install call (the
+        same row-level Install button CPUSE-patched firewalls use)."""
         try:
-            return _spark_service(request).submit_transfer_upgrade(
+            return _spark_service(request).submit_transfer(
                 env,
                 name,
                 body.package,
-                confirmed=body.confirmed,
                 credentials=_build_credentials(body.credentials, name, env),
                 triggered_by=_current_user(request),
             )

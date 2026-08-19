@@ -1,6 +1,6 @@
 ---
 name: spark-firmware-patching
-description: Spark (Gaia Embedded) firmware transfer+upgrade via upgrade_revert_image.sh — interactive expert-mode SSH primitive; transfer uses SCP (not SFTP) after real-hardware confirmation
+description: Spark (Gaia Embedded) firmware transfer+upgrade via upgrade_revert_image.sh — interactive expert-mode SSH primitive; transfer (spark.scp) and install (spark.install) are separate, independently-triggered jobs
 metadata:
   type: project
 ---
@@ -8,11 +8,18 @@ metadata:
 Spark (Quantum Spark / Gaia Embedded) firewalls don't go through CPUSE or CDT
 — they patch via SCP + expert-mode shell commands instead (operator-specified
 sequence, 2026-08-19): SSH in, `expert`, `bashUser on`, exit expert, log out;
-SCP a `.img` firmware file to `/storage`, verify it; SSH back in, `expert`,
-`bashUser off`, then `upgrade_revert_image.sh <path> upgrade safe`, which
-reboots the device on its own a minute or two later. Implemented in
-`services/spark_patching.py` (`SparkPatchingService`), following the same
-job/service shape as [[patching-web-design]]'s CPUSE path.
+SCP a `.img` firmware file to `/storage`, verify it, then SSH back in,
+`expert`, `bashUser off` again — that's the whole **transfer** job
+(`spark.scp`). **install** (`spark.install`) is a separate, later job: SSH
+in, `expert`, `bashUser off` (idempotent — already off from transfer, done
+again here regardless since install doesn't assume transfer ever ran),
+`upgrade_revert_image.sh <path> upgrade safe`, which reboots the device on
+its own a minute or two later. Split into two jobs 2026-08-19 (operator-
+reported: the Firewalls panel's "Upload and import" button was firing the
+upgrade too, when it should only stage the file — see "The three jobs"
+below). Implemented in `services/spark_patching.py` (`SparkPatchingService`),
+following the same job/service shape as [[patching-web-design]]'s CPUSE
+path.
 
 ## Why a new SSH primitive was needed
 
@@ -35,7 +42,7 @@ of the job's sequencing:
 1. **SFTP vs SCP.** The firmware upload originally reused `SSHClient.put()`
    (Paramiko's SFTP subsystem) unchanged, on the assumption Spark's SSH
    server exposed it in whichever `bashUser` state. **Confirmed wrong
-   2026-08-19** — a real `spark.transfer_upgrade` run against live hardware
+   2026-08-19** — a real `spark.scp` run against live hardware
    failed at the transfer phase with `TransportError: SFTP upload to
    <host>:<path> failed: Channel closed`; `bashUser on`'s own banner had
    only ever said "SCP access enabled," never SFTP. Fixed the same day by
@@ -55,24 +62,44 @@ of the job's sequencing:
 
 Both are called out in code comments at their definition site.
 
-## The two jobs
+## The three jobs
 
-- `spark.test_credentials` — SSH login + `expert` escalation, nothing more.
+- `spark.testcred` — SSH login + `expert` escalation, nothing more.
   Never runs a mutating command, so no confirmation gate; safe to run
   repeatedly. Surfaced as a "Test Credentials" link on every Spark row in
   the Firewalls panel (not reactive-after-failure like the Gaia bootstrap
   link — shown proactively).
-- `spark.transfer_upgrade` — the actual firmware push, requires
-  `confirmed=True` (the device reboots on its own once the upgrade command
-  is issued — that can't be undone or cancelled after the fact). **Cannot
-  confirm the upgrade actually completed** — Spark has nothing like CPUSE's
-  `show installer package` to poll — the job's success only means the
-  command was issued; a `TransportError` raised specifically while waiting
-  on `upgrade_revert_image.sh`'s output is treated as an expected outcome
-  (the device may drop the connection mid-reboot), not a failure.
+- `spark.scp` — SCP the `.img` to `/storage`, nothing else. No confirmation
+  gate: it doesn't reboot anything, same as CPUSE's plain import. This is
+  what the Firewalls panel's "Upload and import to selected" button fires
+  for a `.img` package selection (`app.js`'s `fw-bulk-import-btn` handler →
+  `POST .../spark-import` → `submit_transfer`). On success it records the
+  filename into the host's `ServerStateRow.installable` — the *same* cache
+  field CPUSE hosts populate from a live `show installer packages ...`
+  query, except here it's this tool's own bookkeeping of what it staged
+  (Spark has no equivalent query to ask the device). That's what makes the
+  filename show up in the row's Install picker (`renderInstallSelect`,
+  previously CPUSE-only — the picker/button widget itself needed no
+  changes, only what feeds it).
+- `spark.install` — `upgrade_revert_image.sh <path> upgrade safe` against a
+  `.img` expected to already be staged in `/storage` by a prior transfer
+  (not re-checked at submit time — same trust-the-picker posture as CPUSE's
+  own install). This is the row's "Install" button/endpoint
+  (`POST .../install`, shared with CPUSE-patched firewalls — `web/app.py`'s
+  `firewall_install` dispatches on `host_role()` the same way the `/state`
+  endpoint already did for Refresh). Requires `confirmed=True` (the device
+  reboots on its own once the upgrade command is issued — that can't be
+  undone or cancelled after the fact). **Cannot confirm the upgrade
+  actually completed** — Spark has nothing like CPUSE's `show installer
+  package` to poll — the job's success only means the command was issued; a
+  `TransportError` raised specifically while waiting on
+  `upgrade_revert_image.sh`'s output is treated as an expected outcome (the
+  device may drop the connection mid-reboot), not a failure. On success it
+  drops the filename from `installable` again — best-effort UI hygiene, not
+  a confirmed-uninstalled guarantee, same caveat as above.
 
-Both require the assigned credential set to carry an expert-mode password
-(`CredentialKind.EXPERT_PASSWORD` — see [[credential-sets]] and
+All three require the assigned credential set to carry an expert-mode
+password (`CredentialKind.EXPERT_PASSWORD` — see [[credential-sets]] and
 [[spark-firewall-credential-scenarios]]) — checked *before* any SSH attempt,
 since a Spark firewall's assigned set isn't guaranteed to have one just
 because the Spark credential modal enforces it at creation time (a set
@@ -110,8 +137,13 @@ hardware, same caveat as the two above) and truncates the banner
 R81.10.17 - Build 892"` → `"1550 Appliance R81.10.17 - Build 892"`. Both
 detect() methods persist into the same `ServerStateRow` cache table, so the
 response-building code after the branch is shared; Spark rows just get
-`jhf`/`agent_build`/`cluster_role` = None and `installable`/`installed` = []
-written there instead of real values. `app.js`'s `renderStateRow()` takes a
+`jhf`/`agent_build`/`cluster_role` = None written there instead of real
+values. `installable` is the one field Spark's `detect()` does *not* reset —
+it carries forward whatever a transfer job already staged (see "The three
+jobs"); `detect()` used to always build a fresh `ServerStateRow`, which
+silently wiped that list on every Refresh until fixed 2026-08-19 alongside
+the transfer/install split. `installed` stays `[]` — Spark has no uninstall
+concept. `app.js`'s `renderStateRow()` takes a
 new `isSpark` param (Firewalls-panel call sites only — Servers are never
 Spark) and shows just the truncated `fw ver` text instead of the
 "Running X w/JHF Y | CPUSE Agent Z" line, which doesn't apply here.

@@ -1960,7 +1960,10 @@ function renderInstallSelect(row, installable, installedPkgs, hostName) {
 
 // Toggles which action button is visible/enabled for the row's currently
 // selected package: Install (green) for an "installable" pick, Uninstall
-// (red) for an "installed" one. "skip verify" only applies to installs.
+// (red) for an "installed" one. "skip verify" only applies to installs, and
+// only where `installer verify` is a concept at all — Spark (Gaia Embedded)
+// has no CPUSE agent, so upgrade_revert_image.sh has no verify step to skip
+// (see services/spark_patching.py's submit_install, which ignores it).
 function syncActionButtons(row) {
   const select = row.querySelector(".install-select");
   const installBtn = row.querySelector(".btn-install");
@@ -1968,9 +1971,10 @@ function syncActionButtons(row) {
   const skipVerifyLabel = row.querySelector(".skip-verify-label");
   const selected = select.selectedOptions[0];
   const isUninstall = !!(selected && selected.dataset.kind === "installed");
+  const isSpark = row.dataset.role === "spark_firewall";
   installBtn.classList.toggle("hidden", isUninstall);
   uninstallBtn.classList.toggle("hidden", !isUninstall);
-  if (skipVerifyLabel) skipVerifyLabel.classList.toggle("hidden", isUninstall);
+  if (skipVerifyLabel) skipVerifyLabel.classList.toggle("hidden", isUninstall || isSpark);
   const hasSelection = !!select.value;
   installBtn.disabled = select.disabled || !hasSelection || isUninstall;
   uninstallBtn.disabled = select.disabled || !hasSelection || !isUninstall;
@@ -2375,6 +2379,10 @@ async function loadFirewalls() {
     row.querySelector(".fw-role").textContent = roleLabel(fw.role);
     row.querySelector(".fw-creds").textContent =
       (state && state.credential_set) || "none — not assigned";
+    // Read by refreshFirewallState (bootstrap link choice) and by
+    // syncActionButtons (skip-verify hiding) — set before renderInstallSelect
+    // below, which triggers the latter.
+    row.dataset.role = fw.role;
     renderInstallSelect(row, state?.installable ?? [], state?.installed ?? [], fw.name);
     row.querySelector(".skip-verify").checked = !!envSkipVerifyDefault[currentEnv];
     restoreRowSelection(row, fw.name, savedSelections);
@@ -2387,7 +2395,6 @@ async function loadFirewalls() {
       fw.role === "spark_firewall",
     );
     row.classList.toggle("fw-cluster-member", hasClusterLine);
-    row.dataset.role = fw.role; // read by refreshFirewallState to pick the right bootstrap link
     stateRow
       .querySelector(".srv-refresh-link")
       .addEventListener("click", () => refreshFirewallState(fw.name, row, stateRow));
@@ -2764,17 +2771,17 @@ document.getElementById("fw-bulk-import-btn").addEventListener("click", () => {
   const pkg = document.getElementById("fw-bulk-import-package").value;
   if (!pkg) { toast("Choose a package first."); return; }
   if (packageKind(pkg) === "spark_image") {
+    // Transfer only — SCPs the image to /storage and stops there. Running the
+    // actual upgrade (which reboots the firewall) is a separate, confirmed
+    // action from that row's Install button once the transfer lands it in
+    // the picker (see renderInstallSelect / spark_patching.py's submit_install).
     bulkImport(btn, selectedFirewallNames, async (name) => {
-      const extra = await operationCredentials(name, "transfer and upgrade a Spark firmware image");
+      const extra = await operationCredentials(name, "transfer a Spark firmware image");
       if (extra === null) { toast(`Skipped ${name}: credentials not provided.`); return; }
-      if (!confirm(
-        `Upgrade ${name} to ${pkg}?\n\nThe firewall reboots on its own once the transfer ` +
-        "completes — this cannot be undone or cancelled after the upgrade command is issued."
-      )) return;
-      const job = await api(envUrl(`/firewalls/${encodeURIComponent(name)}/spark-transfer-upgrade`), {
+      const job = await api(envUrl(`/firewalls/${encodeURIComponent(name)}/spark-import`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ package: pkg, confirmed: true, ...extra }),
+        body: JSON.stringify({ package: pkg, ...extra }),
       });
       lastJobStatus.set(job.id, job.status);
     });

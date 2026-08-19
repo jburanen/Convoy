@@ -1562,32 +1562,50 @@ def test_firewall_spark_test_credentials_rejects_non_spark_firewall(client: Test
     assert "not a Spark firewall" in resp.json()["detail"]
 
 
-def test_firewall_spark_transfer_upgrade_requires_confirmation(client: TestClient) -> None:
-    _put_set(client, ssh_username="admin", ssh_password="s3cret-pw!", expert_password="expert-pw")
-    _add_firewall(client, name="spark-x", address="192.0.2.80", role="spark_firewall")
-    client.post("/api/env/default/firewalls/spark-x/credential", json={"set": "primary"})
-    _upload_package(client, name="spark.img", content=b"x" * 64)
-
-    resp = client.post(
-        "/api/env/default/firewalls/spark-x/spark-transfer-upgrade",
-        json={"package": "spark.img", "confirmed": False},
-    )
-    assert resp.status_code == 400, resp.text
-    assert "confirmation" in resp.json()["detail"]
-
-
-def test_firewall_spark_transfer_upgrade_rejects_non_image_package(client: TestClient) -> None:
+def test_firewall_spark_import_rejects_non_image_package(client: TestClient) -> None:
     _put_set(client, ssh_username="admin", ssh_password="s3cret-pw!", expert_password="expert-pw")
     _add_firewall(client, name="spark-x", address="192.0.2.80", role="spark_firewall")
     client.post("/api/env/default/firewalls/spark-x/credential", json={"set": "primary"})
     _upload_package(client, name="jhf.tgz")
 
     resp = client.post(
-        "/api/env/default/firewalls/spark-x/spark-transfer-upgrade",
-        json={"package": "jhf.tgz", "confirmed": True},
+        "/api/env/default/firewalls/spark-x/spark-import",
+        json={"package": "jhf.tgz"},
     )
     assert resp.status_code == 400, resp.text
     assert "Spark firmware image" in resp.json()["detail"]
+
+
+def test_firewall_install_dispatches_to_spark_requires_confirmation(client: TestClient) -> None:
+    """The row-level Install button/endpoint is shared with CPUSE-patched
+    firewalls (InstallRequest) — for a Spark row it must dispatch to
+    SparkPatchingService.submit_install rather than the CPUSE path, and
+    still gate on an explicit confirm since it reboots the device."""
+    _put_set(client, ssh_username="admin", ssh_password="s3cret-pw!", expert_password="expert-pw")
+    _add_firewall(client, name="spark-x", address="192.0.2.80", role="spark_firewall")
+    client.post("/api/env/default/firewalls/spark-x/credential", json={"set": "primary"})
+    _upload_package(client, name="spark.img", content=b"x" * 64)
+
+    resp = client.post(
+        "/api/env/default/firewalls/spark-x/install",
+        json={"package_id": "spark.img", "confirmed": False},
+    )
+    assert resp.status_code == 400, resp.text
+    assert "confirmation" in resp.json()["detail"]
+
+
+def test_firewall_install_dispatches_to_spark_succeeds(client: TestClient) -> None:
+    _put_set(client, ssh_username="admin", ssh_password="s3cret-pw!", expert_password="expert-pw")
+    _add_firewall(client, name="spark-x", address="192.0.2.80", role="spark_firewall")
+    client.post("/api/env/default/firewalls/spark-x/credential", json={"set": "primary"})
+
+    resp = client.post(
+        "/api/env/default/firewalls/spark-x/install",
+        json={"package_id": "spark.img", "confirmed": True},
+    )
+    assert resp.status_code == 202, resp.text
+    job = _wait_for_job(client, resp.json()["id"])
+    assert job["status"] == "succeeded", job["error"]
 
 
 def test_firewall_state_spark_uses_fw_ver_not_cpuse(
@@ -1608,7 +1626,7 @@ def test_firewall_state_spark_uses_fw_ver_not_cpuse(
     assert not any("installer" in c or "cluster state" in c for c in transport.commands)
 
 
-def test_firewall_spark_transfer_upgrade_succeeds(client: TestClient) -> None:
+def test_firewall_spark_import_succeeds(client: TestClient) -> None:
     # sha1 of b"x" * 64 matches the transport fixture's canned `sha1sum` reply
     # regardless of filename (it hashes content, not the path echoed back).
     _put_set(client, ssh_username="admin", ssh_password="s3cret-pw!", expert_password="expert-pw")
@@ -1617,12 +1635,18 @@ def test_firewall_spark_transfer_upgrade_succeeds(client: TestClient) -> None:
     _upload_package(client, name="spark.img", content=b"x" * 64)
 
     resp = client.post(
-        "/api/env/default/firewalls/spark-x/spark-transfer-upgrade",
-        json={"package": "spark.img", "confirmed": True},
+        "/api/env/default/firewalls/spark-x/spark-import",
+        json={"package": "spark.img"},
     )
     assert resp.status_code == 202, resp.text
     job = _wait_for_job(client, resp.json()["id"])
     assert job["status"] == "succeeded", job["error"]
+
+    # Staged — listed as installable without a separate Refresh, and ready
+    # for the row's Install button (see test_firewall_install_dispatches_to_spark_*).
+    listing = client.get("/api/env/default/firewalls").json()
+    spark_row = next(f for f in listing if f["name"] == "spark-x")
+    assert spark_row["installable"] == ["spark.img"]
 
 
 # -- jobs -------------------------------------------------------------------------

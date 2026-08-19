@@ -122,14 +122,19 @@ def test_submit_test_credentials_rejects_non_spark_host(service: SparkPatchingSe
         service.submit_test_credentials("default", "fw-gaia")
 
 
-def test_submit_transfer_upgrade_requires_confirmation(service: SparkPatchingService) -> None:
-    with pytest.raises(JobError, match="confirmation"):
-        service.submit_transfer_upgrade("default", "spark-01", IMG, confirmed=False)
-
-
-def test_submit_transfer_upgrade_rejects_non_image_package(service: SparkPatchingService) -> None:
+def test_submit_transfer_rejects_non_image_package(service: SparkPatchingService) -> None:
     with pytest.raises(JobError, match="isn't a Spark firmware image"):
-        service.submit_transfer_upgrade("default", "spark-01", "gaia_jhf.tgz", confirmed=True)
+        service.submit_transfer("default", "spark-01", "gaia_jhf.tgz")
+
+
+def test_submit_install_requires_confirmation(service: SparkPatchingService) -> None:
+    with pytest.raises(JobError, match="confirmation"):
+        service.submit_install("default", "spark-01", IMG, confirmed=False)
+
+
+def test_submit_install_rejects_non_image_package(service: SparkPatchingService) -> None:
+    with pytest.raises(JobError, match="isn't a Spark firmware image"):
+        service.submit_install("default", "spark-01", "gaia_jhf.tgz", confirmed=True)
 
 
 def test_submit_test_credentials_rejects_busy_host(
@@ -194,13 +199,13 @@ def test_test_credentials_fails_on_wrong_expert_password(
     assert finished.error is not None and "wrong password" in finished.error
 
 
-# -- transfer_upgrade job -----------------------------------------------------------
+# -- transfer job -------------------------------------------------------------------
 
 
-def test_transfer_upgrade_happy_path(
+def test_transfer_happy_path(
     service: SparkPatchingService, store: Store, transport: FakeTransport
 ) -> None:
-    job = service.submit_transfer_upgrade("default", "spark-01", IMG, confirmed=True)
+    job = service.submit_transfer("default", "spark-01", IMG)
     _run(service)
     finished = store.get_job(job.id)
     assert finished.status is JobStatus.SUCCEEDED
@@ -208,45 +213,19 @@ def test_transfer_upgrade_happy_path(
     local_path, remote_path = transport.puts[0]
     assert remote_path == f"/storage/{IMG}"
     assert Path(local_path).name == IMG
-    # Two interactive (expert-mode) sessions: phase 1 (bashUser on) and
-    # phase 3 (bashUser off + upgrade) — phase 2 (the transfer) doesn't need one.
+    # Two interactive (expert-mode) sessions: enabling bashUser and disabling
+    # it again afterwards — the transfer itself doesn't need one.
     assert len(transport.interactive_shells) == 2
     events = [e.message for e in store.events(job.id)]
     assert any("bashUser on output" in e and "Done." in e for e in events)
     assert any("bashUser off output" in e and "Done." in e for e in events)
-    assert any("upgrade_revert_image.sh" in e for e in events)
-    assert any("does not and cannot confirm" in e for e in events)
+    assert not any("upgrade_revert_image.sh" in e for e in events)  # transfer only
+    assert any("staged in /storage" in e and "Install button" in e for e in events)
+    cached = store.get_server_state("default", "spark-01")
+    assert cached is not None and cached.installable == [IMG]
 
 
-def test_transfer_upgrade_succeeds_when_connection_drops_on_upgrade(
-    store: Store,
-    creds: CredentialStore,
-    packages: PackageStore,
-    inventory: Inventory,
-) -> None:
-    transport = FakeTransport(
-        responses={"sha1sum": f"{IMG_SHA1}  /storage/{IMG}"},
-        expert_drop_on="upgrade_revert_image.sh",
-    )
-    _assign(store, inventory, "spark-01", "spark-primary")
-    registry = EnvironmentRegistry()
-    registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
-    service = SparkPatchingService(
-        registry=registry,
-        packages=packages,
-        runner=JobRunner(store),
-        vault=JobCredentialVault(),
-        store=store,
-    )
-    job = service.submit_transfer_upgrade("default", "spark-01", IMG, confirmed=True)
-    _run(service)
-    finished = store.get_job(job.id)
-    assert finished.status is JobStatus.SUCCEEDED
-    events = [e.message for e in store.events(job.id)]
-    assert any("expected if the device began rebooting" in e for e in events)
-
-
-def test_transfer_upgrade_fails_on_sha1_mismatch(
+def test_transfer_fails_on_sha1_mismatch(
     store: Store,
     creds: CredentialStore,
     packages: PackageStore,
@@ -263,19 +242,82 @@ def test_transfer_upgrade_fails_on_sha1_mismatch(
         vault=JobCredentialVault(),
         store=store,
     )
-    job = service.submit_transfer_upgrade("default", "spark-01", IMG, confirmed=True)
+    job = service.submit_transfer("default", "spark-01", IMG)
     _run(service)
     finished = store.get_job(job.id)
     assert finished.status is JobStatus.FAILED
     assert finished.error is not None and "sha1 mismatch" in finished.error
-    # Never reached the upgrade phase.
-    assert not any("bashUser off" in c for c in transport.commands)
+    # Never reached the disable-bashUser phase — only the enable one ran.
+    assert len(transport.interactive_shells) == 1
+    cached = store.get_server_state("default", "spark-01")
+    assert cached is None or IMG not in cached.installable
 
 
-def test_transfer_upgrade_fails_without_expert_password(
+def test_transfer_fails_without_expert_password(
     service: SparkPatchingService, store: Store, transport: FakeTransport
 ) -> None:
-    job = service.submit_transfer_upgrade("default", "spark-02", IMG, confirmed=True)
+    job = service.submit_transfer("default", "spark-02", IMG)
+    _run(service)
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.FAILED
+    assert finished.error is not None and "no expert-mode password" in finished.error
+    assert transport.interactive_shells == []
+
+
+# -- install job --------------------------------------------------------------------
+
+
+def test_transfer_then_install_full_flow(
+    service: SparkPatchingService, store: Store, transport: FakeTransport
+) -> None:
+    """The realistic sequence: transfer stages the image and lists it as
+    installable, install (a separate, later job) runs the upgrade and drops
+    it from that list again."""
+    transfer_job = service.submit_transfer("default", "spark-01", IMG)
+    _run(service)
+    assert store.get_job(transfer_job.id).status is JobStatus.SUCCEEDED
+    assert store.get_server_state("default", "spark-01").installable == [IMG]
+
+    install_job = service.submit_install("default", "spark-01", IMG, confirmed=True)
+    _run(service)
+    finished = store.get_job(install_job.id)
+    assert finished.status is JobStatus.SUCCEEDED
+    events = [e.message for e in store.events(install_job.id)]
+    assert any("bashUser off output" in e and "Done." in e for e in events)
+    assert any("upgrade_revert_image.sh" in e for e in events)
+    assert any("does not and cannot confirm" in e for e in events)
+    assert store.get_server_state("default", "spark-01").installable == []
+
+
+def test_install_succeeds_when_connection_drops_on_upgrade(
+    store: Store,
+    creds: CredentialStore,
+    packages: PackageStore,
+    inventory: Inventory,
+) -> None:
+    transport = FakeTransport(expert_drop_on="upgrade_revert_image.sh")
+    _assign(store, inventory, "spark-01", "spark-primary")
+    registry = EnvironmentRegistry()
+    registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
+    service = SparkPatchingService(
+        registry=registry,
+        packages=packages,
+        runner=JobRunner(store),
+        vault=JobCredentialVault(),
+        store=store,
+    )
+    job = service.submit_install("default", "spark-01", IMG, confirmed=True)
+    _run(service)
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.SUCCEEDED
+    events = [e.message for e in store.events(job.id)]
+    assert any("expected if the device began rebooting" in e for e in events)
+
+
+def test_install_fails_without_expert_password(
+    service: SparkPatchingService, store: Store, transport: FakeTransport
+) -> None:
+    job = service.submit_install("default", "spark-02", IMG, confirmed=True)
     _run(service)
     finished = store.get_job(job.id)
     assert finished.status is JobStatus.FAILED
@@ -325,6 +367,24 @@ def test_detect_caches_state_with_no_jhf_or_agent_build(
 def test_detect_rejects_non_spark_host(service: SparkPatchingService) -> None:
     with pytest.raises(InventoryError, match="not a Spark firewall"):
         service.detect("default", "fw-gaia")
+
+
+def test_detect_preserves_installable_across_refresh(
+    service: SparkPatchingService, store: Store, transport: FakeTransport
+) -> None:
+    """Regression guard: detect() used to build a brand-new ServerStateRow on
+    every refresh, silently wiping out whatever a transfer job had staged
+    into installable (see submit_transfer / _mark_staged)."""
+    service.submit_transfer("default", "spark-01", IMG)
+    _run(service)
+    assert store.get_server_state("default", "spark-01").installable == [IMG]
+
+    transport.responses["fw ver"] = "This is Check Point's 1550 Appliance R81.10.17 - Build 892"
+    service.detect("default", "spark-01")
+    cached = store.get_server_state("default", "spark-01")
+    assert cached is not None
+    assert cached.version == "1550 Appliance R81.10.17 - Build 892"
+    assert cached.installable == [IMG]
 
 
 def test_ensure_host_free_shared_with_cpuse_still_works(store: Store) -> None:
