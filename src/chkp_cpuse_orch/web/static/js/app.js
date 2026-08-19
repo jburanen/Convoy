@@ -1671,16 +1671,20 @@ function restoreRowSelection(row, hostName, saved) {
   syncActionButtons(row);
 }
 
+// See loadFirewalls()'s matching guard/comment — same race, same fix: bail
+// out of a stale call rather than let two concurrent loads each clear-then-
+// append and double every row.
+let _serversLoadToken = 0;
+
 async function loadServers() {
+  const token = ++_serversLoadToken;
   const tbody = document.querySelector("#servers-table tbody");
   const infoTbody = document.querySelector("#servers-info-table tbody");
-  const savedSelections = captureRowSelections(tbody, ".srv-name-link");
-
-  tbody.replaceChildren();
-  infoTbody.replaceChildren();
 
   if (!currentEnv) {
     // No environments defined yet — prompt the operator toward the create dialog.
+    tbody.replaceChildren();
+    infoTbody.replaceChildren();
     const msg = "No environments. Use the Environment picker → New Environment…";
     emptyRow(infoTbody, 7, msg);
     emptyRow(tbody, 5, msg);
@@ -1702,6 +1706,11 @@ async function loadServers() {
     fetchCredentialSets(),
   ]);
   await refreshActiveJobTargets();
+  if (token !== _serversLoadToken) return; // a newer call started — let it render instead
+
+  const savedSelections = captureRowSelections(tbody, ".srv-name-link");
+  tbody.replaceChildren();
+  infoTbody.replaceChildren();
   const assignedByName = new Map(servers.map((s) => [s.name, s.credential_set]));
   const stateByName = new Map(servers.map((s) => [s.name, s]));
 
@@ -2221,12 +2230,22 @@ document.getElementById("bulk-import-cloud-btn").addEventListener("click", () =>
 // CDT bulk gateway-fleet push below. Reuses renderStateRow/renderInstallSelect
 // (already generic over row/data shape) and the shared bulkImport() helper.
 
+// Bumped on every call, checked after the awaits below — any two callers
+// racing loadFirewalls() (e.g. the firewall-remove handler's own reload
+// landing mid-flight with a pollJobs()-triggered loadServers()->loadFirewalls()
+// tail call, or with each other) used to each clear the tbody and then each
+// append their own full row set, doubling every row (operator-reported,
+// 2026-07-23 and again 2026-08-18 — see loadServers()'s matching guard and
+// pollJobs()'s reloadProv comment, which only fixed one specific instance of
+// this). A stale call now bails out before touching the DOM instead.
+let _firewallsLoadToken = 0;
+
 async function loadFirewalls() {
+  const token = ++_firewallsLoadToken;
   const tbody = document.querySelector("#firewalls-table tbody");
-  const savedSelections = captureRowSelections(tbody, ".fw-name-link");
-  tbody.replaceChildren();
 
   if (!currentEnv) {
+    tbody.replaceChildren();
     emptyRow(tbody, 6, "No environments. Use the Environment picker → New Environment…");
     return;
   }
@@ -2237,6 +2256,10 @@ async function loadFirewalls() {
     api("/api/packages"),
   ]);
   await refreshActiveJobTargets();
+  if (token !== _firewallsLoadToken) return; // a newer call started — let it render instead
+
+  const savedSelections = captureRowSelections(tbody, ".fw-name-link");
+  tbody.replaceChildren();
   const stateByName = new Map(firewalls.map((f) => [f.name, f]));
 
   const bulkPackageSelect = document.getElementById("fw-bulk-import-package");
