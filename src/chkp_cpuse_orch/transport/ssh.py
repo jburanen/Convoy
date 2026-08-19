@@ -18,7 +18,10 @@ scripted `expert`-mode escalation, which exec_command() can't do (see
 from __future__ import annotations
 
 import io
+import os
+import posixpath
 import re
+import shlex
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -81,6 +84,21 @@ def load_private_key(material: str, passphrase: str | None = None) -> paramiko.P
         except paramiko.SSHException as exc:
             last_error = exc
     raise TransportError(f"unsupported or corrupt private key material: {last_error}")
+
+
+def _read_scp_ack(stdout: object, host_name: str) -> None:
+    """Read one byte of the classic-SCP sink protocol's ack: 0x00 = ok, 0x01
+    = warning, 0x02 = fatal — both non-zero cases are followed by a
+    human-readable message up to the next newline. Raises on anything but a
+    clean ok, including the channel closing mid-handshake."""
+    ack = stdout.read(1)  # type: ignore[attr-defined]
+    if not ack:
+        raise TransportError(f"SCP upload to {host_name}: connection closed before an ack")
+    if ack in (b"\x01", b"\x02"):
+        detail = stdout.readline().decode("utf-8", errors="replace").strip()  # type: ignore[attr-defined]
+        raise TransportError(f"SCP upload to {host_name} rejected: {detail or 'no detail given'}")
+    if ack != b"\x00":
+        raise TransportError(f"SCP upload to {host_name}: unexpected ack byte {ack!r}")
 
 
 class SSHClient:
@@ -177,6 +195,52 @@ class SSHClient:
         if attrs.st_size is None:
             raise TransportError(f"SFTP upload to {self.host.name}:{remote_path}: no remote size")
         return attrs.st_size
+
+    def put_scp(
+        self,
+        local_path: str,
+        remote_path: str,
+        *,
+        progress: Callable[[int, int], None] | None = None,
+    ) -> int:
+        """Classic-SCP upload, spoken directly over ``exec_command("scp -t
+        ...")`` rather than Paramiko's SFTP subsystem — Spark (Gaia
+        Embedded)'s ``bashUser on`` only advertises SCP ("SCP access
+        enabled" in its own banner, no mention of SFTP), and a real-hardware
+        transfer confirmed SFTP does not work there (`put()` failed with
+        "Channel closed"). Gaia (Force) and the CPUSE-local management-server
+        path keep using ``put()`` — SFTP is confirmed working there. See
+        .claude/memory/spark-firmware-patching.md."""
+        client = self._require_connected()
+        local_size = os.path.getsize(local_path)
+        filename = posixpath.basename(remote_path) or os.path.basename(local_path)
+        try:
+            stdin, stdout, _stderr = client.exec_command(f"scp -t {shlex.quote(remote_path)}")
+            _read_scp_ack(stdout, self.host.name)
+            stdin.write(f"C0644 {local_size} {filename}\n".encode())
+            stdin.flush()
+            _read_scp_ack(stdout, self.host.name)
+            sent = 0
+            with open(local_path, "rb") as fh:
+                while chunk := fh.read(1 << 20):
+                    stdin.write(chunk)
+                    sent += len(chunk)
+                    if progress is not None:
+                        progress(sent, local_size)
+            stdin.write(b"\x00")
+            stdin.flush()
+            _read_scp_ack(stdout, self.host.name)
+            stdin.close()
+            rc = stdout.channel.recv_exit_status()
+        except (OSError, paramiko.SSHException) as exc:
+            raise TransportError(
+                f"SCP upload to {self.host.name}:{remote_path} failed: {exc}"
+            ) from exc
+        if rc != 0:
+            raise TransportError(
+                f"SCP upload to {self.host.name}:{remote_path} failed: scp exited {rc}"
+            )
+        return local_size
 
     def open_interactive_shell(self, *, width: int = 200, height: int = 50) -> InteractiveShell:
         """Open a pty-backed interactive session on the same connection, for

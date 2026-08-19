@@ -1,6 +1,6 @@
 ---
 name: spark-firmware-patching
-description: Spark (Gaia Embedded) firmware transfer+upgrade via upgrade_revert_image.sh — interactive expert-mode SSH primitive, two unvalidated assumptions
+description: Spark (Gaia Embedded) firmware transfer+upgrade via upgrade_revert_image.sh — interactive expert-mode SSH primitive; transfer uses SCP (not SFTP) after real-hardware confirmation
 metadata:
   type: project
 ---
@@ -25,19 +25,26 @@ session via `invoke_shell()`, send/expect-style) and `GaiaExpertSession`
 module to fill that gap. `GaiaExpertSession` is the *only* place that
 encodes Gaia's actual prompt text/regexes.
 
-## Two assumptions, one now confirmed against real hardware
+## Two assumptions, both now confirmed against real hardware
 
 No live Spark box was available to test against when this shipped, so two
 guesses had to ship without confirmation — both deliberately isolated
 behind narrow interfaces so a wrong guess is a contained fix, not a rewrite
 of the job's sequencing:
 
-1. **SFTP vs SCP.** The firmware upload reuses `SSHClient.put()` (Paramiko's
-   SFTP subsystem) unchanged, on the assumption Spark's SSH server exposes
-   it in whichever `bashUser` state. If real hardware only speaks classic
-   SCP, only that one `client.put(...)` call site needs to change. **Still
-   unvalidated** — the 2026-08-19 hardware test below only exercised login +
-   expert escalation, not the file transfer.
+1. **SFTP vs SCP.** The firmware upload originally reused `SSHClient.put()`
+   (Paramiko's SFTP subsystem) unchanged, on the assumption Spark's SSH
+   server exposed it in whichever `bashUser` state. **Confirmed wrong
+   2026-08-19** — a real `spark.transfer_upgrade` run against live hardware
+   failed at the transfer phase with `TransportError: SFTP upload to
+   <host>:<path> failed: Channel closed`; `bashUser on`'s own banner had
+   only ever said "SCP access enabled," never SFTP. Fixed the same day by
+   adding `SSHClient.put_scp()` (`transport/ssh.py`) — the classic SCP sink
+   protocol spoken directly over `exec_command("scp -t ...")` (control line
+   `C0644 <size> <name>\n`, single-byte 0x00/0x01/0x02 acks, no third-party
+   `scp` dependency) — and pointing `_transfer_image()` at it instead of
+   `put()`. The Gaia CPUSE import path (`patching.py`) still calls `put()`
+   unchanged; SFTP is confirmed working there.
 2. **`expert` prompt text.** `GaiaExpertSession`'s `_PASSWORD_PROMPT`,
    `_EXPERT_PROMPT`, `_LOGIN_PROMPT` regexes are first guesses. **Confirmed
    correct 2026-08-19** — a direct probe (constructing `SSHClient` +
@@ -46,10 +53,7 @@ of the job's sequencing:
    clean match on `_EXPERT_PROMPT`, then `exit_expert()` matched
    `_LOGIN_PROMPT` cleanly too. No mutating command was run.
 
-Both are called out in code comments at their definition site. Fix SFTP-vs-SCP
-(if still needed) by editing `transport/ssh.py` directly once real Spark
-firmware-transfer output is available —
-nothing in `spark_patching.py` should need to change.
+Both are called out in code comments at their definition site.
 
 ## The two jobs
 

@@ -7,12 +7,18 @@ specified, 2026-08-19): enable ``bashUser``, transfer a ``.img`` file to
 ``/storage``, disable ``bashUser`` again, then run
 ``upgrade_revert_image.sh ... upgrade safe``, which reboots the device on its
 own a minute or two later. See .claude/memory/spark-firmware-patching.md for
-the two assumptions here that are **unvalidated against real Spark
-hardware** — whether SFTP (reused from Transport.put, same as the Gaia CPUSE
-path) actually works in either ``bashUser`` state, and the exact prompt text
-the ``expert`` command's password escalation uses (transport/ssh.py's
-GaiaExpertSession) — and why both are isolated behind narrow interfaces so a
-wrong guess is a contained fix.
+the assumptions here that shipped **unvalidated against real Spark
+hardware** and how they've resolved since: the file transfer originally
+reused ``Transport.put()`` (Paramiko's SFTP subsystem, same as the Gaia CPUSE
+path) but a real-hardware run confirmed Spark's SSH server doesn't speak SFTP
+in either ``bashUser`` state — it failed with "Channel closed" — so the
+transfer now goes over ``SSHClient.put_scp()`` (transport/ssh.py), the
+classic SCP protocol, which matches what ``bashUser on``'s own banner
+actually advertises ("SCP access enabled", no mention of SFTP). The exact
+prompt text the ``expert`` command's password escalation uses
+(transport/ssh.py's GaiaExpertSession) was confirmed correct the same day.
+Both were isolated behind narrow interfaces so a wrong guess was a contained
+fix, not a rewrite.
 
 Two job kinds:
 
@@ -42,6 +48,7 @@ import asyncio
 import contextlib
 import posixpath
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -102,10 +109,20 @@ def parse_fw_ver(stdout: str) -> str:
 class ExpertCapableTransport(Transport, Protocol):
     """A Transport that can also open a pty-backed interactive shell — what
     the Spark expert-mode commands (bashUser on/off,
-    upgrade_revert_image.sh) need. SSHClient satisfies this structurally
-    (see transport/ssh.py); tests substitute a fake with the same shape."""
+    upgrade_revert_image.sh) need — and upload over classic SCP rather than
+    ``Transport.put()``'s SFTP, which Spark's SSH server doesn't speak (see
+    module docstring). SSHClient satisfies this structurally (see
+    transport/ssh.py); tests substitute a fake with the same shape."""
 
     def open_interactive_shell(self) -> InteractiveShell: ...
+
+    def put_scp(
+        self,
+        local_path: str,
+        remote_path: str,
+        *,
+        progress: Callable[[int, int], None] | None = None,
+    ) -> int: ...
 
 
 def _safe_close(closable: object) -> None:
@@ -385,7 +402,7 @@ class SparkPatchingService:
             filename = posixpath.basename(remote_path)
             ctx.log(f"uploading {filename} ({local_size} bytes) to {host.name}:{remote_path}")
             reporter = ProgressReporter(ctx, local_size)
-            remote_size = client.put(str(local_path), remote_path, progress=reporter)
+            remote_size = client.put_scp(str(local_path), remote_path, progress=reporter)
             verify_uploaded_file(
                 client,
                 remote_path,
