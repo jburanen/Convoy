@@ -408,9 +408,17 @@ def _looks_like_package_name(line: str) -> bool:
     return " " not in token and (token.endswith(".tgz") or token.startswith("Check_Point"))
 
 
+_SHELL_METACHARS_RE = re.compile(r"""[;&|`$<>\\"'\r\n]""")
+
+
 def _check_id(package_id: str) -> str:
-    """Package IDs feed a clish command line — reject anything shell-suspicious."""
-    if not re.fullmatch(r"[A-Za-z0-9._-]+", package_id):
+    """Package IDs feed a clish command line — reject shell-metacharacters
+    that could break out of the quoted command, rather than allowlisting a
+    strict charset. Real CPUSE display names legitimately contain spaces and
+    parens (e.g. "R82.10 Jumbo Hotfix Accumulator Recommended Jumbo Take
+    40") — an earlier allowlist-only version of this check rejected those
+    as "suspicious" even though they're exactly what CPUSE itself reports."""
+    if not package_id.strip() or _SHELL_METACHARS_RE.search(package_id):
         raise CPUSEError(f"suspicious package identifier: {package_id!r}")
     return package_id
 
