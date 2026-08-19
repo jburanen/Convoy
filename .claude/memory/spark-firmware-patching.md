@@ -25,22 +25,30 @@ session via `invoke_shell()`, send/expect-style) and `GaiaExpertSession`
 module to fill that gap. `GaiaExpertSession` is the *only* place that
 encodes Gaia's actual prompt text/regexes.
 
-## Two assumptions, unvalidated against real hardware, isolated on purpose
+## Two assumptions, one now confirmed against real hardware
 
-No live Spark box was available to test against, so two guesses had to ship
-without confirmation — both deliberately isolated behind narrow interfaces
-so a wrong guess is a contained fix, not a rewrite of the job's sequencing:
+No live Spark box was available to test against when this shipped, so two
+guesses had to ship without confirmation — both deliberately isolated
+behind narrow interfaces so a wrong guess is a contained fix, not a rewrite
+of the job's sequencing:
 
 1. **SFTP vs SCP.** The firmware upload reuses `SSHClient.put()` (Paramiko's
    SFTP subsystem) unchanged, on the assumption Spark's SSH server exposes
    it in whichever `bashUser` state. If real hardware only speaks classic
-   SCP, only that one `client.put(...)` call site needs to change.
+   SCP, only that one `client.put(...)` call site needs to change. **Still
+   unvalidated** — the 2026-08-19 hardware test below only exercised login +
+   expert escalation, not the file transfer.
 2. **`expert` prompt text.** `GaiaExpertSession`'s `_PASSWORD_PROMPT`,
-   `_EXPERT_PROMPT`, `_LOGIN_PROMPT` regexes are first guesses. If wrong,
-   only those three patterns need correcting.
+   `_EXPERT_PROMPT`, `_LOGIN_PROMPT` regexes are first guesses. **Confirmed
+   correct 2026-08-19** — a direct probe (constructing `SSHClient` +
+   `GaiaExpertSession` by hand, no orchestrator job/inventory involved) logged
+   into a live Spark firewall as `admin`, ran `enter_expert()`, and got a
+   clean match on `_EXPERT_PROMPT`, then `exit_expert()` matched
+   `_LOGIN_PROMPT` cleanly too. No mutating command was run.
 
-Both are called out in code comments at their definition site. Fix either by
-editing `transport/ssh.py` directly once real Spark output is available —
+Both are called out in code comments at their definition site. Fix SFTP-vs-SCP
+(if still needed) by editing `transport/ssh.py` directly once real Spark
+firmware-transfer output is available —
 nothing in `spark_patching.py` should need to change.
 
 ## The two jobs
