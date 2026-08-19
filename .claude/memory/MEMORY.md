@@ -32,3 +32,5 @@ Load this at the start of each session; read a linked file when its hook looks r
 - [API access repair flow](api-access-repair-flow.md) — proactive SSH diagnose right after Connect to Primary succeeds; repair stays confirm-gated, not folded into the provisioning command sequence
 - [Punch list workflow](punchlist-workflow.md) — closing a README Punch List bug moves it to Squashed Bugs w/ version, same commit as the fix
 - [Spark firewall credential scenarios](spark-firewall-credential-scenarios.md) — adding a Spark firewall prompts direct-vs-bootstrap credentials, requires expert password; modal-on-modal needs explicit z-index (DOM order ≠ nesting order)
+- [Table reload race](table-reload-race.md) — loadServers()/loadFirewalls() need a bump-token guard against overlapping calls, or every row silently doubles; recurred once after a partial 2026-07-23 fix
+- [Spark firmware patching](spark-firmware-patching.md) — SCP + expert-mode upgrade_revert_image.sh flow; new InteractiveShell/GaiaExpertSession SSH primitive; SFTP-vs-SCP and expert-prompt-text both unvalidated against real hardware, isolated on purpose
