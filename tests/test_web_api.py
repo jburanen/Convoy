@@ -1590,6 +1590,24 @@ def test_firewall_spark_transfer_upgrade_rejects_non_image_package(client: TestC
     assert "Spark firmware image" in resp.json()["detail"]
 
 
+def test_firewall_state_spark_uses_fw_ver_not_cpuse(
+    client: TestClient, transport: FakeTransport
+) -> None:
+    transport.responses["fw ver"] = "This is Check Point's 1550 Appliance R81.10.17 - Build 892"
+    _put_set(client, ssh_username="admin", ssh_password="s3cret-pw!", expert_password="expert-pw")
+    _add_firewall(client, name="spark-x", address="192.0.2.80", role="spark_firewall")
+    client.post("/api/env/default/firewalls/spark-x/credential", json={"set": "primary"})
+
+    resp = client.post("/api/env/default/firewalls/spark-x/state")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["version"] == "1550 Appliance R81.10.17 - Build 892"
+    assert body["jhf"] is None
+    assert body["agent_build"] is None
+    assert body["packages"] == []
+    assert not any("installer" in c or "cluster state" in c for c in transport.commands)
+
+
 def test_firewall_spark_transfer_upgrade_succeeds(client: TestClient) -> None:
     # sha1 of b"x" * 64 matches the transport fixture's canned `sha1sum` reply
     # regardless of filename (it hashes content, not the path echoed back).

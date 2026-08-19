@@ -13,7 +13,7 @@ from chkp_cpuse_orch.inventory import Host, Inventory, Role, Site
 from chkp_cpuse_orch.jobs import JobRunner
 from chkp_cpuse_orch.packages import PackageStore
 from chkp_cpuse_orch.services.common import EnvironmentRegistry, HostConnector
-from chkp_cpuse_orch.services.spark_patching import SparkPatchingService
+from chkp_cpuse_orch.services.spark_patching import SparkPatchingService, parse_fw_ver
 from chkp_cpuse_orch.store import JobStatus, Store
 
 from .fakes import FakeTransport, make_factory
@@ -281,6 +281,50 @@ def test_transfer_upgrade_fails_without_expert_password(
     assert finished.status is JobStatus.FAILED
     assert finished.error is not None and "no expert-mode password" in finished.error
     assert transport.interactive_shells == []
+
+
+# -- detect (refresh) --------------------------------------------------------------
+
+
+def test_parse_fw_ver_strips_banner_prefix() -> None:
+    assert (
+        parse_fw_ver("This is Check Point's 1550 Appliance R81.10.17 - Build 892\n")
+        == "1550 Appliance R81.10.17 - Build 892"
+    )
+
+
+def test_parse_fw_ver_falls_back_to_trimmed_line_without_prefix() -> None:
+    assert parse_fw_ver("  some other banner text  \n") == "some other banner text"
+
+
+def test_detect_runs_fw_ver_not_cpuse(
+    service: SparkPatchingService, store: Store, transport: FakeTransport
+) -> None:
+    transport.responses["fw ver"] = "This is Check Point's 1550 Appliance R81.10.17 - Build 892"
+    version = service.detect("default", "spark-01")
+    assert version == "1550 Appliance R81.10.17 - Build 892"
+    assert any(c == "fw ver" for c in transport.commands)
+    assert not any("installer" in c or "cluster state" in c for c in transport.commands)
+
+
+def test_detect_caches_state_with_no_jhf_or_agent_build(
+    service: SparkPatchingService, store: Store, transport: FakeTransport
+) -> None:
+    transport.responses["fw ver"] = "This is Check Point's 1550 Appliance R81.10.17 - Build 892"
+    service.detect("default", "spark-01")
+    cached = store.get_server_state("default", "spark-01")
+    assert cached is not None
+    assert cached.version == "1550 Appliance R81.10.17 - Build 892"
+    assert cached.jhf is None
+    assert cached.agent_build is None
+    assert cached.cluster_role is None
+    assert cached.installable == []
+    assert cached.installed == []
+
+
+def test_detect_rejects_non_spark_host(service: SparkPatchingService) -> None:
+    with pytest.raises(InventoryError, match="not a Spark firewall"):
+        service.detect("default", "fw-gaia")
 
 
 def test_ensure_host_free_shared_with_cpuse_still_works(store: Store) -> None:
