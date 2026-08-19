@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+from pathlib import Path
 
 import paramiko
 import pytest
@@ -94,3 +95,115 @@ def test_require_ok_passes_and_fails() -> None:
     bad = CommandResult(command="x", exit_status=2, stdout="", stderr="denied")
     with pytest.raises(TransportError, match="rc=2"):
         require_ok(bad)
+
+
+# -- put_scp — classic-SCP upload (Spark's SSH server doesn't speak SFTP) --------
+
+
+class _FakeScpChannel:
+    """Stands in for the (stdin, stdout) pair exec_command("scp -t ...")
+    returns: acks is the sequence of single-byte acks put_scp() reads (one
+    per control line/data phase), exit_status what the channel reports once
+    stdin is closed. Records everything written to stdin for assertions."""
+
+    def __init__(self, acks: list[bytes], exit_status: int = 0) -> None:
+        self._acks = list(acks)
+        self.exit_status = exit_status
+        self.written = bytearray()
+        self.closed = False
+
+        class _Channel:
+            def recv_exit_status(_self) -> int:
+                return self.exit_status
+
+        self.channel = _Channel()
+
+    # -- stdin side --
+    def write(self, data: bytes) -> None:
+        self.written.extend(data)
+
+    def flush(self) -> None:
+        pass
+
+    def close(self) -> None:
+        self.closed = True
+
+    # -- stdout side --
+    def read(self, _n: int) -> bytes:
+        return self._acks.pop(0) if self._acks else b""
+
+    def readline(self) -> bytes:
+        return b"permission denied\n"
+
+
+def _fake_exec_command(channel: _FakeScpChannel):
+    def exec_command(self: paramiko.SSHClient, command: str):
+        return channel, channel, io.BytesIO(b"")
+
+    return exec_command
+
+
+def test_put_scp_happy_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _patch_paramiko_connect(monkeypatch)
+    channel = _FakeScpChannel(acks=[b"\x00", b"\x00", b"\x00"])
+    monkeypatch.setattr(paramiko.SSHClient, "exec_command", _fake_exec_command(channel))
+    local = tmp_path / "spark_firmware.img"
+    local.write_bytes(b"fake firmware bytes")
+
+    client = SSHClient(_host(), password="pw")
+    client.connect()
+    progressed: list[tuple[int, int]] = []
+    size = client.put_scp(
+        str(local),
+        "/storage/spark_firmware.img",
+        progress=lambda done, total: progressed.append((done, total)),
+    )
+
+    assert size == local.stat().st_size
+    assert channel.written.startswith(b"C0644 19 spark_firmware.img\n")
+    assert channel.written.endswith(b"fake firmware bytes\x00")
+    assert channel.closed is True
+    assert progressed == [(19, 19)]
+
+
+def test_put_scp_raises_on_rejection_ack(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _patch_paramiko_connect(monkeypatch)
+    channel = _FakeScpChannel(acks=[b"\x01"])  # rejected before the control line is even sent
+    monkeypatch.setattr(paramiko.SSHClient, "exec_command", _fake_exec_command(channel))
+    local = tmp_path / "spark_firmware.img"
+    local.write_bytes(b"x")
+
+    client = SSHClient(_host(), password="pw")
+    client.connect()
+    with pytest.raises(TransportError, match="permission denied"):
+        client.put_scp(str(local), "/storage/spark_firmware.img")
+
+
+def test_put_scp_raises_when_channel_closes_before_ack(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_paramiko_connect(monkeypatch)
+    channel = _FakeScpChannel(acks=[])  # read(1) immediately returns b""
+    monkeypatch.setattr(paramiko.SSHClient, "exec_command", _fake_exec_command(channel))
+    local = tmp_path / "spark_firmware.img"
+    local.write_bytes(b"x")
+
+    client = SSHClient(_host(), password="pw")
+    client.connect()
+    with pytest.raises(TransportError, match="connection closed"):
+        client.put_scp(str(local), "/storage/spark_firmware.img")
+
+
+def test_put_scp_raises_on_nonzero_exit_status(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_paramiko_connect(monkeypatch)
+    channel = _FakeScpChannel(acks=[b"\x00", b"\x00", b"\x00"], exit_status=1)
+    monkeypatch.setattr(paramiko.SSHClient, "exec_command", _fake_exec_command(channel))
+    local = tmp_path / "spark_firmware.img"
+    local.write_bytes(b"x")
+
+    client = SSHClient(_host(), password="pw")
+    client.connect()
+    with pytest.raises(TransportError, match="scp exited 1"):
+        client.put_scp(str(local), "/storage/spark_firmware.img")

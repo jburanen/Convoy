@@ -94,6 +94,17 @@ class FakeTransport:
             progress(size, size)  # single 100% callback
         return size
 
+    def put_scp(
+        self,
+        local_path: str,
+        remote_path: str,
+        *,
+        progress: Callable[[int, int], None] | None = None,
+    ) -> int:
+        # Recorded into the same `puts` list as put() — callers only care
+        # that a transfer happened, not which protocol carried it.
+        return self.put(local_path, remote_path, progress=progress)
+
     def close(self) -> None:
         self.closed = True
 
