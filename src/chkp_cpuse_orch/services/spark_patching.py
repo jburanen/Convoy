@@ -4,9 +4,11 @@ Spark firewalls don't go through CPUSE or CDT — see patching.py's module
 docstring for that path, used by every other host kind this tool patches.
 Spark patches via SCP + expert-mode shell commands instead (operator-
 specified, 2026-08-19): enable ``bashUser``, transfer a ``.img`` file to
-``/storage``, disable ``bashUser`` again, then run
-``upgrade_revert_image.sh ... upgrade safe``, which reboots the device on its
-own a minute or two later. See .claude/memory/spark-firmware-patching.md for
+``/storage``, disable ``bashUser`` again — that's the whole transfer job,
+see JOB_TRANSFER below — then, as its own separately-triggered install job
+(JOB_INSTALL), run ``upgrade_revert_image.sh ... upgrade safe``, which
+reboots the device on its own a minute or two later. See
+.claude/memory/spark-firmware-patching.md for
 the assumptions here that shipped **unvalidated against real Spark
 hardware** and how they've resolved since: the file transfer originally
 reused ``Transport.put()`` (Paramiko's SFTP subsystem, same as the Gaia CPUSE
@@ -20,18 +22,28 @@ prompt text the ``expert`` command's password escalation uses
 Both were isolated behind narrow interfaces so a wrong guess was a contained
 fix, not a rewrite.
 
-Two job kinds:
+Three job kinds:
 
 - **test_credentials** — proves SSH login *and* ``expert``-mode escalation
   work for a Spark firewall's assigned credential set. Never runs a mutating
   command, so it's safe to run repeatedly with no confirmation gate — unlike
-  transfer_upgrade below.
-- **transfer_upgrade** — the actual firmware push. Requires
-  ``confirmed=True``: the device reboots on its own once the upgrade command
-  is issued, and that can't be undone or cancelled after the fact. The job
-  cannot and does not confirm the upgrade actually completed — Spark has
-  nothing like CPUSE's ``show installer package`` to poll — success here only
-  means the command was issued.
+  transfer/install below.
+- **transfer** — SCP the ``.img`` to ``/storage`` and nothing else (operator-
+  directed, 2026-08-19, after "Upload and import" was found to also fire the
+  upgrade command — see .claude/memory/spark-firmware-patching.md). No
+  confirmation gate: it doesn't reboot anything, mirroring CPUSE's plain
+  ``/import``. Once it succeeds, the package filename is recorded into the
+  same ``ServerStateRow.installable`` cache CPUSE hosts use, so the
+  Firewalls-panel row's Install picker (originally CPUSE-only) lists it too.
+- **install** — runs ``upgrade_revert_image.sh ... upgrade safe`` against a
+  ``.img`` already sitting in ``/storage`` (a prior transfer job, almost
+  always — nothing stops issuing install against a file staged some other
+  way, same as CPUSE's install trusts its own picker rather than re-checking
+  device state). Requires ``confirmed=True``: the device reboots on its own
+  once the upgrade command is issued, and that can't be undone or cancelled
+  after the fact. The job cannot and does not confirm the upgrade actually
+  completed — Spark has nothing like CPUSE's ``show installer package`` to
+  poll — success here only means the command was issued.
 
 Refresh (``detect``, not a job — synchronous, mirrors ``PatchingService.
 detect()``'s shape) is also Spark-specific: there's no CPUSE agent on Gaia
@@ -71,15 +83,17 @@ from .common import (
 )
 
 __all__ = [
+    "JOB_INSTALL",
     "JOB_TEST_CREDENTIALS",
-    "JOB_TRANSFER_UPGRADE",
+    "JOB_TRANSFER",
     "EnvironmentRegistry",
     "HostConnector",
     "SparkPatchingService",
 ]
 
-JOB_TEST_CREDENTIALS = "spark.test_credentials"
-JOB_TRANSFER_UPGRADE = "spark.transfer_upgrade"
+JOB_TEST_CREDENTIALS = "spark.testcred"
+JOB_TRANSFER = "spark.scp"
+JOB_INSTALL = "spark.install"
 
 # Gaia Embedded's fixed staging location for upgrade_revert_image.sh.
 _STORAGE_DIR = "/storage"
@@ -154,7 +168,8 @@ class SparkPatchingService:
         self._vault = vault
         self._store = store
         runner.register(JOB_TEST_CREDENTIALS, self._test_credentials_job)
-        runner.register(JOB_TRANSFER_UPGRADE, self._transfer_upgrade_job)
+        runner.register(JOB_TRANSFER, self._transfer_job)
+        runner.register(JOB_INSTALL, self._install_job)
 
     # -- queries --------------------------------------------------------------------
 
@@ -173,8 +188,12 @@ class SparkPatchingService:
         (SSH) — call via ``asyncio.to_thread`` from async contexts. Caches
         the result the same way PatchingService does, into the same
         ``ServerStateRow`` table, so the Firewalls list reflects it without
-        a separate read; jhf/agent_build/cluster_role are left None and
-        installable/installed empty since none of those concepts apply."""
+        a separate read; jhf/agent_build/cluster_role are left None since
+        none of those concepts apply to Spark. ``installable`` is preserved
+        from whatever was already cached rather than cleared — it's not a
+        CPUSE concept here, it's this tool's own record of ``.img`` files a
+        transfer job has staged in ``/storage`` (see submit_transfer), and a
+        plain Refresh shouldn't erase that bookkeeping."""
         connector = self.registry.get(environment)
         host = connector.spark_firewall_host(host_name)
         creds = connector.require_credentials(host, credentials)
@@ -182,12 +201,14 @@ class SparkPatchingService:
         try:
             result = require_ok(client.run("fw ver"))
             version = parse_fw_ver(result.stdout)
+            existing = self._store.get_server_state(environment, host.name)
             self._store.upsert_server_state(
                 ServerStateRow(
                     environment=environment,
                     host=host.name,
                     version=version,
                     checked_at=utcnow(),
+                    installable=existing.installable if existing else [],
                 )
             )
             return version
@@ -219,25 +240,20 @@ class SparkPatchingService:
             triggered_by=triggered_by,
         )
 
-    def submit_transfer_upgrade(
+    def submit_transfer(
         self,
         environment: str,
         host_name: str,
         package_filename: str,
         *,
-        confirmed: bool,
         credentials: CredentialBundle | None = None,
         triggered_by: str | None = None,
     ) -> JobRecord:
         """Enqueue: bashUser on -> transfer the .img to /storage -> verify ->
-        bashUser off -> upgrade_revert_image.sh ... upgrade safe.
-        ``confirmed`` must be True — the device reboots on its own once the
-        upgrade command is issued, and that can't be undone or cancelled."""
-        if not confirmed:
-            raise JobError(
-                "firmware transfer requires explicit confirmation — the firewall reboots "
-                "on its own once the upgrade command is issued, and this cannot be undone"
-            )
+        bashUser off. No confirmation gate — this only stores a file on the
+        device, it doesn't reboot anything, same as CPUSE's plain import.
+        Install (a separate, confirmed job — see submit_install) is what
+        actually runs the upgrade."""
         if package_kind(package_filename) != "spark_image":
             raise JobError(
                 f"{package_filename!r} isn't a Spark firmware image (.img) — Spark firewalls "
@@ -252,7 +268,49 @@ class SparkPatchingService:
             self._vault,
             connector,
             host,
-            JOB_TRANSFER_UPGRADE,
+            JOB_TRANSFER,
+            params={"package": package_filename},
+            credentials=credentials,
+            triggered_by=triggered_by,
+        )
+
+    def submit_install(
+        self,
+        environment: str,
+        host_name: str,
+        package_filename: str,
+        *,
+        confirmed: bool,
+        credentials: CredentialBundle | None = None,
+        triggered_by: str | None = None,
+    ) -> JobRecord:
+        """Enqueue: expert mode -> bashUser off -> upgrade_revert_image.sh
+        ... upgrade safe, against a ``.img`` expected to already be staged
+        in ``/storage`` by a prior transfer job. ``confirmed`` must be True —
+        the device reboots on its own once the upgrade command is issued,
+        and that can't be undone or cancelled. Doesn't re-check device state
+        before enqueuing (same trust-the-picker posture as CPUSE's
+        submit_install) — a package that was never actually transferred
+        fails at the device, surfaced as an ordinary job failure."""
+        if not confirmed:
+            raise JobError(
+                "install requires explicit confirmation — the firewall reboots on its own "
+                "once the upgrade command is issued, and this cannot be undone"
+            )
+        if package_kind(package_filename) != "spark_image":
+            raise JobError(
+                f"{package_filename!r} isn't a Spark firmware image (.img) — Spark firewalls "
+                "only accept .img packages"
+            )
+        connector = self.registry.get(environment)
+        host = connector.spark_firewall_host(host_name)
+        ensure_host_free(self._store, environment, host_name)
+        return submit_host_job(
+            self.runner,
+            self._vault,
+            connector,
+            host,
+            JOB_INSTALL,
             params={"package": package_filename},
             credentials=credentials,
             triggered_by=triggered_by,
@@ -263,8 +321,11 @@ class SparkPatchingService:
     async def _test_credentials_job(self, ctx: JobContext) -> None:
         await asyncio.to_thread(self._do_test_credentials, ctx)
 
-    async def _transfer_upgrade_job(self, ctx: JobContext) -> None:
-        await asyncio.to_thread(self._do_transfer_upgrade, ctx)
+    async def _transfer_job(self, ctx: JobContext) -> None:
+        await asyncio.to_thread(self._do_transfer, ctx)
+
+    async def _install_job(self, ctx: JobContext) -> None:
+        await asyncio.to_thread(self._do_install, ctx)
 
     # -- shared helpers -------------------------------------------------------------
 
@@ -329,9 +390,9 @@ class SparkPatchingService:
         finally:
             _safe_close(client)
 
-    # -- transfer_upgrade -------------------------------------------------------------
+    # -- transfer -----------------------------------------------------------------
 
-    def _do_transfer_upgrade(self, ctx: JobContext) -> None:
+    def _do_transfer(self, ctx: JobContext) -> None:
         connector = self.registry.get(ctx.job.environment)
         host = connector.spark_firewall_host(ctx.job.target or "")
         package = str(ctx.job.params["package"])
@@ -347,13 +408,64 @@ class SparkPatchingService:
         self._transfer_image(
             connector, host, bundle, local_path, local_size, expected_sha1, remote_path, ctx
         )
-        self._run_upgrade(connector, host, bundle, expert_password, remote_path, ctx)
+        # Restore the device to its normal (bashUser off) state now rather than
+        # leaving SCP/shell access enabled until whenever install eventually
+        # runs — install re-disables it itself right before the upgrade command
+        # anyway (see _run_upgrade), so this is just cleanup, not a functional
+        # prerequisite for either job.
+        self._disable_bash_user(connector, host, bundle, expert_password, ctx)
 
+        self._mark_staged(ctx.job.environment, host.name, package)
         ctx.log(
-            "upgrade command issued — the firewall is expected to reboot on its own within "
-            "1-2 minutes; this job does not and cannot confirm the upgrade's outcome, use "
-            "Refresh to check post-reboot state once it's back up",
-            level="warning",
+            f"{package} is staged in {remote_path} — use the Install button on this "
+            "firewall's row to run the upgrade when ready"
+        )
+
+    def _mark_staged(self, environment: str, host_name: str, package: str) -> None:
+        """Record a successfully-transferred filename into the same
+        ``ServerStateRow.installable`` cache CPUSE hosts use, so the
+        Firewalls-panel row's Install picker lists it — this tool's own
+        record of what it staged, not a live device query (Spark has
+        nothing like CPUSE's `show installer packages ...` to ask)."""
+        existing = self._store.get_server_state(environment, host_name)
+        installable = list(existing.installable) if existing else []
+        if package not in installable:
+            installable.append(package)
+        self._store.upsert_server_state(
+            ServerStateRow(
+                environment=environment,
+                host=host_name,
+                version=existing.version if existing else None,
+                jhf=existing.jhf if existing else None,
+                agent_build=existing.agent_build if existing else None,
+                checked_at=existing.checked_at if existing else utcnow(),
+                installable=installable,
+                installed=existing.installed if existing else [],
+                cluster_role=existing.cluster_role if existing else None,
+            )
+        )
+
+    def _unmark_staged(self, environment: str, host_name: str, package: str) -> None:
+        """Drop a package from the staged/installable list once install has
+        issued the upgrade command for it — best-effort UI hygiene, not a
+        correctness guarantee: this job can't confirm the upgrade actually
+        completed (see submit_install), so this only means "no longer worth
+        offering to install again", not "confirmed gone from /storage"."""
+        existing = self._store.get_server_state(environment, host_name)
+        if existing is None or package not in existing.installable:
+            return
+        self._store.upsert_server_state(
+            ServerStateRow(
+                environment=environment,
+                host=host_name,
+                version=existing.version,
+                jhf=existing.jhf,
+                agent_build=existing.agent_build,
+                checked_at=existing.checked_at,
+                installable=[p for p in existing.installable if p != package],
+                installed=existing.installed,
+                cluster_role=existing.cluster_role,
+            )
         )
 
     def _enable_bash_user(
@@ -364,7 +476,7 @@ class SparkPatchingService:
         expert_password: str,
         ctx: JobContext,
     ) -> None:
-        ctx.log(f"connecting over SSH to {host.name} (phase 1: enabling SCP transfer)")
+        ctx.log(f"connecting over SSH to {host.name} (enabling SCP transfer)")
         client = self._connect(connector, host, bundle)
         try:
             shell = client.open_interactive_shell()
@@ -396,7 +508,7 @@ class SparkPatchingService:
         remote_path: str,
         ctx: JobContext,
     ) -> None:
-        ctx.log(f"connecting over SSH to {host.name} (phase 2: transferring the firmware image)")
+        ctx.log(f"connecting over SSH to {host.name} (transferring the firmware image)")
         client = self._connect(connector, host, bundle)
         try:
             filename = posixpath.basename(remote_path)
@@ -413,7 +525,52 @@ class SparkPatchingService:
             )
         finally:
             _safe_close(client)
-        ctx.log("logging out before the upgrade phase (full session boundary)")
+        ctx.log("logging out before disabling SCP transfer (full session boundary)")
+
+    def _disable_bash_user(
+        self,
+        connector: HostConnector,
+        host: Host,
+        bundle: CredentialBundle,
+        expert_password: str,
+        ctx: JobContext,
+    ) -> None:
+        ctx.log(f"connecting over SSH to {host.name} (disabling SCP transfer)")
+        client = self._connect(connector, host, bundle)
+        try:
+            shell = client.open_interactive_shell()
+            try:
+                session = GaiaExpertSession(shell)
+                session.enter_expert(expert_password)
+                output = session.run_expert("bashUser off")
+                if output:
+                    ctx.log(f"bashUser off output:\n{output}")
+                session.exit_expert()
+            finally:
+                _safe_close(shell)
+        finally:
+            _safe_close(client)
+
+    # -- install --------------------------------------------------------------------
+
+    def _do_install(self, ctx: JobContext) -> None:
+        connector = self.registry.get(ctx.job.environment)
+        host = connector.spark_firewall_host(ctx.job.target or "")
+        package = str(ctx.job.params["package"])
+        remote_path = posixpath.join(_STORAGE_DIR, package)
+
+        bundle = self._resolve_bundle(connector, host, ctx)
+        expert_password = self._require_expert_password(bundle, host, ctx)  # no SSH before this
+
+        self._run_upgrade(connector, host, bundle, expert_password, remote_path, ctx)
+        self._unmark_staged(ctx.job.environment, host.name, package)
+
+        ctx.log(
+            "upgrade command issued — the firewall is expected to reboot on its own within "
+            "1-2 minutes; this job does not and cannot confirm the upgrade's outcome, use "
+            "Refresh to check post-reboot state once it's back up",
+            level="warning",
+        )
 
     def _run_upgrade(
         self,
@@ -424,7 +581,7 @@ class SparkPatchingService:
         remote_path: str,
         ctx: JobContext,
     ) -> None:
-        ctx.log(f"connecting over SSH to {host.name} (phase 3: running the upgrade)")
+        ctx.log(f"connecting over SSH to {host.name} (running the upgrade)")
         client = self._connect(connector, host, bundle)
         shell = None
         try:

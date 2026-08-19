@@ -686,6 +686,7 @@ button.link-btn.fw-name-link {
   white-space: nowrap;
   cursor: pointer;
 }
+.skip-verify-label.hidden { display: none; } /* out-rank the generic .hidden */
 
 /* ---- bulk import (above the servers table) ---- */
 .bulk-import-row {
