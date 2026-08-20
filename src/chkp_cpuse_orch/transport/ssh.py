@@ -30,7 +30,7 @@ from typing import Protocol
 
 import paramiko
 
-from ..errors import ExpertModeError, TransportError
+from ..errors import ExpertModeError, TransportError, TransportTimeoutError
 from ..inventory import Host
 
 
@@ -311,10 +311,15 @@ class InteractiveShell:
     def expect(self, pattern: str, *, timeout: float | None = None) -> str:
         """Read until ``pattern`` (a regex) matches the tail of accumulated
         output, or ``timeout`` elapses. Returns everything read. Raises
-        TransportError, with the captured output included, on timeout or if
-        the channel closes first — deliberately no fuzzy retry, a clear
-        failure with the actual bytes seen is more debuggable than one that
-        silently guesses again."""
+        TransportError if the channel closes first, or the narrower
+        TransportTimeoutError if the deadline elapses with the channel still
+        open — these are NOT interchangeable: a closed channel means the
+        remote end actually hung up (e.g. a device rebooting), while a
+        timeout with the channel still open means only that the pattern
+        hasn't shown up *yet*, and whatever command is running remotely may
+        still be legitimately in progress. Deliberately no fuzzy retry, a
+        clear failure with the actual bytes seen is more debuggable than one
+        that silently guesses again."""
         regex = re.compile(pattern)
         deadline = time.monotonic() + (self._read_timeout if timeout is None else timeout)
         collected = ""
@@ -328,7 +333,7 @@ class InteractiveShell:
                     f"{pattern!r}; output so far: {collected!r}"
                 )
             if time.monotonic() >= deadline:
-                raise TransportError(
+                raise TransportTimeoutError(
                     f"timed out waiting for {pattern!r} on {self._host_name}; "
                     f"output so far: {collected!r}"
                 )

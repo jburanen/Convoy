@@ -359,6 +359,40 @@ def test_install_succeeds_when_connection_drops_on_upgrade(
     assert any("expected if the device began rebooting" in e for e in events)
 
 
+def test_install_fails_and_leaves_connection_open_on_timeout(
+    store: Store,
+    creds: CredentialStore,
+    packages: PackageStore,
+    inventory: Inventory,
+) -> None:
+    """Real-hardware-confirmed 2026-08-20: a deadline elapsing with the SSH
+    channel still open is not evidence the device is rebooting (unlike a
+    genuine channel-closed drop, see the sibling test above) — the script may
+    still be legitimately running (e.g. extracting a large rootfs). This must
+    fail the job closed rather than report success, and must NOT force-close
+    the still-in-use connection out from under the remote command."""
+    transport = FakeTransport(expert_timeout_on="upgrade_revert_image.sh")
+    _assign(store, inventory, "spark-01", "spark-primary")
+    registry = EnvironmentRegistry()
+    registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
+    service = SparkPatchingService(
+        registry=registry,
+        packages=packages,
+        runner=JobRunner(store),
+        vault=JobCredentialVault(),
+        store=store,
+    )
+    job = service.submit_install("default", "spark-01", IMG, confirmed=True)
+    _run(service)
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.FAILED
+    assert finished.error is not None
+    assert "did not return control" in finished.error
+    assert "NOT evidence" in finished.error
+    assert transport.closed is False
+    assert transport.interactive_shells[-1].closed is False
+
+
 def test_install_fails_without_expert_password(
     service: SparkPatchingService, store: Store, transport: FakeTransport
 ) -> None:

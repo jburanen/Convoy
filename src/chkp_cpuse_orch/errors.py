@@ -38,6 +38,18 @@ class ExpertModeError(TransportError):
     rejected" rather than a generic connectivity failure."""
 
 
+class TransportTimeoutError(TransportError):
+    """An expected pattern never appeared before the deadline, but the SSH
+    channel never reported closed — distinct from the channel actually
+    closing (plain TransportError), which callers may be able to treat as a
+    remote-initiated disconnect (e.g. a device rebooting). A timeout with the
+    channel still open is not evidence of anything on the remote end; in
+    particular, callers must not treat it as a signal to force-close the
+    connection — the remote command may still be legitimately running, and
+    closing a pty-backed channel out from under it can deliver a hangup that
+    kills it."""
+
+
 class CDTError(OrchestratorError):
     """The Central Deployment Tool reported a failure."""
 
