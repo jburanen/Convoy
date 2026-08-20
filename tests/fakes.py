@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 
-from chkp_cpuse_orch.errors import TransportError
+from chkp_cpuse_orch.errors import TransportError, TransportTimeoutError
 from chkp_cpuse_orch.transport.ssh import CommandResult
 
 # Canned CPUSE output used across tests: one imported, one installed package.
@@ -37,6 +37,7 @@ class FakeTransport:
         expert_wrong_password: bool = False,
         expert_command_outputs: dict[str, str] | None = None,
         expert_drop_on: str | None = None,
+        expert_timeout_on: str | None = None,
     ) -> None:
         self.responses = responses or {}
         self.fail_rc = fail_rc  # set non-zero to make every command fail
@@ -53,6 +54,12 @@ class FakeTransport:
         # from expect() instead of returning — simulates the device dropping
         # the connection mid-reboot.
         self.expert_drop_on = expert_drop_on
+        # Substring of a run_expert() command that should raise
+        # TransportTimeoutError instead of returning — simulates the
+        # deadline elapsing with the channel still open (e.g. a long-running
+        # remote command that just hasn't finished yet), distinct from
+        # expert_drop_on's channel-closed simulation above.
+        self.expert_timeout_on = expert_timeout_on
         self.interactive_shells: list[FakeInteractiveShell] = []
 
     def run(self, command: str, *, timeout: float | None = None) -> CommandResult:
@@ -114,6 +121,7 @@ class FakeTransport:
             wrong_password=self.expert_wrong_password,
             command_outputs=self.expert_command_outputs,
             drop_on=self.expert_drop_on,
+            timeout_on=self.expert_timeout_on,
         )
         self.interactive_shells.append(shell)
         return shell
@@ -135,11 +143,13 @@ class FakeInteractiveShell:
         wrong_password: bool = False,
         command_outputs: dict[str, str] | None = None,
         drop_on: str | None = None,
+        timeout_on: str | None = None,
     ) -> None:
         self._expert_password = expert_password
         self._wrong_password = wrong_password
         self._command_outputs = command_outputs or {}
         self._drop_on = drop_on
+        self._timeout_on = timeout_on
         self._last = ""
         self._last_secret: str | None = None
         self.sent: list[str] = []
@@ -156,6 +166,8 @@ class FakeInteractiveShell:
     def expect(self, pattern: str, *, timeout: float | None = None) -> str:
         if self._drop_on is not None and self._drop_on in self._last:
             raise TransportError(f"fake: connection dropped while waiting for {pattern!r}")
+        if self._timeout_on is not None and self._timeout_on in self._last:
+            raise TransportTimeoutError(f"fake: timed out waiting for {pattern!r}")
         if self._last_secret is not None:
             password, self._last_secret = self._last_secret, None
             if password == self._expert_password and not self._wrong_password:

@@ -69,7 +69,13 @@ from pathlib import Path
 from typing import Protocol, cast
 
 from ..credentials import CredentialBundle, CredentialKind, JobCredentialVault
-from ..errors import CredentialError, ExpertModeError, JobError, TransportError
+from ..errors import (
+    CredentialError,
+    ExpertModeError,
+    JobError,
+    TransportError,
+    TransportTimeoutError,
+)
 from ..inventory import Host
 from ..jobs import JobContext, JobRunner
 from ..packages import PackageStore, package_kind
@@ -103,15 +109,19 @@ JOB_INSTALL = "spark.install"
 _STORAGE_DIR = "/storage"
 
 # Generous — the script validates the image and copies/extracts a large
-# rootfs before returning control, which can take a while. Per
-# upgrade_revert_image.sh's own quit_upgrade_revert_image(), the script exits
-# (and this returns) on BOTH success and failure — it only *schedules* the
-# reboot (a DB flag, default ~60s out) before exiting, it doesn't wait for
-# it — so a normal return here is expected either way, not just on failure;
-# the device rebooting is a separate, later event this SSH session won't
-# see. A dropped connection mid-response is still handled below as a
-# plausible (if less likely, given the above) outcome, not assumed away.
-_UPGRADE_TIMEOUT = 120.0
+# rootfs (the .tgz alone is ~200MB on the image real-hardware testing has
+# used) onto embedded flash before returning control, which real-hardware
+# testing 2026-08-20 confirmed can genuinely take several minutes — the
+# previous 120s value was cutting that off mid-extraction, not catching a
+# hang. Per upgrade_revert_image.sh's own quit_upgrade_revert_image(), the
+# script exits (and this returns) on BOTH success and failure — it only
+# *schedules* the reboot (a DB flag, default ~60s out) before exiting, it
+# doesn't wait for it — so a normal return here is expected either way, not
+# just on failure; the device rebooting is a separate, later event this SSH
+# session won't see. A dropped connection mid-response is still handled
+# below as a plausible (if less likely, given the above) outcome, not
+# assumed away. See .claude/memory/spark-firmware-patching.md.
+_UPGRADE_TIMEOUT = 600.0
 
 # mke2fs's own refusal message (not a Check Point string — e2fsprogs' fixed
 # wording) when the inactive partition is already mounted — confirmed via
@@ -605,6 +615,7 @@ class SparkPatchingService:
         ctx.log(f"connecting over SSH to {host.name} (running the upgrade)")
         client = self._connect(connector, host, bundle)
         shell = None
+        leave_connected = False
         try:
             shell = client.open_interactive_shell()
             session = GaiaExpertSession(shell)
@@ -637,15 +648,43 @@ class SparkPatchingService:
                         "never actually reformatted — do not trust this upgrade; reboot "
                         "the firewall to clear the stale mount before retrying"
                     )
+            except TransportTimeoutError as exc:
+                # The channel never reported closed — real-hardware testing
+                # 2026-08-20 confirmed this does NOT mean the device is
+                # rebooting (that only happens on the channel-closed branch
+                # below). It means upgrade_revert_image.sh hasn't returned
+                # control yet, and may still be legitimately working (e.g.
+                # extracting a large rootfs onto flash storage). Forcibly
+                # closing the pty-backed channel here — as this used to do
+                # unconditionally in `finally` — sends a hangup to that
+                # still-running foreground process and can abort an
+                # in-progress upgrade, which is worse than just not knowing
+                # the outcome yet. Leave the connection open (skip the
+                # cleanup below) instead, and fail the job closed rather
+                # than report a success we have no evidence for.
+                leave_connected = True
+                raise JobError(
+                    f"upgrade_revert_image.sh did not return control within "
+                    f"{_UPGRADE_TIMEOUT:.0f}s, and the SSH channel is still open — "
+                    "this is NOT evidence the device started rebooting (a real "
+                    "reboot closes the channel; this didn't). The script may "
+                    "still be working or may have hung. The SSH session was "
+                    "deliberately left connected rather than closed, to avoid "
+                    "killing a still-running upgrade — check the device directly "
+                    "(and /logs/upgrade_image) before assuming anything about "
+                    "the outcome"
+                ) from exc
             except TransportError as exc:
-                # Expected outcome, not a failure: the device may drop the
-                # connection mid-response as it begins rebooting.
+                # Channel actually closed — expected outcome, not a failure:
+                # the device may have dropped the connection as it begins
+                # rebooting.
                 ctx.log(
                     "connection dropped while waiting for upgrade_revert_image.sh output "
                     f"— expected if the device began rebooting immediately: {exc}",
                     level="warning",
                 )
         finally:
-            if shell is not None:
-                _safe_close(shell)
-            _safe_close(client)
+            if not leave_connected:
+                if shell is not None:
+                    _safe_close(shell)
+                _safe_close(client)

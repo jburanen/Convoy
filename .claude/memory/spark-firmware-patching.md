@@ -155,6 +155,125 @@ wording, not a guess at this vendor script's internal, unseen conventions
 (`write_log`/`output_error`'s exact terminal-visibility is still unknown —
 `image_common.sh`, which defines them, hasn't been seen).
 
+### Real-hardware finding 2026-08-20: point 2 above was incomplete — a timeout with the channel still open is not evidence of anything, and this run's "succeeded" was wrong
+
+A second `lab02-1550` install run got past the stale-mount case entirely —
+`mke2fs` fully succeeded (superblocks, journal, inode tables all completed,
+no `_STALE_MOUNT_MARKER` text) — then produced no further output once
+`tune2fs 1.44.1 (24-Mar-2018)` started, until `_run_upgrade`'s `expect()`
+hit its 120s deadline (`_UPGRADE_TIMEOUT`). The job logged "succeeded" per
+the existing `except TransportError` handling. **Operator confirmed after
+the fact: the device did not install the patch, and never rebooted.**
+
+This is a distinct case from the 2026-08-19 finding's point 2, and the
+existing code conflates them. [ssh.py](../../src/chkp_cpuse_orch/transport/ssh.py)'s
+`InteractiveShell.expect()` raises `TransportError` from two different
+branches — channel actually reported closed (`self._channel.closed` true),
+vs. the client-side deadline just elapsing with the channel still open —
+and this run hit the *second* branch (the log said `"timed out waiting for
+'...'"`, not `"channel ... closed while waiting"`). `_run_upgrade`'s
+`except TransportError` block treats both identically, logging "expected if
+the device began rebooting immediately" and letting the job report success
+either way. That framing is now confirmed wrong for the timeout branch: the
+device was still up on the old image, so the script was either hung on/
+after `tune2fs`, or failed silently there with the session never seeing a
+prompt again — not rebooting.
+
+**Root cause, confirmed by diffing this run's output against the operator's
+re-supplied script source line-for-line (script itself still not retained
+anywhere — see below):**
+
+- The two shell errors in this run's capture (`line 579: [: -lt: unary
+  operator expected`, `line 615: [: too many arguments`) are both `[ ... ]`
+  tests involving `$unitVer` (`unitVer=$(fw_printenv -n unitVer
+  2>/dev/null)`), and both line numbers match exactly against the supplied
+  source: `if [ $unitVer -lt 2 ]; then` (line 579, inside the `MRV`
+  DTB-section-name branch) and `if [ -n "$unitVer" -a $unitVer == "2" ];
+  then` (line 615, inside the `unitModel == "V0"` DTB-file-selection
+  branch — this device hit *this* branch, confirming it's a V0-model unit).
+  Both errors are exactly what bash produces when `$unitVer` expands to
+  nothing — i.e. **`fw_printenv -n unitVer` is returning empty on
+  `lab02-1550`**. The script has no guard for that; neither `[ ]` call
+  aborts the script (no `set -e`), so it silently falls through to the
+  `else`/non-"2" branch each time, meaning it picked the plain `v0.dtb`
+  over `v0-6393.dtb` without knowing if that's actually correct for this
+  unit's hardware revision. This is the same `unitVer` this repo's
+  2026-08-19 finding already saw independently blow up *inside preboot.sh*
+  on a manual run ("`unitVer` not defined", `rc=-11`) — same underlying
+  condition on this device, hit from two different code paths on two
+  different attempts. Worth having the operator confirm directly on the
+  device (`fw_printenv unitVer`) and loop in Check Point support if it's
+  genuinely unset — that's a device/provisioning-level gap this tool has no
+  way to fix.
+- Initial theory — `mount` or `tune2fs` hanging on stuck partition state,
+  needing a power-cycle to clear — **was tested and disproven**: the
+  operator rebooted `lab02-1550` first and re-ran the same job, and it
+  failed again the same way. That rules out leftover device-side state as
+  the cause.
+- **Actual root cause, confirmed from the device's own `/logs/upgrade_image`
+  after that second failed attempt**: the script logs its own progress via
+  `write_log` (see the log-file entry below) — nothing in this tool's SSH
+  capture, since those calls don't reach the terminal. That log showed the
+  run reaching `tar xzf /storage/pfrm.tgz -C /mnt/inactive` at
+  `09:39:47`, only **43 seconds** after the script started at `09:39:04` —
+  and then nothing further. `pfrm.tgz` (the new rootfs) was **206,853,336
+  bytes** (~197MB) in that run. Extracting ~200MB onto this device's
+  embedded flash apparently takes noticeably longer than the
+  `_UPGRADE_TIMEOUT` budget remaining at that point (120s total minus the
+  43s already spent) — the tool's own deadline was cutting the extraction
+  off mid-flight, not catching a genuine hang. Worse: `_run_upgrade`'s
+  `finally` block used to unconditionally close the pty-backed shell/client
+  on *any* exit, including this one. `open_interactive_shell()` opens a real
+  pty (`invoke_shell(term="vt100", ...)`,
+  [ssh.py:245-251](../../src/chkp_cpuse_orch/transport/ssh.py#L245-L251)),
+  and `upgrade_revert_image.sh` (and its `tar` child) runs in that same
+  pty's foreground — closing the channel almost certainly delivers a
+  hangup to it, killing the extraction outright. This is why manual runs
+  (operator just waits, no artificial deadline, no forced disconnect)
+  succeeded every time while tool-driven runs consistently failed at the
+  same point: **the tool itself was killing its own upgrades.**
+- **Fixed 2026-08-20**: added `TransportTimeoutError(TransportError)`
+  ([errors.py](../../src/chkp_cpuse_orch/errors.py)) — `InteractiveShell.expect()`
+  now raises this specifically for the deadline-elapsed-but-channel-still-open
+  case, keeping plain `TransportError` for an actually-closed channel (the
+  2026-08-19 finding's case, still untested against real hardware). Bumped
+  `_UPGRADE_TIMEOUT` from 120s to 600s. `_run_upgrade` now catches
+  `TransportTimeoutError` before the generic `TransportError` handler: it
+  no longer closes the shell/client on that path (leaves the SSH session
+  connected so a still-running script isn't killed by us) and raises
+  `JobError` instead of letting the job report success — we have no
+  evidence of the outcome either way, and this tool should fail closed
+  rather than claim success it can't back up. The channel-actually-closed
+  branch (real hardware still unconfirmed) is unchanged. See
+  `test_install_fails_and_leaves_connection_open_on_timeout` in
+  `tests/test_spark_patching_service.py` (sibling to
+  `test_install_succeeds_when_connection_drops_on_upgrade`, which covers
+  the channel-closed case and is also unchanged). A leaked, still-open SSH
+  connection on this path is accepted as the lesser cost versus killing a
+  live upgrade — expected to be rare now that the timeout has real margin.
+- **Log file location, confirmed from source**: for the `upgrade` mode this
+  job always uses, the script sets `LOG_FILE=/logs/upgrade_image` up top
+  (revert mode instead uses `/logs/revert_image` — not relevant to
+  `spark.install`, which always passes `upgrade`). `write_log`'s calls
+  throughout the script (e.g. "Preparing storage for image...", "Copying
+  data from the image file...", the V1/V1R DTB-section-name lines) go
+  *only* to this file, not the terminal — none of that text appears
+  anywhere in this tool's SSH capture, which only ever sees raw stdout from
+  invoked binaries (`dd`, `mke2fs`, `tune2fs`) plus bare shell errors. This
+  is genuinely the more informative record of what the script actually did
+  and where it stopped, and worth collecting after any future failed
+  attempt, especially since the terminal capture alone couldn't show
+  whether `mount` ever returned. `write_log`'s own definition (presumably
+  in `image_common.sh`, sourced from `/pfrm2.0/bin/image_common.sh`) is
+  still unseen.
+
+The operator re-supplied the full script for this comparison; per the
+2026-08-19 note it's still not retained in this repo (vendor source, not
+redistributable) — this time saved to the session's local scratch temp dir
+only (outside the repo, git-excluded by location, not by a `.gitignore`
+rule), not persisted anywhere durable. Ask the operator to re-share again
+in a future session if it's needed.
+
 All three require the assigned credential set to carry an expert-mode
 password (`CredentialKind.EXPERT_PASSWORD` — see [[credential-sets]] and
 [[spark-firewall-credential-scenarios]]) — checked *before* any SSH attempt,
