@@ -4013,9 +4013,17 @@ function renderJobRow(row, job) {
   row.querySelector(".job-started").textContent = fmtTime(job.started_at ?? job.created_at);
   const errorCell = row.querySelector(".job-error");
   const errorText = errorCell.querySelector(".job-error-text");
+  // While pending/running, prefer the live status_text headline (e.g. Spark
+  // install's "waiting for reboot"/"pinging" — see JobContext.set_status())
+  // over blank; most job kinds never set it, so this is blank for them, same
+  // as before. Once terminal, status_text is stale/irrelevant — always show
+  // the outcome instead.
+  const isActive = job.status === "pending" || job.status === "running";
+  const liveText = isActive ? (job.status_text ?? "") : "";
   errorText.textContent =
-    job.status === "succeeded" ? `Succeeded ${fmtTime(job.finished_at)}` : (job.error ?? "");
-  errorCell.title = job.status === "succeeded" ? "" : (job.error ?? ""); // full text on hover even while truncated/collapsed
+    job.status === "succeeded" ? `Succeeded ${fmtTime(job.finished_at)}` :
+    isActive ? liveText : (job.error ?? "");
+  errorCell.title = job.status === "succeeded" ? "" : (isActive ? liveText : (job.error ?? "")); // full text on hover even while truncated/collapsed
   row.querySelector(".btn-cancel").classList.toggle(
     "hidden", !(job.status === "pending" || job.status === "running"),
   );

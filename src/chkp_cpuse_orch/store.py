@@ -82,6 +82,13 @@ class JobRecord(BaseModel):
     # only (e.g. "Installation log (12.3 KB): /var/log/CPUpgrade.log"), since
     # the file itself may since have been rotated/deleted by CPUSE.
     install_log_path: str | None = None
+    # Short, human-readable "what's happening right now" text (e.g. "waiting
+    # for reboot", "pinging") — shown live in the Jobs tab's Output column
+    # while the job is pending/running (see app.js renderJobRow). Distinct
+    # from the append-only event log: this is a single overwritten field for
+    # a headline status, not history. None for job kinds that never call
+    # JobContext.set_status(); the UI falls back to blank while running.
+    status_text: str | None = None
 
 
 class JobEvent(BaseModel):
@@ -541,6 +548,12 @@ _MIGRATIONS: tuple[str, ...] = (
     # other optional secret.
     """
     ALTER TABLE credential_sets ADD COLUMN expert_password_ct BLOB;
+    """,
+    # v25: live "what's happening now" headline text for the Jobs tab's
+    # Output column while a job is running (e.g. Spark install's "waiting
+    # for reboot"/"pinging"), distinct from the append-only event log.
+    """
+    ALTER TABLE jobs ADD COLUMN status_text TEXT;
     """,
 )
 
@@ -1081,6 +1094,13 @@ class Store:
                 ),
             )
 
+    def set_status_text(self, job_id: str, text: str | None) -> None:
+        """Overwrite the live headline status shown in the Jobs tab's Output
+        column while running (see JobRecord.status_text) — best-effort UI
+        detail, not tied to job state, same posture as set_install_log."""
+        with self._connect() as conn:
+            conn.execute("UPDATE jobs SET status_text = ? WHERE id = ?", (text, job_id))
+
     def get_job(self, job_id: str) -> JobRecord:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
@@ -1363,6 +1383,7 @@ def _job_from_row(row: sqlite3.Row) -> JobRecord:
         cancel_requested=bool(row["cancel_requested"]),
         install_log=row["install_log"],
         install_log_path=row["install_log_path"],
+        status_text=row["status_text"],
     )
 
 

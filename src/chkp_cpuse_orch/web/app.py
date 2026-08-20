@@ -21,7 +21,7 @@ import contextlib
 import os
 import shutil
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Annotated, Any, cast
 
@@ -415,12 +415,16 @@ def create_app(
     mgmt_client_factory: MgmtClientFactory | None = None,
     authenticator: Authenticator | None = None,
     auth_settings: AuthSettings | None = None,
+    spark_probe_reachable: Callable[[str, int], bool] | None = None,
 ) -> FastAPI:
     """Build the app. Tests pass a custom ``config`` (tmp paths), a fake
     ``client_factory``, and — to exercise auth without a live directory — a fake
     ``authenticator`` (with optional ``auth_settings`` to tune idle/cookie
     behaviour). Production leaves those ``None`` and resolves LDAP config from the
-    environment at startup (auth stays off when it isn't configured)."""
+    environment at startup (auth stays off when it isn't configured).
+    ``spark_probe_reachable`` overrides SparkPatchingService's post-reboot
+    reachability check (real ICMP/TCP by default) — tests inject one that
+    skips real network I/O against inventory addresses that don't exist."""
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -503,7 +507,12 @@ def create_app(
             registry=registry, packages=packages, runner=runner, vault=vault, store=store
         )
         spark_service = SparkPatchingService(
-            registry=registry, packages=packages, runner=runner, vault=vault, store=store
+            registry=registry,
+            packages=packages,
+            runner=runner,
+            vault=vault,
+            store=store,
+            probe_reachable=spark_probe_reachable,
         )
         cdt_service = CDTService(registry=registry, packages=packages, runner=runner, vault=vault)
         # No runner: package CRUD runs synchronously (services/pkgs_ops.py).
