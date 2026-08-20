@@ -103,6 +103,10 @@ def client(
         client_factory=make_factory(transport),
         authenticator=_fake_auth(),
         auth_settings=AUTH_SETTINGS,
+        # Real reachability probing is pure network I/O against inventory
+        # addresses that don't exist in tests — see test_spark_patching_service.py's
+        # `service` fixture for the same substitution at the service-unit level.
+        spark_probe_reachable=lambda address, port: True,
     )
     with TestClient(app) as c:
         _login(c)
@@ -1594,14 +1598,21 @@ def test_firewall_install_dispatches_to_spark_requires_confirmation(client: Test
     assert "confirmation" in resp.json()["detail"]
 
 
-def test_firewall_install_dispatches_to_spark_succeeds(client: TestClient) -> None:
+def test_firewall_install_dispatches_to_spark_succeeds(
+    client: TestClient, transport: FakeTransport
+) -> None:
+    # Install now verifies the post-reboot build via `fw ver` (operator-
+    # directed 2026-08-20, see spark-firmware-patching.md) — the filename's
+    # trailing digits (here "936") must match what `fw ver` reports back.
+    image = "fw1_vx_dep_R81_10_17_996004936.img"
+    transport.responses["fw ver"] = "This is Check Point's 1550 Appliance R81.10.17 - Build 936"
     _put_set(client, ssh_username="admin", ssh_password="s3cret-pw!", expert_password="expert-pw")
     _add_firewall(client, name="spark-x", address="192.0.2.80", role="spark_firewall")
     client.post("/api/env/default/firewalls/spark-x/credential", json={"set": "primary"})
 
     resp = client.post(
         "/api/env/default/firewalls/spark-x/install",
-        json={"package_id": "spark.img", "confirmed": True},
+        json={"package_id": image, "confirmed": True},
     )
     assert resp.status_code == 202, resp.text
     job = _wait_for_job(client, resp.json()["id"])

@@ -66,6 +66,14 @@ class JobContext:
         if self._store.is_cancel_requested(self.job.id):
             raise JobCancelled(self.job.id)
 
+    def set_status(self, text: str | None) -> None:
+        """Overwrite the short "what's happening now" headline shown live in
+        the Jobs tab's Output column while the job runs (JobRecord.
+        status_text) — a single overwritten field, not an event log entry.
+        Independent of ``log()``: call both at a milestone worth recording in
+        each place, or either alone for a headline-only or log-only update."""
+        self._store.set_status_text(self.job.id, text)
+
 
 Handler = Callable[[JobContext], Awaitable[None]]
 

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from chkp_cpuse_orch.credentials import CredentialStore, JobCredentialVault
-from chkp_cpuse_orch.errors import InventoryError, JobError
+from chkp_cpuse_orch.errors import InventoryError, JobError, TransportError
 from chkp_cpuse_orch.inventory import Host, Inventory, Role, Site
 from chkp_cpuse_orch.jobs import JobRunner
 from chkp_cpuse_orch.packages import PackageStore
@@ -18,9 +18,12 @@ from chkp_cpuse_orch.store import JobStatus, Store
 
 from .fakes import FakeTransport, make_factory
 
-IMG = "spark_firmware.img"
+IMG = "fw1_vx_dep_R81_10_17_996004936.img"
+IMG_BUILD = "936"  # last 3 digits of the numeric id above — what fw ver must echo back
 IMG_CONTENT = b"fake spark firmware bytes"
 IMG_SHA1 = hashlib.sha1(IMG_CONTENT).hexdigest()
+FW_VER_MATCH = f"This is Check Point's 1550 Appliance R81.10.17 - Build {IMG_BUILD}"
+FW_VER_MISMATCH = "This is Check Point's 1550 Appliance R81.10.17 - Build 892"
 
 
 @pytest.fixture
@@ -79,7 +82,10 @@ def inventory() -> Inventory:
 @pytest.fixture
 def transport() -> FakeTransport:
     return FakeTransport(
-        responses={"sha1sum": f"{IMG_SHA1}  /storage/{IMG}"},
+        responses={
+            "sha1sum": f"{IMG_SHA1}  /storage/{IMG}",
+            "fw ver": FW_VER_MATCH,
+        },
         expert_command_outputs={"bashUser on": "Done.", "bashUser off": "Done."},
     )
 
@@ -102,6 +108,11 @@ def service(
         runner=JobRunner(store),
         vault=JobCredentialVault(),
         store=store,
+        # Real reachability/reconnect polling is pure network I/O with no
+        # bearing on the job-orchestration logic these tests exercise —
+        # skip it so the fake transport's own `connect()` (always
+        # immediately available) is the only thing standing in for it.
+        probe_reachable=lambda address, port: True,
     )
 
 
@@ -287,7 +298,8 @@ def test_transfer_then_install_full_flow(
     # repeat it.
     assert not any("bashUser" in e for e in events)
     assert any("upgrade_revert_image.sh" in e for e in events)
-    assert any("does not and cannot fully confirm" in e for e in events)
+    assert any("session closed — device is rebooting" in e for e in events)
+    assert any(f"confirmed: fw ver reports build ...{IMG_BUILD}" in e for e in events)
     assert store.get_server_state("default", "spark-01").installable == []
 
 
@@ -334,13 +346,21 @@ def test_install_fails_on_stale_mount(
     assert "stale mount" in finished.error
 
 
-def test_install_succeeds_when_connection_drops_on_upgrade(
+def test_install_succeeds_after_channel_closes_on_upgrade(
     store: Store,
     creds: CredentialStore,
     packages: PackageStore,
     inventory: Inventory,
 ) -> None:
-    transport = FakeTransport(expert_drop_on="upgrade_revert_image.sh")
+    """Channel-closed branch: the device may drop the connection as it
+    begins rebooting, possibly before ever returning control. That alone
+    isn't the verdict anymore (operator-directed 2026-08-20) — the job goes
+    on to confirm the reboot actually landed on the new build via
+    ping/reconnect/fw ver."""
+    transport = FakeTransport(
+        expert_drop_on="upgrade_revert_image.sh",
+        responses={"fw ver": FW_VER_MATCH},
+    )
     _assign(store, inventory, "spark-01", "spark-primary")
     registry = EnvironmentRegistry()
     registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
@@ -350,16 +370,56 @@ def test_install_succeeds_when_connection_drops_on_upgrade(
         runner=JobRunner(store),
         vault=JobCredentialVault(),
         store=store,
+        probe_reachable=lambda address, port: True,
     )
     job = service.submit_install("default", "spark-01", IMG, confirmed=True)
     _run(service)
     finished = store.get_job(job.id)
     assert finished.status is JobStatus.SUCCEEDED
     events = [e.message for e in store.events(job.id)]
-    assert any("expected if the device began rebooting" in e for e in events)
+    assert any("treating as the scheduled reboot" in e for e in events)
+    assert any(f"confirmed: fw ver reports build ...{IMG_BUILD}" in e for e in events)
+    assert finished.status_text is None  # cleared on success
 
 
-def test_install_fails_and_leaves_connection_open_on_timeout(
+def test_install_succeeds_when_reboot_never_observed_but_build_matches(
+    store: Store,
+    creds: CredentialStore,
+    packages: PackageStore,
+    inventory: Inventory,
+) -> None:
+    """The script returns control normally, but wait_for_close never
+    actually sees this session disconnect (e.g. the reboot flag update
+    silently failed on the device). Rather than hang waiting for a
+    disconnect that may never come, this session is closed and the flow
+    verifies directly instead — and since the build genuinely matches here,
+    the job still succeeds."""
+    transport = FakeTransport(
+        expert_command_outputs={f"upgrade_revert_image.sh /storage/{IMG} upgrade safe": "ok"},
+        expert_reboot_closes=False,
+        responses={"fw ver": FW_VER_MATCH},
+    )
+    _assign(store, inventory, "spark-01", "spark-primary")
+    registry = EnvironmentRegistry()
+    registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
+    service = SparkPatchingService(
+        registry=registry,
+        packages=packages,
+        runner=JobRunner(store),
+        vault=JobCredentialVault(),
+        store=store,
+        probe_reachable=lambda address, port: True,
+    )
+    job = service.submit_install("default", "spark-01", IMG, confirmed=True)
+    _run(service)
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.SUCCEEDED
+    events = [e.message for e in store.events(job.id)]
+    assert any("no reboot happened" in e for e in events)
+    assert any(f"confirmed: fw ver reports build ...{IMG_BUILD}" in e for e in events)
+
+
+def test_install_fails_when_build_never_changes_despite_timeout(
     store: Store,
     creds: CredentialStore,
     packages: PackageStore,
@@ -368,10 +428,143 @@ def test_install_fails_and_leaves_connection_open_on_timeout(
     """Real-hardware-confirmed 2026-08-20: a deadline elapsing with the SSH
     channel still open is not evidence the device is rebooting (unlike a
     genuine channel-closed drop, see the sibling test above) — the script may
-    still be legitimately running (e.g. extracting a large rootfs). This must
-    fail the job closed rather than report success, and must NOT force-close
-    the still-in-use connection out from under the remote command."""
-    transport = FakeTransport(expert_timeout_on="upgrade_revert_image.sh")
+    still be legitimately running. This no longer settles the job's outcome
+    by itself (that used to mean an immediate FAILED with "we don't know");
+    ping/reconnect/fw-ver decide it now. Here the device genuinely never
+    took the new build — something the old code couldn't have caught at all,
+    since it gave up as soon as the timeout fired. The original session is
+    still deliberately left open (not force-closed) even though the job
+    eventually resolves via a separate, fresh connection."""
+    transport = FakeTransport(
+        expert_timeout_on="upgrade_revert_image.sh",
+        responses={"fw ver": FW_VER_MISMATCH},
+    )
+    _assign(store, inventory, "spark-01", "spark-primary")
+    registry = EnvironmentRegistry()
+    registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
+    service = SparkPatchingService(
+        registry=registry,
+        packages=packages,
+        runner=JobRunner(store),
+        vault=JobCredentialVault(),
+        store=store,
+        probe_reachable=lambda address, port: True,
+    )
+    job = service.submit_install("default", "spark-01", IMG, confirmed=True)
+    _run(service)
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.FAILED
+    assert finished.error is not None
+    assert "did not come up on the installed image" in finished.error
+    assert "892" in finished.error and IMG_BUILD in finished.error
+    assert transport.interactive_shells[0].closed is False
+
+
+def test_install_times_out_waiting_for_ping(
+    store: Store,
+    creds: CredentialStore,
+    packages: PackageStore,
+    inventory: Inventory,
+) -> None:
+    transport = FakeTransport(responses={"fw ver": FW_VER_MATCH})
+    _assign(store, inventory, "spark-01", "spark-primary")
+    registry = EnvironmentRegistry()
+    registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
+    service = SparkPatchingService(
+        registry=registry,
+        packages=packages,
+        runner=JobRunner(store),
+        vault=JobCredentialVault(),
+        store=store,
+        probe_reachable=lambda address, port: False,  # never comes back
+        ping_timeout=0.05,
+        ping_poll_interval=0.01,
+    )
+    job = service.submit_install("default", "spark-01", IMG, confirmed=True)
+    _run(service)
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.TIMED_OUT
+    assert finished.error is not None
+    assert "never responded" in finished.error
+
+
+def test_install_times_out_waiting_for_reconnect(
+    store: Store,
+    creds: CredentialStore,
+    packages: PackageStore,
+    inventory: Inventory,
+) -> None:
+    """Reachability (ping) succeeding doesn't mean SSH is ready yet — sshd
+    can come up slightly later. If it never does, this is a distinct
+    TIMED_OUT outcome from the ping-timeout case above."""
+    transport = FakeTransport(responses={"fw ver": FW_VER_MATCH})
+    calls = {"n": 0}
+
+    def flaky_factory(host: object, creds: object) -> FakeTransport:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return transport  # the initial connection, for the upgrade itself
+        raise TransportError("fake: connection refused")
+
+    _assign(store, inventory, "spark-01", "spark-primary")
+    registry = EnvironmentRegistry()
+    registry.add("default", HostConnector(inventory, creds, flaky_factory))
+    service = SparkPatchingService(
+        registry=registry,
+        packages=packages,
+        runner=JobRunner(store),
+        vault=JobCredentialVault(),
+        store=store,
+        probe_reachable=lambda address, port: True,
+        reconnect_timeout=0.05,
+        reconnect_poll_interval=0.01,
+    )
+    job = service.submit_install("default", "spark-01", IMG, confirmed=True)
+    _run(service)
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.TIMED_OUT
+    assert finished.error is not None
+    assert "could not re-establish SSH" in finished.error
+
+
+def test_install_fails_when_fw_ver_output_has_no_build_number(
+    store: Store,
+    creds: CredentialStore,
+    packages: PackageStore,
+    inventory: Inventory,
+) -> None:
+    transport = FakeTransport(responses={"fw ver": "unexpected garbage, no build info"})
+    _assign(store, inventory, "spark-01", "spark-primary")
+    registry = EnvironmentRegistry()
+    registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
+    service = SparkPatchingService(
+        registry=registry,
+        packages=packages,
+        runner=JobRunner(store),
+        vault=JobCredentialVault(),
+        store=store,
+        probe_reachable=lambda address, port: True,
+    )
+    job = service.submit_install("default", "spark-01", IMG, confirmed=True)
+    _run(service)
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.FAILED
+    assert finished.error is not None
+    assert "couldn't find a build number" in finished.error
+
+
+def test_install_fails_when_package_filename_has_no_build_number(
+    store: Store,
+    creds: CredentialStore,
+    packages: PackageStore,
+    inventory: Inventory,
+) -> None:
+    """Checked before any SSH connection — no point running the upgrade only
+    to discover afterward that its own filename can't be used to confirm
+    it. submit_install doesn't check the package actually exists (same
+    trust-the-picker posture as everywhere else here), so this doesn't need
+    a real staged file."""
+    transport = FakeTransport()
     _assign(store, inventory, "spark-01", "spark-primary")
     registry = EnvironmentRegistry()
     registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
@@ -382,15 +575,13 @@ def test_install_fails_and_leaves_connection_open_on_timeout(
         vault=JobCredentialVault(),
         store=store,
     )
-    job = service.submit_install("default", "spark-01", IMG, confirmed=True)
+    job = service.submit_install("default", "spark-01", "sparkfw.img", confirmed=True)
     _run(service)
     finished = store.get_job(job.id)
     assert finished.status is JobStatus.FAILED
     assert finished.error is not None
-    assert "did not return control" in finished.error
-    assert "NOT evidence" in finished.error
-    assert transport.closed is False
-    assert transport.interactive_shells[-1].closed is False
+    assert "doesn't match the expected Spark image filename convention" in finished.error
+    assert transport.interactive_shells == []  # never even connected
 
 
 def test_install_fails_without_expert_password(

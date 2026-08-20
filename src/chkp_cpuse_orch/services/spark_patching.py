@@ -64,6 +64,8 @@ import asyncio
 import contextlib
 import posixpath
 import re
+import socket
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol, cast
@@ -77,7 +79,7 @@ from ..errors import (
     TransportTimeoutError,
 )
 from ..inventory import Host
-from ..jobs import JobContext, JobRunner
+from ..jobs import JobContext, JobRunner, JobTimedOut
 from ..packages import PackageStore, package_kind
 from ..store import JobRecord, ServerStateRow, Store, utcnow
 from ..transport.ssh import GaiaExpertSession, InteractiveShell, require_ok
@@ -123,6 +125,28 @@ _STORAGE_DIR = "/storage"
 # assumed away. See .claude/memory/spark-firmware-patching.md.
 _UPGRADE_TIMEOUT = 600.0
 
+# Operator-specified 2026-08-20: once the script returns control (the Expert
+# prompt reappears), actively wait to *observe* the scheduled reboot close
+# this session, rather than assuming it happened — the script's own default
+# schedules it ~60s out, this is generous headroom above that. If it never
+# closes in time (e.g. the script actually failed without ever scheduling
+# one — see _run_upgrade), this session is closed and the flow proceeds to
+# ping/reconnect/verify anyway, which is the actual arbiter either way.
+_REBOOT_CLOSE_TIMEOUT = 300.0
+
+# How long to keep probing for the device to respond again after this
+# session disconnects (a full boot cycle, not just the ~60s reboot delay
+# above), and how often.
+_PING_TIMEOUT = 900.0
+_PING_POLL_INTERVAL = 5.0
+_PING_CONNECT_TIMEOUT = 3.0
+
+# How long to retry the post-reboot SSH reconnect once ping succeeds (sshd
+# can come up slightly after the host starts accepting TCP connects), and
+# how often.
+_RECONNECT_TIMEOUT = 300.0
+_RECONNECT_POLL_INTERVAL = 10.0
+
 # mke2fs's own refusal message (not a Check Point string — e2fsprogs' fixed
 # wording) when the inactive partition is already mounted — confirmed via
 # the actual upgrade_revert_image.sh source: mount_pfrm_inactive_part()
@@ -148,6 +172,44 @@ def parse_fw_ver(stdout: str) -> str:
     a display string, not a decision."""
     first_line = next((line.strip() for line in stdout.splitlines() if line.strip()), "")
     return _FW_VER_PREFIX_RE.sub("", first_line).strip()
+
+
+# Spark .img packages embed a numeric build id in the filename (e.g.
+# "fw1_vx_dep_R81_10_17_996004936.img"), and `fw ver`'s own "Build NNN" text
+# is only ever the trailing few digits of that same number (operator-
+# specified, 2026-08-20: compare the two builds' *last three digits* to
+# confirm a post-install reboot actually landed on the requested image).
+_IMAGE_BUILD_RE = re.compile(r"_(\d+)\.img$", re.IGNORECASE)
+_FW_VER_BUILD_RE = re.compile(r"\bBuild\s+(\d+)", re.IGNORECASE)
+
+
+def _image_build_suffix(filename: str) -> str | None:
+    """Last 3 digits of the build id embedded in a Spark .img filename, or
+    None if the filename doesn't match the expected convention — callers
+    must treat that as "can't verify", not "assume success"."""
+    match = _IMAGE_BUILD_RE.search(filename)
+    return None if match is None else match.group(1)[-3:]
+
+
+def _fw_ver_build_suffix(fw_ver_output: str) -> str | None:
+    """Last 3 digits of `fw ver`'s own "Build NNN" number, or None if that
+    text isn't present in its output."""
+    match = _FW_VER_BUILD_RE.search(fw_ver_output)
+    return None if match is None else match.group(1)[-3:]
+
+
+def _default_probe_reachable(address: str, port: int, *, timeout: float) -> bool:
+    """Stands in for "ping" via a TCP connect, not ICMP — unprivileged ICMP
+    needs CAP_NET_RAW or a suid ping binary, neither of which this tool's
+    container image provides (nor does the slim base image even ship a ping
+    binary at all). Connecting to the SSH port this job is about to use next
+    anyway is also a more directly relevant signal than a bare ICMP echo
+    would be — SSH-adjacent reachability, not just kernel-is-up."""
+    try:
+        with socket.create_connection((address, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
 
 
 class ExpertCapableTransport(Transport, Protocol):
@@ -191,12 +253,33 @@ class SparkPatchingService:
         runner: JobRunner,
         vault: JobCredentialVault,
         store: Store,
+        probe_reachable: Callable[[str, int], bool] | None = None,
+        reboot_close_timeout: float = _REBOOT_CLOSE_TIMEOUT,
+        ping_timeout: float = _PING_TIMEOUT,
+        ping_poll_interval: float = _PING_POLL_INTERVAL,
+        reconnect_timeout: float = _RECONNECT_TIMEOUT,
+        reconnect_poll_interval: float = _RECONNECT_POLL_INTERVAL,
     ) -> None:
         self.runner = runner
         self.registry = registry
         self._packages = packages
         self._vault = vault
         self._store = store
+        # Injectable so tests can skip real socket I/O and control timing —
+        # see _default_probe_reachable for why this is TCP-connect, not ICMP.
+        self._probe_reachable: Callable[[str, int], bool] = probe_reachable or (
+            lambda address, port: _default_probe_reachable(
+                address, port, timeout=_PING_CONNECT_TIMEOUT
+            )
+        )
+        # Constructor-configurable (not just module constants), same
+        # convention as PatchingService's import/install verify knobs, so
+        # tests can shrink these instead of actually waiting real minutes.
+        self._reboot_close_timeout = reboot_close_timeout
+        self._ping_timeout = ping_timeout
+        self._ping_poll_interval = ping_poll_interval
+        self._reconnect_timeout = reconnect_timeout
+        self._reconnect_poll_interval = reconnect_poll_interval
         runner.register(JOB_TEST_CREDENTIALS, self._test_credentials_job)
         runner.register(JOB_TRANSFER, self._transfer_job)
         runner.register(JOB_INSTALL, self._install_job)
@@ -588,6 +671,16 @@ class SparkPatchingService:
         host = connector.spark_firewall_host(ctx.job.target or "")
         package = str(ctx.job.params["package"])
         remote_path = posixpath.join(_STORAGE_DIR, package)
+        # Computed up front and checked before touching the device at all:
+        # if we can't even parse what build we're expecting, there's no
+        # point running the upgrade only to discover we can't verify it.
+        expected_build = _image_build_suffix(package)
+        if expected_build is None:
+            raise JobError(
+                f"{package!r} doesn't match the expected Spark image filename "
+                "convention (a numeric build id right before .img) — can't verify "
+                "the post-install build number, refusing to proceed blind"
+            )
 
         bundle = self._resolve_bundle(connector, host, ctx)
         expert_password = self._require_expert_password(bundle, host, ctx)  # no SSH before this
@@ -595,13 +688,35 @@ class SparkPatchingService:
         self._run_upgrade(connector, host, bundle, expert_password, remote_path, ctx)
         self._unmark_staged(ctx.job.environment, host.name, package)
 
+        ctx.set_status("waiting for firewall to respond to ping")
+        self._wait_until_reachable(host, ctx)
+
+        ctx.set_status("reconnecting over SSH")
+        client = self._wait_until_reconnected(connector, host, bundle, ctx)
+        try:
+            ctx.set_status("verifying installed build")
+            result = require_ok(client.run("fw ver"))
+        finally:
+            _safe_close(client)
+
+        version = parse_fw_ver(result.stdout)
+        actual_build = _fw_ver_build_suffix(result.stdout)
+        if actual_build is None:
+            raise JobError(
+                "reconnected successfully, but couldn't find a build number in "
+                f"fw ver's output to confirm the upgrade: {result.stdout.strip()!r}"
+            )
+        if actual_build != expected_build:
+            raise JobError(
+                f"reconnected after reboot, but fw ver reports build ...{actual_build} "
+                f"— expected ...{expected_build} (from {package!r}). The device did "
+                f"not come up on the installed image — do not treat this as a "
+                f"successful upgrade. fw ver: {version!r}"
+            )
         ctx.log(
-            "upgrade_revert_image.sh returned control and scheduled a reboot (~1 minute "
-            "out per the script's own default) — this job does not and cannot fully "
-            "confirm the upgrade's outcome from its output alone, use Refresh to check "
-            "post-reboot state once it's back up",
-            level="warning",
+            f"confirmed: fw ver reports build ...{actual_build}, matching {package!r} — {version}"
         )
+        ctx.set_status(None)
 
     def _run_upgrade(
         self,
@@ -612,6 +727,17 @@ class SparkPatchingService:
         remote_path: str,
         ctx: JobContext,
     ) -> None:
+        """Issue the upgrade command and get off the device's back — this no
+        longer tries to judge success/failure from the session's own output
+        (operator-directed 2026-08-20, after real-hardware testing showed a
+        bounded wait here was either cutting off a still-running script or
+        just guessing at what a returned prompt meant). It only logs what it
+        observes and always returns normally except for the one specific,
+        already-confirmed-bad case (_STALE_MOUNT_MARKER) — the definitive
+        verdict comes from _do_install's ping/reconnect/fw-ver check
+        afterward, which works whether or not this method ever sees the
+        script return or the connection drop."""
+        ctx.set_status("connecting")
         ctx.log(f"connecting over SSH to {host.name} (running the upgrade)")
         client = self._connect(connector, host, bundle)
         shell = None
@@ -627,10 +753,11 @@ class SparkPatchingService:
             # one is ever triggered) — not this job's; re-running it here was
             # leftover from when transfer+install were one combined job.
             upgrade_cmd = f"upgrade_revert_image.sh {remote_path} upgrade safe"
+            ctx.set_status("installing")
             ctx.log(
-                f"starting upgrade: {upgrade_cmd} — waiting for it to return control "
-                "(the script exits on success too, well before the reboot it schedules "
-                "for ~1 minute later; this session isn't expected to see that reboot)"
+                f"starting upgrade: {upgrade_cmd} — leaving this session open and "
+                "just watching it; the definitive check happens afterward (ping, "
+                "reconnect, fw ver), not from this session's own output"
             )
             try:
                 output = session.run_expert(upgrade_cmd, timeout=_UPGRADE_TIMEOUT)
@@ -648,39 +775,57 @@ class SparkPatchingService:
                         "never actually reformatted — do not trust this upgrade; reboot "
                         "the firewall to clear the stale mount before retrying"
                     )
-            except TransportTimeoutError as exc:
-                # The channel never reported closed — real-hardware testing
-                # 2026-08-20 confirmed this does NOT mean the device is
-                # rebooting (that only happens on the channel-closed branch
-                # below). It means upgrade_revert_image.sh hasn't returned
-                # control yet, and may still be legitimately working (e.g.
-                # extracting a large rootfs onto flash storage). Forcibly
-                # closing the pty-backed channel here — as this used to do
-                # unconditionally in `finally` — sends a hangup to that
-                # still-running foreground process and can abort an
-                # in-progress upgrade, which is worse than just not knowing
-                # the outcome yet. Leave the connection open (skip the
-                # cleanup below) instead, and fail the job closed rather
-                # than report a success we have no evidence for.
-                leave_connected = True
-                raise JobError(
-                    f"upgrade_revert_image.sh did not return control within "
-                    f"{_UPGRADE_TIMEOUT:.0f}s, and the SSH channel is still open — "
-                    "this is NOT evidence the device started rebooting (a real "
-                    "reboot closes the channel; this didn't). The script may "
-                    "still be working or may have hung. The SSH session was "
-                    "deliberately left connected rather than closed, to avoid "
-                    "killing a still-running upgrade — check the device directly "
-                    "(and /logs/upgrade_image) before assuming anything about "
-                    "the outcome"
-                ) from exc
-            except TransportError as exc:
-                # Channel actually closed — expected outcome, not a failure:
-                # the device may have dropped the connection as it begins
-                # rebooting.
+                # The script returned control. Per its own
+                # quit_upgrade_revert_image(), that happens on both success
+                # and failure — it only *schedules* the reboot (~60s out by
+                # default) before exiting, it doesn't wait for it. Actively
+                # wait to observe that reboot close this session, rather than
+                # just assuming it happened.
+                ctx.set_status("waiting for reboot")
                 ctx.log(
-                    "connection dropped while waiting for upgrade_revert_image.sh output "
-                    f"— expected if the device began rebooting immediately: {exc}",
+                    "script returned control — waiting for the scheduled reboot to "
+                    "close this session"
+                )
+                try:
+                    shell.wait_for_close(timeout=self._reboot_close_timeout)
+                    ctx.log("session closed — device is rebooting")
+                except TransportTimeoutError:
+                    ctx.log(
+                        f"session still open {self._reboot_close_timeout:.0f}s after the "
+                        "script returned control — no reboot happened (the script may "
+                        "have failed without scheduling one); closing this session and "
+                        "verifying directly instead of waiting further",
+                        level="warning",
+                    )
+            except TransportTimeoutError as exc:
+                # The channel never reported closed within the full
+                # script-run budget — real-hardware testing 2026-08-20
+                # confirmed this does NOT mean the device is rebooting
+                # (that's the channel-closed branch below); it means the
+                # script hasn't returned control yet and may still be
+                # legitimately working. Forcibly closing the pty-backed
+                # channel here would send a hangup to that still-running
+                # foreground process and can abort an in-progress upgrade —
+                # worse than just not knowing yet. Leave this connection
+                # open (leaked, deliberately) and verify independently via
+                # ping/reconnect/fw ver instead of waiting on it further.
+                leave_connected = True
+                ctx.set_status("waiting for reboot")
+                ctx.log(
+                    f"upgrade_revert_image.sh did not return control within "
+                    f"{_UPGRADE_TIMEOUT:.0f}s, and the SSH channel is still open — not "
+                    f"closing it (may still be legitimately running); verifying "
+                    f"independently instead: {exc}",
+                    level="warning",
+                )
+            except TransportError as exc:
+                # Channel actually closed — expected: the device may have
+                # dropped the connection as it began rebooting, possibly
+                # before ever returning control.
+                ctx.set_status("waiting for reboot")
+                ctx.log(
+                    "connection closed while waiting for upgrade_revert_image.sh output "
+                    f"— treating as the scheduled reboot: {exc}",
                     level="warning",
                 )
         finally:
@@ -688,3 +833,62 @@ class SparkPatchingService:
                 if shell is not None:
                     _safe_close(shell)
                 _safe_close(client)
+
+    def _wait_until_reachable(self, host: Host, ctx: JobContext) -> None:
+        """Poll TCP-connect reachability (see _default_probe_reachable) on
+        the SSH port until the host responds or ``self._ping_timeout``
+        elapses. Raises JobTimedOut, not JobError — the device may simply
+        still be rebooting/booting; this isn't evidence of failure by
+        itself, only of not being done yet."""
+        deadline = time.monotonic() + self._ping_timeout
+        attempt = 0
+        progress_seq: int | None = None
+        while True:
+            attempt += 1
+            if self._probe_reachable(host.address, host.ssh_port):
+                ctx.log(f"{host.name} is responding again (attempt {attempt})")
+                return
+            if time.monotonic() >= deadline:
+                raise JobTimedOut(
+                    f"{host.name} never responded within {self._ping_timeout:.0f}s of "
+                    "the upgrade command being issued — it may still be rebooting, or "
+                    "may have failed to come back up; check it directly"
+                )
+            ctx.raise_if_cancelled()
+            event = ctx.log(
+                f"waiting for {host.name} to respond (attempt {attempt})", replace=progress_seq
+            )
+            progress_seq = event.seq
+            time.sleep(self._ping_poll_interval)
+
+    def _wait_until_reconnected(
+        self, connector: HostConnector, host: Host, bundle: CredentialBundle, ctx: JobContext
+    ) -> ExpertCapableTransport:
+        """Retry a full SSH connect (not just the TCP-connect ping above)
+        until it succeeds or ``self._reconnect_timeout`` elapses — sshd can
+        come up slightly after the host starts accepting TCP connects on the
+        same port. Raises JobTimedOut, not JobError, for the same reason as
+        _wait_until_reachable."""
+        deadline = time.monotonic() + self._reconnect_timeout
+        attempt = 0
+        progress_seq: int | None = None
+        last_error: Exception | None = None
+        while True:
+            attempt += 1
+            try:
+                return self._connect(connector, host, bundle)
+            except TransportError as exc:
+                last_error = exc
+            if time.monotonic() >= deadline:
+                raise JobTimedOut(
+                    f"could not re-establish SSH to {host.name} within "
+                    f"{self._reconnect_timeout:.0f}s of it responding to reachability "
+                    f"checks — last error: {last_error}"
+                )
+            ctx.raise_if_cancelled()
+            event = ctx.log(
+                f"reconnect attempt {attempt} failed, retrying: {last_error}",
+                replace=progress_seq,
+            )
+            progress_seq = event.seq
+            time.sleep(self._reconnect_poll_interval)

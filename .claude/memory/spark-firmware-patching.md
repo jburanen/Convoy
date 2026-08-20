@@ -281,6 +281,69 @@ since a Spark firewall's assigned set isn't guaranteed to have one just
 because the Spark credential modal enforces it at creation time (a set
 could have been reassigned since).
 
+## `spark.install` now verifies the outcome instead of guessing at it (operator-directed 2026-08-20)
+
+The two 2026-08-20 findings above (a plain timeout ≠ evidence of anything;
+this tool's own SSH capture can't see `/logs/upgrade_image`) led the
+operator to redesign the whole install job around actually confirming the
+result, rather than inferring it from `upgrade_revert_image.sh`'s own
+session. `_run_upgrade` no longer tries to judge success/failure from what
+it observes issuing the command — it just issues it, watches (without
+force-closing the channel on a plain timeout, per the earlier fix), and
+always returns normally except for the one specific already-confirmed-bad
+case (`_STALE_MOUNT_MARKER`, still an immediate hard fail — see above).
+`_do_install` then runs a definitive check no matter which of the three ways
+`_run_upgrade` ended (prompt reappeared, channel closed, or timed out with
+the channel still open and deliberately left connected):
+
+1. Wait (`InteractiveShell.wait_for_close()`, a new primitive alongside
+   `expect()` — same channel-open-vs-closed distinction, but waiting for a
+   disconnect instead of a pattern) for the scheduled reboot to close the
+   session, bounded — if it never does (e.g. the script actually failed
+   without ever scheduling one), close the session itself (safe: the script
+   has already exited by this point) and proceed anyway rather than hang.
+2. Poll TCP-connect reachability on the SSH port (`_default_probe_reachable`
+   — deliberately *not* ICMP `ping`: this tool's container has no
+   `CAP_NET_RAW`/suid ping binary, and the slim base image doesn't even ship
+   one) until the host responds.
+3. Retry a full SSH reconnect (sshd can come up slightly after the host
+   starts accepting TCP connects on the same port).
+4. Run `fw ver` and compare its "Build NNN" against the *installed package
+   filename's own* trailing build digits (operator-specified: compare the
+   **last 3 digits** of each — `_image_build_suffix`/`_fw_ver_build_suffix`
+   in `spark_patching.py`) — only a match is a confirmed SUCCEEDED. Checked
+   *before* touching the device at all: if the package filename doesn't
+   match the expected `..._<digits>.img` convention, the job fails closed
+   immediately rather than run an upgrade it can never verify.
+
+This means the same code path resolves every outcome correctly regardless of
+*why* `_run_upgrade` couldn't tell what happened: if the script actually
+failed without rebooting, the device stays reachable the whole time and
+`fw ver` simply still reports the old build — caught by step 4 without
+needing any more script-output text-matching (the project's `_STALE_MOUNT_
+MARKER`-only doctrine, above, still holds — no new markers were added). A
+confirmed build mismatch is `JobError` (FAILED); giving up at the ping or
+reconnect stage without ever finding out is `JobTimedOut` (TIMED_OUT, not
+FAILED — same "not a terminal verdict" semantics as `PatchingService`'s
+import-verify polling) — this distinction matters operationally: FAILED
+means "confirmed bad," TIMED_OUT means "still don't know, go check."
+Timeouts/poll intervals for each stage are constructor params on
+`SparkPatchingService` (`ping_timeout`, `reconnect_timeout`, etc. — same
+convention as `PatchingService`'s `import_verify_attempts`/`_delay`), not
+bare module constants, specifically so tests can shrink them instead of
+sleeping real minutes.
+
+**Live status while this runs**: `JobRecord.status_text` (new column,
+migration v25) + `JobContext.set_status()` (`jobs.py`) is a single
+overwritten "what's happening now" field, independent of the append-only
+event log — the Jobs tab's Output column (`app.js` `renderJobRow`) shows it
+live while a job is pending/running (`"connecting"` → `"installing"` →
+`"waiting for reboot"` → `"waiting for firewall to respond to ping"` →
+`"reconnecting over SSH"` → `"verifying installed build"`), falling back to
+the terminal success/error text once the job finishes, same as before. Job
+kinds that never call `set_status()` (everything except `spark.install` so
+far) just show blank while running, unchanged from before this existed.
+
 ## Package/firewall compatibility filtering (Firewalls panel only)
 
 `packages.py`'s `package_kind(filename)` (`.img` → `"spark_image"`,

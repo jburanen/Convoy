@@ -340,6 +340,32 @@ class InteractiveShell:
             time.sleep(0.1)
         return collected
 
+    def wait_for_close(self, *, timeout: float, poll_interval: float = 1.0) -> str:
+        """Block until the channel actually closes (the remote end hung up —
+        e.g. a device rebooting), or ``timeout`` elapses first. Unlike
+        ``expect()``, there's no pattern to match against — this is for the
+        specific case of already knowing a remote command has finished and
+        deliberately waiting to observe the *disconnect* itself as a signal,
+        rather than racing a timeout against it. Drains and returns whatever
+        incidental output arrives while waiting (there shouldn't be much, at
+        an idle prompt). Raises TransportTimeoutError — not TransportError —
+        if the deadline elapses first: the channel is still open, so this is
+        not evidence the remote end is gone, only that it hasn't gone *yet*."""
+        deadline = time.monotonic() + timeout
+        collected = ""
+        while True:
+            if self._channel.recv_ready():
+                collected += self._channel.recv(4096).decode("utf-8", errors="replace")
+                continue
+            if self._channel.closed:
+                return collected
+            if time.monotonic() >= deadline:
+                raise TransportTimeoutError(
+                    f"channel to {self._host_name} still open after {timeout:.0f}s waiting "
+                    f"for it to close; output so far: {collected!r}"
+                )
+            time.sleep(poll_interval)
+
     def send_line(self, text: str) -> None:
         self._channel.send((text + "\n").encode("utf-8"))
 

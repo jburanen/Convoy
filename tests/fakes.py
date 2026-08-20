@@ -38,6 +38,7 @@ class FakeTransport:
         expert_command_outputs: dict[str, str] | None = None,
         expert_drop_on: str | None = None,
         expert_timeout_on: str | None = None,
+        expert_reboot_closes: bool = True,
     ) -> None:
         self.responses = responses or {}
         self.fail_rc = fail_rc  # set non-zero to make every command fail
@@ -60,6 +61,10 @@ class FakeTransport:
         # remote command that just hasn't finished yet), distinct from
         # expert_drop_on's channel-closed simulation above.
         self.expert_timeout_on = expert_timeout_on
+        # Controls FakeInteractiveShell.wait_for_close() — True (default)
+        # simulates the scheduled reboot closing the session promptly; False
+        # simulates it never closing (script failed without scheduling one).
+        self.expert_reboot_closes = expert_reboot_closes
         self.interactive_shells: list[FakeInteractiveShell] = []
 
     def run(self, command: str, *, timeout: float | None = None) -> CommandResult:
@@ -122,6 +127,7 @@ class FakeTransport:
             command_outputs=self.expert_command_outputs,
             drop_on=self.expert_drop_on,
             timeout_on=self.expert_timeout_on,
+            reboot_closes=self.expert_reboot_closes,
         )
         self.interactive_shells.append(shell)
         return shell
@@ -144,12 +150,14 @@ class FakeInteractiveShell:
         command_outputs: dict[str, str] | None = None,
         drop_on: str | None = None,
         timeout_on: str | None = None,
+        reboot_closes: bool = True,
     ) -> None:
         self._expert_password = expert_password
         self._wrong_password = wrong_password
         self._command_outputs = command_outputs or {}
         self._drop_on = drop_on
         self._timeout_on = timeout_on
+        self._reboot_closes = reboot_closes
         self._last = ""
         self._last_secret: str | None = None
         self.sent: list[str] = []
@@ -179,6 +187,12 @@ class FakeInteractiveShell:
             return "host> "
         output = self._command_outputs.get(self._last, "")
         return f"{self._last}\n{output}\n[Expert@host]# "
+
+    def wait_for_close(self, *, timeout: float, poll_interval: float = 1.0) -> str:
+        if self._reboot_closes:
+            self.closed = True
+            return ""
+        raise TransportTimeoutError(f"fake: channel still open after {timeout:.0f}s")
 
     def close(self) -> None:
         self.closed = True
