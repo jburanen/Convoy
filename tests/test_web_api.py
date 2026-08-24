@@ -125,7 +125,12 @@ def _put_set(
     the response body is already the finished cred.add/cred.edit JobRecord, no
     polling needed. Returned for callers that need the outcome (e.g. which
     kind ran, or is_default)."""
-    body: dict[str, object] = {"name": name, "ssh_username": "admin", "ssh_password": "pw"}
+    body: dict[str, object] = {
+        "name": name,
+        "ssh_username": "admin",
+        "ssh_password": "pw",
+        "expert_password": "expert-pw",
+    }
     body.update(extra)
     resp = client.put(f"/api/env/{env}/credentials", json=body)
     assert resp.status_code == 200, resp.text
@@ -149,6 +154,10 @@ def _add_ssh_credential(client: TestClient, host: str = "mgmt-01") -> None:
 
 # Inline credentials for a storage-disabled environment (one-shot per request).
 _SSH_CREDS = [{"kind": "ssh_password", "username": "admin", "secret": "pw"}]
+# Import/install/CDT/etc. escalate to expert mode (disk check, sha1 verify,
+# install-log capture, ...) — a storage-disabled job submitting one of those
+# kinds needs this in the body too, unlike a plain state/detect query.
+_SSH_CREDS_WITH_EXPERT = [*_SSH_CREDS, {"kind": "expert_password", "secret": "expert-pw"}]
 
 
 def _upload_package(client: TestClient, name: str = "jhf.tgz", content: bytes = b"x" * 64) -> None:
@@ -330,7 +339,12 @@ def test_bootstrap_credentials_become_the_default(client: TestClient) -> None:
     # First set with default_if_none → becomes the environment default.
     resp = client.put(
         "/api/env/default/credentials",
-        json={"name": "primary", "ssh_password": "pw", "default_if_none": True},
+        json={
+            "name": "primary",
+            "ssh_password": "pw",
+            "expert_password": "expert-pw",
+            "default_if_none": True,
+        },
     )
     assert resp.status_code == 200, resp.text
     job = resp.json()
@@ -341,7 +355,12 @@ def test_bootstrap_credentials_become_the_default(client: TestClient) -> None:
     # A second set also asking default_if_none does NOT steal the default.
     resp2 = client.put(
         "/api/env/default/credentials",
-        json={"name": "backup", "ssh_password": "pw", "default_if_none": True},
+        json={
+            "name": "backup",
+            "ssh_password": "pw",
+            "expert_password": "expert-pw",
+            "default_if_none": True,
+        },
     )
     assert resp2.status_code == 200, resp2.text
     defaults = [
@@ -742,26 +761,26 @@ def test_credential_sets_roundtrip_never_echoes_secret(client: TestClient) -> No
     assert client.get("/api/env/default/credentials").json() == []
 
 
-def test_require_expert_rejects_missing_expert_password(client: TestClient) -> None:
-    """require_expert is the Spark-firewall credential flow's opt-in guard
-    (web/app.py's put_credential_set) — every other caller of this same route
-    (the plain Credentials panel, saveBootstrapCredential) omits it and stays
-    unaffected, see test_credential_sets_roundtrip_never_echoes_secret above."""
+def test_missing_expert_password_fails_as_a_job_not_a_sync_422(client: TestClient) -> None:
+    """Every credential set requires an expert-mode password now (every
+    stored host is a management server or a firewall, either of which may
+    escalate to expert mode — see .claude/memory/gaia-shell-posture.md), not
+    just Spark's old opt-in require_expert flag. CredentialStore.put_set
+    enforces it, so — same as any other put_set validation error (e.g. a
+    missing SSH secret) — it surfaces as a failed job, not a synchronous
+    422."""
     resp = client.put(
         "/api/env/default/credentials",
-        json={
-            "name": "spark-01",
-            "ssh_username": "admin",
-            "ssh_password": "pw",
-            "require_expert": True,
-        },
+        json={"name": "spark-01", "ssh_username": "admin", "ssh_password": "pw"},
     )
-    assert resp.status_code == 422, resp.text
-    assert "expert password" in resp.json()["detail"]
+    assert resp.status_code == 200, resp.text
+    job = resp.json()
+    assert job["status"] == "failed"
+    assert "expert-mode password" in (job["error"] or "")
     assert client.get("/api/env/default/credentials").json() == []  # nothing written
 
 
-def test_require_expert_accepts_with_expert_password(client: TestClient) -> None:
+def test_expert_password_accepted_and_listed(client: TestClient) -> None:
     resp = client.put(
         "/api/env/default/credentials",
         json={
@@ -769,7 +788,6 @@ def test_require_expert_accepts_with_expert_password(client: TestClient) -> None
             "ssh_username": "admin",
             "ssh_password": "pw",
             "expert_password": "expertpw",
-            "require_expert": True,
         },
     )
     assert resp.status_code == 200, resp.text
@@ -1244,7 +1262,7 @@ def test_storage_disabled_job_requires_inline_credentials(client: TestClient) ->
     # Inline credentials → the job runs to completion.
     resp = client.post(
         "/api/env/dmz/servers/mgmt-01/import",
-        json={"package": "jhf.tgz", "credentials": _SSH_CREDS},
+        json={"package": "jhf.tgz", "credentials": _SSH_CREDS_WITH_EXPERT},
     )
     assert resp.status_code == 202, resp.text
     job = _wait_for_job(client, resp.json()["id"])
@@ -1285,9 +1303,9 @@ def test_provision_renders_commands_without_plaintext(client: TestClient) -> Non
     resp = client.post("/api/provision", json={"username": "svc-patch", "password": "s3cret-pw!"})
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["commands"][3] == "set user svc-patch gid 100 shell /bin/bash"
+    assert body["commands"][3] == "set user svc-patch gid 100"
     assert "s3cret-pw!" not in resp.text  # only the salted hash is echoed
-    assert any("clish -c" in n for n in body["notes"])
+    assert any("clish" in n for n in body["notes"])
     # Management API provisioning is a separate step now (Connect to Primary) —
     # this endpoint only renders the Gaia clish commands.
     assert "api_commands" not in body
@@ -1542,18 +1560,24 @@ def test_firewall_spark_test_credentials_succeeds(client: TestClient) -> None:
     assert job["status"] == "succeeded", job["error"]
 
 
-def test_firewall_spark_test_credentials_fails_without_expert_password(
+def test_cannot_create_a_credential_set_without_an_expert_password(
     client: TestClient,
 ) -> None:
-    _put_set(client, ssh_username="admin", ssh_password="s3cret-pw!")  # no expert_password
-    _add_firewall(client, name="spark-x", address="192.0.2.80", role="spark_firewall")
-    client.post("/api/env/default/firewalls/spark-x/credential", json={"set": "primary"})
-
-    resp = client.post("/api/env/default/firewalls/spark-x/spark-test-credentials")
-    assert resp.status_code == 202, resp.text
-    job = _wait_for_job(client, resp.json()["id"])
+    """Every credential set requires an expert-mode password now (see
+    CredentialStore.put_set), so a Spark firewall — which always needs one to
+    patch — can no longer end up assigned to a set that lacks one, the way it
+    could under the old Spark-only opt-in require_expert flag. The failure
+    now shows up right here, not deep inside a later spark-test-credentials
+    job."""
+    resp = client.put(
+        "/api/env/default/credentials",
+        json={"name": "primary", "ssh_username": "admin", "ssh_password": "s3cret-pw!"},
+    )
+    assert resp.status_code == 200, resp.text
+    job = resp.json()
     assert job["status"] == "failed"
-    assert "no expert-mode password" in job["error"]
+    assert "expert-mode password" in (job["error"] or "")
+    assert client.get("/api/env/default/credentials").json() == []
 
 
 def test_firewall_spark_test_credentials_rejects_non_spark_firewall(client: TestClient) -> None:

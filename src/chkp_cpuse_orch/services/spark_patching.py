@@ -70,9 +70,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol, cast
 
-from ..credentials import CredentialBundle, CredentialKind, JobCredentialVault
+from ..credentials import CredentialBundle, JobCredentialVault
 from ..errors import (
-    CredentialError,
     ExpertModeError,
     JobError,
     TransportError,
@@ -90,6 +89,7 @@ from .common import (
     Transport,
     ensure_host_free,
     job_run_credentials,
+    require_expert_password,
     submit_host_job,
     verify_uploaded_file,
 )
@@ -351,6 +351,7 @@ class SparkPatchingService:
             JOB_TEST_CREDENTIALS,
             credentials=credentials,
             triggered_by=triggered_by,
+            require_expert=True,
         )
 
     def submit_transfer(
@@ -385,6 +386,7 @@ class SparkPatchingService:
             params={"package": package_filename},
             credentials=credentials,
             triggered_by=triggered_by,
+            require_expert=True,
         )
 
     def submit_install(
@@ -428,6 +430,7 @@ class SparkPatchingService:
             params={"package": package_filename},
             credentials=credentials,
             triggered_by=triggered_by,
+            require_expert=True,
         )
 
     # -- job handlers (async wrappers over blocking SSH work) ----------------------
@@ -456,22 +459,6 @@ class SparkPatchingService:
             return creds
         return connector.host_credentials(host)
 
-    def _require_expert_password(
-        self, bundle: CredentialBundle, host: Host, ctx: JobContext
-    ) -> str:
-        """Checked before any SSH attempt: a Spark firewall's assigned set
-        isn't guaranteed to carry an expert password just because the
-        Spark credential modal enforces it at creation time — a set could
-        have been reassigned since. Missing it is a config problem, not a
-        connectivity one, so this fails without ever opening a connection."""
-        cred = bundle.get(CredentialKind.EXPERT_PASSWORD)
-        if cred is None:
-            raise CredentialError(
-                f"the credential set assigned to {host.name!r} has no expert-mode "
-                "password — edit it on the Provisioning tab"
-            )
-        return cred.reveal()
-
     def _connect(
         self, connector: HostConnector, host: Host, bundle: CredentialBundle
     ) -> ExpertCapableTransport:
@@ -483,7 +470,7 @@ class SparkPatchingService:
         connector = self.registry.get(ctx.job.environment)
         host = connector.spark_firewall_host(ctx.job.target or "")
         bundle = self._resolve_bundle(connector, host, ctx)
-        expert_password = self._require_expert_password(bundle, host, ctx)  # no SSH before this
+        expert_password = require_expert_password(bundle, host)  # no SSH before this
 
         ctx.log(f"connecting over SSH to {host.name}")
         client = self._connect(connector, host, bundle)
@@ -516,7 +503,7 @@ class SparkPatchingService:
         remote_path = posixpath.join(_STORAGE_DIR, package)
 
         bundle = self._resolve_bundle(connector, host, ctx)
-        expert_password = self._require_expert_password(bundle, host, ctx)  # no SSH before this
+        expert_password = require_expert_password(bundle, host)  # no SSH before this
 
         self._enable_bash_user(connector, host, bundle, expert_password, ctx)
         self._transfer_image(
@@ -683,7 +670,7 @@ class SparkPatchingService:
             )
 
         bundle = self._resolve_bundle(connector, host, ctx)
-        expert_password = self._require_expert_password(bundle, host, ctx)  # no SSH before this
+        expert_password = require_expert_password(bundle, host)  # no SSH before this
 
         self._run_upgrade(connector, host, bundle, expert_password, remote_path, ctx)
         self._unmark_staged(ctx.job.environment, host.name, package)

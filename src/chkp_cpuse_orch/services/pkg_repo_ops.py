@@ -126,6 +126,7 @@ class PackageRepoService:
             params={"package": package_filename},
             credentials=credentials,
             triggered_by=triggered_by,
+            require_expert=True,  # `stat`/upload/cleanup are all bash-native
         )
 
     # -- job handler ---------------------------------------------------------------
@@ -150,7 +151,7 @@ class PackageRepoService:
         try:
             transport = connector.connect(host, creds)
             try:
-                existing = transport.run(f"stat -c %s {remote_pkg} 2>/dev/null")
+                existing = transport.run_bash(f"stat -c %s {remote_pkg} 2>/dev/null")
                 if existing.ok and existing.stdout.strip() == str(local_size):
                     ctx.log(
                         f"{package} already staged at {remote_pkg} (size matches) — skip upload"
@@ -209,7 +210,7 @@ class PackageRepoService:
             )
             return
         try:
-            result = transport.run(f"rm -f {remote_pkg}")
+            result = transport.run_bash(f"rm -f {remote_pkg}")
             if result.ok:
                 ctx.log(f"cleanup: removed staged package {remote_pkg}")
             else:

@@ -6,7 +6,7 @@ import os
 from collections.abc import Callable
 
 from chkp_cpuse_orch.errors import TransportError, TransportTimeoutError
-from chkp_cpuse_orch.transport.ssh import CommandResult
+from chkp_cpuse_orch.transport.ssh import CommandResult, GaiaShell
 
 # Canned CPUSE output used across tests: one imported, one installed package.
 SHOW_PACKAGES_ALL = """\
@@ -33,6 +33,7 @@ class FakeTransport:
         responses: dict[str, Resp | list[Resp]] | None = None,
         fail_rc: int = 0,
         *,
+        shell: GaiaShell = GaiaShell.EXPERT,
         expert_password: str = "expert-pw",
         expert_wrong_password: bool = False,
         expert_command_outputs: dict[str, str] | None = None,
@@ -42,7 +43,13 @@ class FakeTransport:
     ) -> None:
         self.responses = responses or {}
         self.fail_rc = fail_rc  # set non-zero to make every command fail
+        # Detected shell — defaults to EXPERT (today's confirmed-working
+        # behavior, unchanged) so existing fixtures don't need updating just
+        # to keep passing; tests exercising GaiaSession's own detection/
+        # elevation logic live against the real class, not this fake.
+        self.shell = shell
         self.commands: list[str] = []
+        self.bash_commands: list[str] = []
         self.puts: list[tuple[str, str]] = []
         self.closed = False
         # Override to fake a bad upload (e.g. lambda local: 0 for a size mismatch).
@@ -73,6 +80,14 @@ class FakeTransport:
         if self.fail_rc:
             rc = self.fail_rc
         return CommandResult(command=command, exit_status=rc, stdout=stdout, stderr="")
+
+    def run_bash(self, command: str, *, timeout: float | None = None) -> CommandResult:
+        # Same scripted responses as run() — this fake doesn't model the
+        # real elevate-if-clish distinction (GaiaSession's own tests cover
+        # that against the real class); it just records separately so a test
+        # can assert a given command went through the bash-native path.
+        self.bash_commands.append(command)
+        return self.run(command, timeout=timeout)
 
     def _lookup(self, command: str) -> tuple[int, str]:
         for key, scripted in self.responses.items():

@@ -20,18 +20,11 @@ from enum import StrEnum
 
 from .clusterxl import ClusterMemberState, parse_cluster_state
 from .errors import CPUSEError
-from .transport.ssh import CommandResult, CommandRunner
+from .transport.ssh import CommandResult, CommandRunner, GaiaShell
 
 # Conventional staging directory for uploaded packages (any dir works; the docs
 # use /var/log/upload in their examples).
 DEFAULT_STAGING_DIR = "/var/log/upload"
-
-
-class GaiaShell(StrEnum):
-    """What the SSH login shell is, which decides how clish commands are sent."""
-
-    EXPERT = "expert"  # login shell is bash → wrap as: clish -c "<cmd>"
-    CLISH = "clish"  # login shell is clish → send the command bare
 
 
 class PackageScope(StrEnum):

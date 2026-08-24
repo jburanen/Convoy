@@ -109,7 +109,13 @@ def store(tmp_path: Path) -> Store:
 @pytest.fixture
 def credentials(store: Store) -> CredentialStore:
     cs = CredentialStore(store, master_key="unit test master key")
-    cs.put_set(ENV, "primary", ssh_username="svc-patch", ssh_password="gaia-pw")
+    cs.put_set(
+        ENV,
+        "primary",
+        ssh_username="svc-patch",
+        ssh_password="gaia-pw",
+        expert_password="expert-pw",
+    )
     return cs
 
 

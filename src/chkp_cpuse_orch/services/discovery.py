@@ -355,7 +355,7 @@ class DiscoveryService:
             'export MDSDIR; "$MDSDIR/scripts/mdsquerydb" MDSs'
         )
         try:
-            out = client.run(command)
+            out = client.run_bash(command)
         except TransportError as exc:
             result.warnings.append(f"MDS enumeration failed: {exc}")
             return

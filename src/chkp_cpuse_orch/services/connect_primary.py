@@ -132,6 +132,7 @@ class PrimaryConnectService:
             },
             credentials=credentials,
             triggered_by=triggered_by,
+            require_expert=True,  # mgmt_cli is bash-native
         )
 
     def reveal_api_key(self, job_id: str) -> str | None:
@@ -163,27 +164,29 @@ class PrimaryConnectService:
         client = connector.connect(host, creds)
         try:
             ctx.log(f"connected to {host.name} ({host.address}) over SSH")
-            require_ok(client.run(render_mgmt_login_command(is_mds=is_mds)))
+            require_ok(client.run_bash(render_mgmt_login_command(is_mds=is_mds)))
 
             # NOT YET CONFIRMED against live gear: whether a not-found
             # administrator makes this command exit non-zero or return a JSON
             # error body with exit 0 — either is treated as "doesn't exist
             # yet" for now (see render_show_administrator_command).
-            probe = client.run(render_show_administrator_command(username))
+            probe = client.run_bash(render_show_administrator_command(username))
             if probe.ok:
                 ctx.log(
                     f"Management API administrator {username!r} already exists — "
                     "issuing a new API key"
                 )
             else:
-                require_ok(client.run(render_add_administrator_command(username, is_mds=is_mds)))
+                require_ok(
+                    client.run_bash(render_add_administrator_command(username, is_mds=is_mds))
+                )
                 ctx.log(f"created Management API administrator {username!r}")
 
-            key_result = require_ok(client.run(render_add_api_key_command(username)))
+            key_result = require_ok(client.run_bash(render_add_api_key_command(username)))
             api_key = parse_api_key_from_add_api_key_output(key_result.stdout)
 
             for cmd in render_publish_logout_commands():
-                require_ok(client.run(cmd))
+                require_ok(client.run_bash(cmd))
             ctx.log("published changes and logged out")
         finally:
             client.close()

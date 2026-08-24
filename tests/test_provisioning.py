@@ -26,7 +26,7 @@ def test_renders_full_command_set_in_order() -> None:
     assert cmds[0] == "add user svc-patch uid 0 homedir /home/svc-patch"
     assert cmds[1].startswith("set user svc-patch password-hash $6$")
     assert cmds[2] == "add rba user svc-patch roles adminRole"
-    assert cmds[3] == "set user svc-patch gid 100 shell /bin/bash"  # bash → SCP works
+    assert cmds[3] == "set user svc-patch gid 100"  # clish stays the default login shell
     assert cmds[4] == "save config"
 
 
@@ -57,7 +57,7 @@ def test_render_bootstrap_script_wraps_every_command_in_clish_dash_c() -> None:
     assert lines[1].startswith("clish -c 'set user svc-patch password-hash $6$")
     assert lines[1].endswith("'")
     assert lines[2] == "clish -c 'add rba user svc-patch roles adminRole'"
-    assert lines[3] == "clish -c 'set user svc-patch gid 100 shell /bin/bash'"
+    assert lines[3] == "clish -c 'set user svc-patch gid 100'"
     assert lines[4] == "clish -c 'save config'"
 
 

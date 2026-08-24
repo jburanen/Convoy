@@ -176,6 +176,14 @@ class CredentialStore:
             raise CredentialError("provide an SSH password or a private key, not both")
         if ssh_password_ct is None and ssh_private_key_ct is None:
             raise CredentialError("a credential set needs an SSH password or private key")
+        # Every stored host is a management server or a firewall (see
+        # inventory.py's Role enum) — under the clish-login-plus-on-demand-
+        # expert posture (.claude/memory/gaia-shell-posture.md), any of them
+        # may need to escalate to expert mode. Required flat across every
+        # set, not conditionally per host/role: simpler, and there is no
+        # other kind of host to exempt.
+        if expert_password_ct is None:
+            raise CredentialError("a credential set needs an expert-mode password")
 
         row = CredentialSetRow(
             environment=environment,

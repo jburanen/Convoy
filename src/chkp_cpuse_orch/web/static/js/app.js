@@ -243,15 +243,24 @@ function updateCredCacheNote() {
   }
 }
 
-function promptCredentials(host, purpose) {
+// Set by promptCredentials for the submit handler below to validate against —
+// only operations that actually escalate to expert mode (see NEEDS_EXPERT_JOB_KINDS
+// and operationCredentials' needsExpert param) require the field to be filled.
+let _credNeedsExpert = false;
+
+function promptCredentials(host, purpose, needsExpert = false) {
   const modal = document.getElementById("cred-modal");
   document.getElementById("cred-modal-title").textContent = `Credentials for ${host}`;
   document.getElementById("cred-modal-hint").textContent =
     `This environment doesn't store credentials. Enter them to ${purpose} on ${host} — ` +
-    "kept in memory only until the operation finishes, never written to disk.";
+    "kept in memory only until the operation finishes, never written to disk." +
+    (needsExpert ? " This operation needs the expert-mode password too." : "");
   for (const id of ["cm-password", "cm-key", "cm-expert"]) document.getElementById(id).value = "";
   document.getElementById("cm-remember").checked = false;
-  document.getElementById("cm-more").open = false;
+  _credNeedsExpert = needsExpert;
+  // Auto-expand so the (now required) expert-password field isn't hidden
+  // behind the collapsed <details> — otherwise this reads as a silent block.
+  document.getElementById("cm-more").open = needsExpert;
   modal.classList.remove("hidden");
   document.getElementById("cm-password").focus();
   return new Promise((resolve) => { _credResolve = resolve; });
@@ -268,11 +277,16 @@ function closeCredModal(result) {
 // environment, { credentials: [...] } once collected (from cache or a prompt),
 // or null if the operator cancelled. On failure, callers evict via
 // cacheEvictCreds(host) so a stale cached password re-prompts next time.
-async function operationCredentials(host, purpose, env = currentEnv) {
+async function operationCredentials(host, purpose, env = currentEnv, needsExpert = false) {
   if (storageEnabled(env)) return {};
   const cached = cacheGetCreds(host);
-  if (cached) return { credentials: cached };
-  const result = await promptCredentials(host, purpose);
+  // A cached credential from an earlier, non-expert prompt on the same host
+  // may not carry an expert password — re-prompt rather than silently
+  // proceeding without one.
+  if (cached && (!needsExpert || cached.some((c) => c.kind === "expert_password"))) {
+    return { credentials: cached };
+  }
+  const result = await promptCredentials(host, purpose, needsExpert);
   if (result === null) return null;
   if (result.remember) cachePutCreds(host, result.creds);
   return { credentials: result.creds };
@@ -288,6 +302,10 @@ document.getElementById("cred-modal-form").addEventListener("submit", (ev) => {
   const creds = fields.filter(([, s]) => s).map(([kind, secret]) => ({ kind, secret }));
   if (!creds.some((c) => c.kind === "ssh_password" || c.kind === "ssh_private_key")) {
     toast("Enter an SSH password or a private key.");
+    return;
+  }
+  if (_credNeedsExpert && !creds.some((c) => c.kind === "expert_password")) {
+    toast("This operation needs the expert-mode password too.");
     return;
   }
   closeCredModal({ creds, remember: document.getElementById("cm-remember").checked });
@@ -2030,7 +2048,7 @@ async function installPackage(name, row) {
     "Make sure this is inside a maintenance window and any HA peer is healthy."
   );
   if (!sure) return;
-  const extra = await operationCredentials(name, "install a package");
+  const extra = await operationCredentials(name, "install a package", currentEnv, true);
   if (extra === null) return;
   try {
     await api(envUrl(`/servers/${encodeURIComponent(name)}/install`), {
@@ -2231,7 +2249,7 @@ document.getElementById("bulk-import-btn").addEventListener("click", () => {
   const pkg = document.getElementById("bulk-import-package").value;
   if (!pkg) { toast("Choose a package first."); return; }
   bulkImport(btn, selectedServerNames, async (name) => {
-    const extra = await operationCredentials(name, "import a package");
+    const extra = await operationCredentials(name, "import a package", currentEnv, true);
     if (extra === null) { toast(`Skipped ${name}: credentials not provided.`); return; }
     const { proceed, force } = await checkDiskSpaceBeforeImport("servers", name, pkg, extra);
     if (!proceed) return;
@@ -2477,7 +2495,9 @@ async function refreshFirewallState(name, row, stateRow) {
 // every other job-submitting action in this app; progress/result show up on
 // the Jobs tab rather than an inline poll here.
 async function testSparkCredentials(name) {
-  const extra = await operationCredentials(name, "test SSH login and the expert-mode password");
+  const extra = await operationCredentials(
+    name, "test SSH login and the expert-mode password", currentEnv, true
+  );
   if (extra === null) return; // credential prompt cancelled
   try {
     const job = await api(envUrl(`/firewalls/${encodeURIComponent(name)}/spark-test-credentials`), {
@@ -2626,10 +2646,12 @@ function closeSparkCredModal(result) {
 }
 
 // Save a new credential set from the Spark scenario modal — same name-collision
-// handling as saveBootstrapCredential (prompt overwrite/new/skip), but expert
-// password is required (require_expert: true) and the set never becomes the
-// environment default (that's reserved for management-server bootstrap creds,
-// see saveBootstrapCredential). Unlike saveBootstrapCredential, this checks the
+// handling as saveBootstrapCredential (prompt overwrite/new/skip). Every
+// credential set requires an expert password now (enforced server-side in
+// CredentialStore.put_set), so nothing Spark-specific needs to be flagged
+// here anymore; the set never becomes the environment default (that's
+// reserved for management-server bootstrap creds, see
+// saveBootstrapCredential). Unlike saveBootstrapCredential, this checks the
 // returned job actually succeeded before reporting success.
 async function saveSparkCredential({ name, ssh_username, ssh_password, expert_password, api_key }) {
   await loadCredentialSets(); // refresh before checking for a username collision
@@ -2650,7 +2672,6 @@ async function saveSparkCredential({ name, ssh_username, ssh_password, expert_pa
         ssh_password,
         expert_password,
         api_key: api_key || null,
-        require_expert: true,
       }),
     });
     lastJobStatus.set(job.id, job.status);
@@ -2725,7 +2746,7 @@ async function installFirewallPackage(name, row) {
     "Make sure this is inside a maintenance window and any HA peer is healthy."
   );
   if (!sure) return;
-  const extra = await operationCredentials(name, "install a package");
+  const extra = await operationCredentials(name, "install a package", currentEnv, true);
   if (extra === null) return;
   try {
     await api(envUrl(`/firewalls/${encodeURIComponent(name)}/install`), {
@@ -2782,7 +2803,9 @@ document.getElementById("fw-bulk-import-btn").addEventListener("click", () => {
     // action from that row's Install button once the transfer lands it in
     // the picker (see renderInstallSelect / spark_patching.py's submit_install).
     bulkImport(btn, selectedFirewallNames, async (name) => {
-      const extra = await operationCredentials(name, "transfer a Spark firmware image");
+      const extra = await operationCredentials(
+        name, "transfer a Spark firmware image", currentEnv, true
+      );
       if (extra === null) { toast(`Skipped ${name}: credentials not provided.`); return; }
       const job = await api(envUrl(`/firewalls/${encodeURIComponent(name)}/spark-import`), {
         method: "POST",
@@ -2794,7 +2817,7 @@ document.getElementById("fw-bulk-import-btn").addEventListener("click", () => {
     return;
   }
   bulkImport(btn, selectedFirewallNames, async (name) => {
-    const extra = await operationCredentials(name, "import a package");
+    const extra = await operationCredentials(name, "import a package", currentEnv, true);
     if (extra === null) { toast(`Skipped ${name}: credentials not provided.`); return; }
     const { proceed, force } = await checkDiskSpaceBeforeImport("firewalls", name, pkg, extra);
     if (!proceed) return;
@@ -3359,7 +3382,7 @@ async function populateCdtSelectors() {
 async function cdtRefreshStatus() {
   const name = cdtServer();
   if (!name) return;
-  const extra = await operationCredentials(name, "query CDT status");
+  const extra = await operationCredentials(name, "query CDT status", currentEnv, true);
   if (extra === null) return;
   const box = document.getElementById("cdt-status");
   box.textContent = "querying…";
@@ -3382,7 +3405,7 @@ async function cdtRefreshStatus() {
 async function cdtLoadCandidates() {
   const name = cdtServer();
   if (!name) return;
-  const extra = await operationCredentials(name, "read the candidates list");
+  const extra = await operationCredentials(name, "read the candidates list", currentEnv, true);
   if (extra === null) return;
   try {
     cdtCandidates = await api(envUrl(`/cdt/${encodeURIComponent(name)}/candidates/read`), {
@@ -3441,7 +3464,7 @@ function cdtMoveRow(idx, delta) {
 async function cdtSaveCandidates() {
   const name = cdtServer();
   if (!name || !cdtCandidates) { toast("Load candidates first."); return; }
-  const extra = await operationCredentials(name, "save the candidates list");
+  const extra = await operationCredentials(name, "save the candidates list", currentEnv, true);
   if (extra === null) return;
   try {
     const resp = await api(envUrl(`/cdt/${encodeURIComponent(name)}/candidates`), {
@@ -3459,7 +3482,9 @@ async function cdtSaveCandidates() {
 async function cdtAction(path, body) {
   const name = cdtServer();
   if (!name) return;
-  const extra = await operationCredentials(name, path);
+  // Every CDT action is bash-native (Expert mode, uid 0) — always requires
+  // the expert-mode password in a storage-disabled environment.
+  const extra = await operationCredentials(name, path, currentEnv, true);
   if (extra === null) return;
   try {
     await api(envUrl(`/cdt/${encodeURIComponent(name)}/${path}`), {
@@ -3628,7 +3653,7 @@ async function loadPackages() {
     row.querySelector(".btn-push-repo").addEventListener("click", async () => {
       if (!currentEnv) { toast("Pick an environment first."); return; }
       const btn = row.querySelector(".btn-push-repo");
-      const extra = await operationCredentials(currentEnv, "upload to the repository");
+      const extra = await operationCredentials(currentEnv, "upload to the repository", currentEnv, true);
       if (extra === null) return; // credential prompt cancelled
       btn.disabled = true;
       try {
@@ -3842,6 +3867,11 @@ document.getElementById("credential-form").addEventListener("submit", async (ev)
   if (!password && !key && !credEditMode) { toast("Enter an SSH password or a private key."); return; }
   if (password && key) { toast("Enter an SSH password OR a private key, not both."); return; }
   const expertInput = document.getElementById("cs-expert");
+  // Same relaxed-on-edit rule as the SSH secret above: a new set needs an
+  // expert password up front (every host may need to escalate to expert
+  // mode — see .claude/memory/gaia-shell-posture.md); editing may leave it
+  // blank to keep the set's current value.
+  if (!expertInput.value && !credEditMode) { toast("Enter an expert-mode password."); return; }
   const apiInput = document.getElementById("cs-api");
   try {
     // Executes immediately (services/cred_ops.py) — the response is already
@@ -4089,7 +4119,7 @@ function wireJobRow(row, jobId) {
     // job ran against (renderJobRow fills them from the same job record).
     const host = row.querySelector(".job-target").textContent;
     const env = row.querySelector(".job-env").textContent;
-    const extra = await operationCredentials(host, "check import status", env);
+    const extra = await operationCredentials(host, "check import status", env, true);
     if (extra === null) return; // credential prompt cancelled
     btn.disabled = true;
     try {

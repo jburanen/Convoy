@@ -25,12 +25,19 @@ import shlex
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import StrEnum
 from types import TracebackType
 from typing import Protocol
 
 import paramiko
 
-from ..errors import ExpertModeError, TransportError, TransportTimeoutError
+from ..errors import (
+    CredentialError,
+    ExpertModeError,
+    GaiaShellRestoreError,
+    TransportError,
+    TransportTimeoutError,
+)
 from ..inventory import Host
 
 
@@ -48,10 +55,30 @@ class CommandResult:
         return self.exit_status == 0
 
 
+class GaiaShell(StrEnum):
+    """What a Gaia account's SSH login shell is, which decides how a clish
+    command must be sent. Historically a static per-host setting this tool
+    chose at provisioning time; now detected live per connection (see
+    ``GaiaSession`` below) since the tool no longer assumes every account is
+    bash-default — see .claude/memory/gaia-shell-posture.md."""
+
+    EXPERT = "expert"  # login shell is bash -> wrap as: clish -c "<cmd>"
+    CLISH = "clish"  # login shell is clish -> send the command bare
+
+
 class CommandRunner(Protocol):
-    """Interface the wrappers depend on. Real SSH and fakes both satisfy it."""
+    """Interface the wrappers depend on. Real SSH and fakes both satisfy it.
+
+    ``run`` is for clish-native commands (the caller already formats the wire
+    string for whichever shell it's talking to — see ``cpuse.py``); ``run_bash``
+    is for bash-native ones, escalating to expert mode first if needed (see
+    ``GaiaSession`` below). CPUSE only ever calls ``run``; CDT only ever calls
+    ``run_bash`` — both are declared here so either wrapper can depend on this
+    one protocol."""
 
     def run(self, command: str, *, timeout: float | None = None) -> CommandResult: ...
+
+    def run_bash(self, command: str, *, timeout: float | None = None) -> CommandResult: ...
 
 
 class FileTransfer(Protocol):
@@ -308,6 +335,10 @@ class InteractiveShell:
         self._host_name = host_name
         self._read_timeout = read_timeout
 
+    @property
+    def host_name(self) -> str:
+        return self._host_name
+
     def expect(self, pattern: str, *, timeout: float | None = None) -> str:
         """Read until ``pattern`` (a regex) matches the tail of accumulated
         output, or ``timeout`` elapses. Returns everything read. Raises
@@ -432,6 +463,250 @@ class GaiaExpertSession:
             lines = lines[:-1]
         return "\n".join(lines).strip()
 
+    # A marker distinctive enough it will never collide with real command
+    # output, used to recover a numeric exit status below.
+    _RC_MARKER = "__CHKP_ORCH_RC__"
+    _RC_RE = re.compile(rf"{_RC_MARKER}:(-?\d+)\s*$")
+
+    def run_expert_command(self, command: str, *, timeout: float = 60.0) -> CommandResult:
+        """Like ``run_expert``, but for bash-native commands that need a real
+        exit status (``df``, ``sha1sum``, ``cat``, ``rm``, the CDT binary,
+        ``mgmt_cli`` — anything checking ``.ok``/``exit_status`` the way any
+        other ``CommandResult`` is), not just text to scan. ``run_expert``
+        itself only returns output text — enough for Spark's own
+        text-scanning callers, not for these. Appends a marker+``$?`` echo
+        and strips it back off. Stderr is always empty: a pty intermixes
+        stdout/stderr with no way to separate them, same limitation as every
+        other interactive-shell command in this module."""
+        output = self.run_expert(f"{command}; echo {self._RC_MARKER}:$?", timeout=timeout)
+        lines = output.splitlines()
+        match = self._RC_RE.search(lines[-1]) if lines else None
+        if match is None:
+            raise TransportError(
+                f"could not recover an exit status for {command!r} on "
+                f"{self._shell.host_name}: no {self._RC_MARKER} marker in output: {output!r}"
+            )
+        stdout = "\n".join(lines[:-1])
+        return CommandResult(
+            command=command, exit_status=int(match.group(1)), stdout=stdout, stderr=""
+        )
+
     def exit_expert(self, *, timeout: float = 15.0) -> None:
         self._shell.send_line("exit")
         self._shell.expect(self._LOGIN_PROMPT, timeout=timeout)
+
+
+def _restore_clish_shell(client: SSHClient, username: str) -> None:
+    """Flip an account's shell back to clish from a session that is
+    currently bash — used only by ``GaiaSession``'s transfer maneuver below,
+    after a login-shell toggle to bash has already happened. Wrapped as
+    ``clish -c`` since the connection this runs on is bash right now."""
+    require_ok(client.run(f"clish -c {shlex.quote(f'set user {username} shell /etc/cli.sh')}"))
+    require_ok(client.run(f"clish -c {shlex.quote('save config')}"))
+
+
+class GaiaSession:
+    """``CommandRunner``/``Transport`` for a full Gaia (Force) host under the
+    clish-login-plus-on-demand-expert posture: SSH lands in clish (Gaia's own
+    default) for accounts provisioned this way, or directly in bash/expert
+    for accounts an operator supplies that already have that shell (older
+    provisioning, or a pre-existing admin account) — detected live per
+    connection, not configured per host. See
+    .claude/memory/gaia-shell-posture.md.
+
+    - ``run()`` is for **clish-native** commands. The caller (``cpuse.py``)
+      already formats the wire string for ``self.shell`` (bare, or wrapped
+      as ``clish -c "..."``), so this is a bare passthrough either way —
+      exactly today's confirmed-working behavior for both shells, unchanged.
+    - ``run_bash()`` is for **bash-native** commands (``df``, ``sha1sum``,
+      ``cat``, ``rm``, the CDT binary, ``mgmt_cli``, ...). A clish-default
+      account escalates via ``expert`` exactly once per session, lazily, the
+      first time one is actually needed, and stays elevated for the rest of
+      the session; an already-bash account just runs it directly, same as
+      today.
+    - ``put()`` needs a genuinely bash-shell session — Gaia's SFTP/SCP does
+      not work from a clish login. For a clish-default account this
+      temporarily flips the account's own shell to ``/bin/bash``,
+      reconnects (the change only takes effect on a fresh session),
+      transfers, then always flips it back — even on failure, since leaving
+      a production account on a standing bash shell defeats the whole point
+      of this posture.
+
+    Unvalidated against real full-Gaia hardware this session (no gear
+    available) — the shell-detection probe, ``run_expert_command``'s ``$?``
+    marker, and the transfer shell-toggle maneuver are all new, first-guess
+    assumptions. See .claude/memory/gaia-shell-posture.md for what to check
+    first if this misbehaves.
+    """
+
+    _PROBE_TOKEN = "CHKP_ORCH_SHELL_PROBE_OK"
+
+    def __init__(
+        self,
+        host: Host,
+        *,
+        username: str | None,
+        password: str | None,
+        private_key: str | None,
+        key_passphrase: str | None = None,
+        expert_password: str | None,
+        connect_timeout: float = 30.0,
+    ) -> None:
+        self.host = host
+        self._username = username
+        self._password = password
+        self._private_key = private_key
+        self._key_passphrase = key_passphrase
+        self._expert_password = expert_password
+        self._connect_timeout = connect_timeout
+        self._ssh = self._new_client()
+        self._ssh.connect()
+        self._shell: GaiaShell | None = None
+        self._interactive: InteractiveShell | None = None
+        self._expert: GaiaExpertSession | None = None
+        self._elevated = False
+
+    def _new_client(self) -> SSHClient:
+        return SSHClient(
+            self.host,
+            username=self._username,
+            password=self._password,
+            private_key=self._private_key,
+            key_passphrase=self._key_passphrase,
+            connect_timeout=self._connect_timeout,
+        )
+
+    @property
+    def shell(self) -> GaiaShell:
+        if self._shell is None:
+            probe = self._ssh.run(f"echo {self._PROBE_TOKEN}")
+            self._shell = (
+                GaiaShell.EXPERT
+                if probe.ok and self._PROBE_TOKEN in probe.stdout
+                else GaiaShell.CLISH
+            )
+        return self._shell
+
+    # -- CommandRunner / Transport --------------------------------------------
+
+    def run(self, command: str, *, timeout: float | None = None) -> CommandResult:
+        _ = self.shell  # ensure detection has happened before the caller formats anything
+        return self._ssh.run(command, timeout=timeout)
+
+    def run_bash(self, command: str, *, timeout: float | None = None) -> CommandResult:
+        if self.shell is GaiaShell.EXPERT:
+            return self._ssh.run(command, timeout=timeout)
+        self._ensure_elevated(timeout=timeout)
+        assert self._expert is not None
+        return self._expert.run_expert_command(command, timeout=timeout or 60.0)
+
+    def _ensure_elevated(self, *, timeout: float | None) -> None:
+        if self._elevated:
+            return
+        if not self._expert_password:
+            raise CredentialError(
+                f"an expert-mode password is required to patch {self.host.name!r} — the "
+                "assigned credential set has none (or none was supplied for this job)"
+            )
+        if self._interactive is None:
+            self._interactive = self._ssh.open_interactive_shell()
+            self._expert = GaiaExpertSession(self._interactive)
+        assert self._expert is not None
+        self._expert.enter_expert(self._expert_password, timeout=timeout or 20.0)
+        self._elevated = True
+
+    def put(
+        self,
+        local_path: str,
+        remote_path: str,
+        *,
+        progress: Callable[[int, int], None] | None = None,
+    ) -> int:
+        if self.shell is GaiaShell.EXPERT:
+            return self._ssh.put(local_path, remote_path, progress=progress)
+        return self._transfer_via_temporary_bash_shell(local_path, remote_path, progress)
+
+    def _transfer_via_temporary_bash_shell(
+        self,
+        local_path: str,
+        remote_path: str,
+        progress: Callable[[int, int], None] | None,
+    ) -> int:
+        if not self._username:
+            raise TransportError(
+                f"cannot transfer to {self.host.name!r}: no SSH username resolved to "
+                "toggle the account's own shell for the transfer"
+            )
+        username = self._username
+        require_ok(self.run(f"set user {shlex.quote(username)} shell /bin/bash"))
+        require_ok(self.run("save config"))
+        # A previously-elevated interactive pty lives on the transport we're
+        # about to close — drop it so a later run_bash() re-elevates fresh on
+        # the reconnected session below, instead of using a dead channel.
+        if self._interactive is not None:
+            self._interactive.close()
+            self._interactive = None
+            self._expert = None
+            self._elevated = False
+        self._ssh.close()
+
+        transfer_client = self._new_client()
+        transfer_client.connect()
+        try:
+            size = transfer_client.put(local_path, remote_path, progress=progress)
+        finally:
+            # Restore-to-clish always runs, transfer success or failure — a
+            # restore failure raises regardless (chains onto whatever
+            # exception, if any, is already propagating via __context__),
+            # since leaving the account on a standing bash shell is never
+            # acceptable to silently swallow.
+            try:
+                self._restore_clish_or_raise(transfer_client, username)
+            finally:
+                transfer_client.close()
+                # Resume the session's primary connection, back in clish —
+                # unconditionally, even if the transfer or restore above
+                # failed, so this GaiaSession stays usable for whatever the
+                # caller does next (e.g. closing it, or logging the failure)
+                # instead of being left pointing at an already-closed client.
+                self._ssh = self._new_client()
+                self._ssh.connect()
+        return size
+
+    def _restore_clish_or_raise(self, transfer_client: SSHClient, username: str) -> None:
+        try:
+            _restore_clish_shell(transfer_client, username)
+        except TransportError as exc:
+            raise GaiaShellRestoreError(
+                f"could not restore {username!r}'s login shell back to clish on "
+                f"{self.host.name!r} after a transfer — the account is left on a standing "
+                f"bash shell; fix this by hand (`set user {username} shell /etc/cli.sh`, "
+                f"`save config`): {exc}"
+            ) from exc
+
+    def close(self) -> None:
+        if self._interactive is not None:
+            self._interactive.close()
+        self._ssh.close()
+
+    # -- passthroughs for Spark's own expert-mode plumbing --------------------
+
+    def open_interactive_shell(self, *, width: int = 200, height: int = 50) -> InteractiveShell:
+        """Spark (services/spark_patching.py) drives its own bashUser/expert
+        conversation directly over an interactive shell, independent of this
+        session's own lazy elevation for ``run_bash`` — a separate channel on
+        the same underlying connection, same as any two interactive shells
+        would be. See ExpertCapableTransport in spark_patching.py."""
+        return self._ssh.open_interactive_shell(width=width, height=height)
+
+    def put_scp(
+        self,
+        local_path: str,
+        remote_path: str,
+        *,
+        progress: Callable[[int, int], None] | None = None,
+    ) -> int:
+        """Spark transfers over classic SCP, not SFTP — its own job sequence
+        (bashUser on/off) already brackets this call, so unlike ``put()``
+        above, no shell-toggle maneuver is needed or wanted here."""
+        return self._ssh.put_scp(local_path, remote_path, progress=progress)

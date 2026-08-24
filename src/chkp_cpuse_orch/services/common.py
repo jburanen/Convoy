@@ -23,7 +23,7 @@ from ..errors import CredentialError, InventoryError, JobError, TransportError
 from ..inventory import FIREWALL_ROLES, MANAGEMENT_PLANE_ROLES, Host, Inventory, Role
 from ..jobs import JobContext, JobRunner
 from ..store import JobRecord, JobStatus, Store, new_id
-from ..transport.ssh import CommandResult, SSHClient
+from ..transport.ssh import CommandResult, GaiaSession, GaiaShell
 
 _MGMT_ROLES = MANAGEMENT_PLANE_ROLES
 _FW_ROLES = FIREWALL_ROLES
@@ -39,10 +39,15 @@ _PATCHABLE_ROLES = _MGMT_ROLES + _PATCHABLE_FW_ROLES
 
 
 class Transport(Protocol):
-    """What an operation needs from a connection. ``SSHClient`` satisfies it;
-    tests substitute fakes."""
+    """What an operation needs from a connection. ``GaiaSession`` satisfies
+    it; tests substitute fakes."""
+
+    @property
+    def shell(self) -> GaiaShell: ...
 
     def run(self, command: str, *, timeout: float | None = None) -> CommandResult: ...
+
+    def run_bash(self, command: str, *, timeout: float | None = None) -> CommandResult: ...
 
     def put(
         self,
@@ -61,6 +66,7 @@ ClientFactory = Callable[[Host, dict[CredentialKind, Credential]], Transport]
 def default_client_factory(host: Host, creds: dict[CredentialKind, Credential]) -> Transport:
     key = creds.get(CredentialKind.SSH_PRIVATE_KEY)
     password = creds.get(CredentialKind.SSH_PASSWORD)
+    expert = creds.get(CredentialKind.EXPERT_PASSWORD)
     # The credential's own username — from a stored credential set's
     # ssh_username, or an inline per-job credential's username — is the
     # single source of truth for SSH login once one is assigned; host.ssh_user
@@ -69,14 +75,31 @@ def default_client_factory(host: Host, creds: dict[CredentialKind, Credential]) 
     # this used to always use host.ssh_user, which could silently diverge
     # from whichever credential set was actually assigned.
     cred = password or key
-    client = SSHClient(
+    return GaiaSession(
         host,
         username=cred.username if cred and cred.username else None,
         password=password.reveal() if password else None,
         private_key=key.reveal() if key else None,
+        expert_password=expert.reveal() if expert else None,
     )
-    client.connect()
-    return client
+
+
+def require_expert_password(bundle: CredentialBundle, host: Host) -> str:
+    """Checked before any SSH attempt that will need bash access on a Gaia
+    host (CPUSE import/install/uninstall, CDT, the primary-connect
+    bootstrap, every Spark job): a host's assigned credential set isn't
+    guaranteed to carry an expert password just because the storage-side
+    requirement exists now (older sets predate it; a set could have been
+    reassigned) — missing it is a config problem, not a connectivity one, so
+    this fails without ever opening a connection. Shared by every service
+    that escalates to expert mode."""
+    cred = bundle.get(CredentialKind.EXPERT_PASSWORD)
+    if cred is None:
+        raise CredentialError(
+            f"the credential set assigned to {host.name!r} has no expert-mode password — "
+            "edit it on the Provisioning tab"
+        )
+    return cred.reveal()
 
 
 class HostConnector:
@@ -176,16 +199,18 @@ class HostConnector:
             return None
         return self._credentials.set_name(host.credential_set_id)
 
-    def require_ssh_credential(self, host: Host) -> None:
+    def require_ssh_credential(self, host: Host, *, require_expert: bool = False) -> None:
         creds = self.host_credentials(host)  # raises if unassigned / store locked
         if CredentialKind.SSH_PASSWORD not in creds and CredentialKind.SSH_PRIVATE_KEY not in creds:
             raise CredentialError(
                 f"the credential set assigned to {host.name!r} has no SSH password or "
                 "private key — edit the set on the Provisioning tab"
             )
+        if require_expert:
+            require_expert_password(creds, host)
 
     def require_credentials(
-        self, host: Host, provided: CredentialBundle | None = None
+        self, host: Host, provided: CredentialBundle | None = None, *, require_expert: bool = False
     ) -> CredentialBundle | None:
         """Gate an SSH operation and decide the credential source.
 
@@ -193,12 +218,28 @@ class HostConnector:
           meaning ``connect`` resolves from the store.
         - storage disabled → validate the caller-``provided`` bundle and return
           it, to be passed straight to ``connect`` (never persisted).
-        """
+
+        ``require_expert`` additionally requires an expert-mode password —
+        set by callers submitting a job kind that will actually escalate to
+        expert mode (CPUSE import/install/uninstall, CDT, the primary-connect
+        bootstrap, Spark's jobs), not blanket-applied to every job (a plain
+        clish-only Refresh never needs one). Storage-enabled environments
+        already require an expert password on every credential set at save
+        time (see ``credentials.py``'s ``put_set``), but a set saved before
+        that requirement existed could still lack one — this is the
+        pre-connect check that catches it with a clear error either way,
+        rather than failing mid-job when ``GaiaSession`` actually tries to
+        elevate."""
         if self.credential_storage_enabled:
-            self.require_ssh_credential(host)
+            self.require_ssh_credential(host, require_expert=require_expert)
             return None
         bundle = provided or {}
         ensure_ssh_credential(bundle, host.name, self.environment)
+        if require_expert and CredentialKind.EXPERT_PASSWORD not in bundle:
+            raise CredentialError(
+                f"an expert-mode password is required for this operation on {host.name!r} — "
+                "this environment does not store credentials, supply one for this job"
+            )
         return bundle
 
     def host_credentials(self, host: Host) -> CredentialBundle:
@@ -236,13 +277,16 @@ def submit_host_job(
     params: dict[str, object] | None = None,
     credentials: CredentialBundle | None = None,
     triggered_by: str | None = None,
+    require_expert: bool = False,
 ) -> JobRecord:
     """Validate credentials for a host job and enqueue it. For storage-disabled
     environments the credentials are stashed in the vault under the job id
     *before* the job is submitted (so the runner can't start it first), and
     removed again if submission fails. ``triggered_by`` is the logged-in
-    username, recorded on the job for the Jobs tab's User column/filter."""
-    creds = connector.require_credentials(host, credentials)
+    username, recorded on the job for the Jobs tab's User column/filter.
+    ``require_expert`` is set by the caller for job kinds that will actually
+    escalate to expert mode — see ``HostConnector.require_credentials``."""
+    creds = connector.require_credentials(host, credentials, require_expert=require_expert)
     job_id = new_id()
     if creds is not None:
         vault.put(job_id, creds)
@@ -317,7 +361,7 @@ def remote_sha1(client: Transport, remote_path: str) -> str:
     corrupted/truncated transfer before it's acted on (the size check alone
     wouldn't notice bit-level corruption). Shared by PatchingService and
     SparkPatchingService."""
-    result = client.run(f"sha1sum {remote_path}")
+    result = client.run_bash(f"sha1sum {remote_path}")
     if not result.ok:
         detail = result.stderr.strip() or result.stdout.strip()
         raise TransportError(f"could not compute remote sha1 for {remote_path}: {detail}")

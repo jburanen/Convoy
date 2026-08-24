@@ -80,7 +80,6 @@ from ..clusterxl import ClusterMemberState
 from ..cpuse import (
     CPUSE,
     DEFAULT_STAGING_DIR,
-    GaiaShell,
     PackageScope,
     PackageState,
     summarize_jumbo,
@@ -215,7 +214,6 @@ class PatchingService:
         vault: JobCredentialVault,
         store: Store,
         staging_dir: str = DEFAULT_STAGING_DIR,
-        shell: GaiaShell = GaiaShell.EXPERT,
         import_verify_attempts: int = 30,
         import_verify_delay: float = 10.0,
         install_verify_attempts: int = 30,
@@ -228,7 +226,6 @@ class PatchingService:
         self._vault = vault
         self._store = store
         self._staging_dir = staging_dir
-        self._shell = shell
         # How long we're willing to poll `show installer packages imported`
         # for the just-uploaded package to actually show up, before giving up
         # (30 * 10s = 5 minutes) — see the module docstring for why this exists.
@@ -282,7 +279,7 @@ class PatchingService:
         creds = connector.require_credentials(host, credentials)
         client = connector.connect(host, creds)
         try:
-            cpuse = CPUSE(client, shell=self._shell)
+            cpuse = CPUSE(client, shell=client.shell)
             agent_build = cpuse.agent_build()
             packages = cpuse.list_packages(PackageScope.ALL)
             imported_packages = cpuse.list_packages(PackageScope.IMPORTED)
@@ -316,7 +313,8 @@ class PatchingService:
         Blocking (SSH) — call via ``asyncio.to_thread`` from async contexts."""
         connector = self.registry.get(environment)
         host = connector.patchable_host(host_name)
-        creds = connector.require_credentials(host, credentials)
+        # Disk space is read via `df`, a bash-native command — see _free_bytes.
+        creds = connector.require_credentials(host, credentials, require_expert=True)
         local_path = self._packages.path_for(package_filename)
         local_size = local_path.stat().st_size
         client = connector.connect(host, creds)
@@ -410,6 +408,8 @@ class PatchingService:
             params={"package": package_filename, "force_low_space": force_low_space},
             credentials=credentials,
             triggered_by=triggered_by,
+            # disk check (df) + sha1 verify + temp-file cleanup are bash-native
+            require_expert=True,
         )
 
     def submit_import_cloud(
@@ -468,6 +468,7 @@ class PatchingService:
             params={"package_id": package_id, "verify_first": verify_first},
             credentials=credentials,
             triggered_by=triggered_by,
+            require_expert=True,  # install-log capture (cat) is bash-native
         )
 
     def submit_uninstall(
@@ -548,7 +549,7 @@ class PatchingService:
 
             ctx.raise_if_cancelled()  # last safe stop before mutating CPUSE state
             ctx.log("importing into CPUSE repository (installer import local)")
-            cpuse = CPUSE(client, shell=self._shell)
+            cpuse = CPUSE(client, shell=client.shell)
             output = cpuse.import_local(remote_path)
             if output:
                 ctx.log(f"installer import output:\n{output}")
@@ -569,7 +570,7 @@ class PatchingService:
 
             # Best-effort: the import is confirmed, so a cleanup failure here
             # is a warning, not a job failure.
-            cleanup = client.run(f"rm -f {remote_path}")
+            cleanup = client.run_bash(f"rm -f {remote_path}")
             if cleanup.ok:
                 ctx.log(f"removed temp copy {remote_path}")
             else:
@@ -666,7 +667,7 @@ class PatchingService:
         """Available space on ``path``, via `df -Pk` (POSIX output format —
         one line per filesystem, immune to the line-wrapping long device
         names can cause in `df`'s default format)."""
-        result = client.run(f"df -Pk {shlex.quote(path)}")
+        result = client.run_bash(f"df -Pk {shlex.quote(path)}")
         if not result.ok:
             detail = result.stderr.strip() or result.stdout.strip()
             raise TransportError(f"could not check disk space on {path}: {detail}")
@@ -726,7 +727,8 @@ class PatchingService:
 
         connector = self.registry.get(job.environment)
         host = connector.patchable_host(job.target or "")
-        creds = connector.require_credentials(host, credentials)
+        # A confirmed import removes the staged temp copy via `rm -f` — bash-native.
+        creds = connector.require_credentials(host, credentials, require_expert=True)
         package = str(job.params["package"])
         local_path = self._packages.path_for(package)
         hf_config = extract_hf_config(local_path)
@@ -734,7 +736,7 @@ class PatchingService:
 
         client = connector.connect(host, creds)
         try:
-            cpuse = CPUSE(client, shell=self._shell)
+            cpuse = CPUSE(client, shell=client.shell)
             if not _is_imported_now(cpuse, package, hf_config):
                 self._store.append_event(job_id, "manual check: still not listed as imported")
                 return self._store.get_job(job_id)
@@ -742,7 +744,7 @@ class PatchingService:
             self._store.append_event(
                 job_id, "manual check: confirmed package is listed as imported"
             )
-            cleanup = client.run(f"rm -f {remote_path}")
+            cleanup = client.run_bash(f"rm -f {remote_path}")
             if cleanup.ok:
                 self._store.append_event(job_id, f"removed temp copy {remote_path}")
             else:
@@ -774,7 +776,7 @@ class PatchingService:
         client = connector.connect(host, creds)
         try:
             ctx.log(f"importing {package_id} from Check Point's cloud (installer import)")
-            cpuse = CPUSE(client, shell=self._shell)
+            cpuse = CPUSE(client, shell=client.shell)
             cpuse.import_cloud(package_id)
             ctx.log("import finished")
             self._refresh_state(cpuse, ctx, host.name)
@@ -790,7 +792,7 @@ class PatchingService:
         creds = job_run_credentials(connector, self._vault, ctx.job)
         client = connector.connect(host, creds)
         try:
-            cpuse = CPUSE(client, shell=self._shell)
+            cpuse = CPUSE(client, shell=client.shell)
             if verify_first:
                 ctx.log(f"verifying {package_id} (installer verify)")
                 output = cpuse.verify(package_id)
@@ -836,7 +838,7 @@ class PatchingService:
         creds = job_run_credentials(connector, self._vault, ctx.job)
         client = connector.connect(host, creds)
         try:
-            cpuse = CPUSE(client, shell=self._shell)
+            cpuse = CPUSE(client, shell=client.shell)
             ctx.raise_if_cancelled()  # last safe stop; uninstall may reboot the host
             ctx.log(f"uninstalling {package_id} — host may reboot when this completes")
             output = cpuse.uninstall(package_id)
@@ -897,7 +899,7 @@ class PatchingService:
                 try:
                     if client is None:
                         client = connector.connect(host, creds)
-                    packages = CPUSE(client, shell=self._shell).list_packages(PackageScope.ALL)
+                    packages = CPUSE(client, shell=client.shell).list_packages(PackageScope.ALL)
                 except TransportError as exc:
                     ctx.log(
                         f"lost contact checking uninstall status (expected mid-reboot): {exc}",
@@ -981,7 +983,7 @@ class PatchingService:
                 try:
                     if client is None:
                         client = connector.connect(host, creds)
-                    detail = CPUSE(client, shell=self._shell).package_detail(package_id)
+                    detail = CPUSE(client, shell=client.shell).package_detail(package_id)
                 except TransportError as exc:
                     ctx.log(
                         f"lost contact checking install status (expected mid-reboot): {exc}",
@@ -1050,7 +1052,7 @@ class PatchingService:
             ctx.log(f"could not connect to capture installation log: {exc}", level="warning")
             return
         try:
-            result = client.run(f"cat {shlex.quote(path)}")
+            result = client.run_bash(f"cat {shlex.quote(path)}")
         finally:
             client.close()
         if not result.ok:
