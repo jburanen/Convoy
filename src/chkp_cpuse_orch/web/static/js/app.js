@@ -180,6 +180,17 @@ let envStorage = {}; // name -> boolean
 // show/hide the Domain picker in the discover-firewalls modal.
 let envIsMds = {}; // name -> boolean
 
+// Per-environment access mode, refreshed by loadEnvironments — true means the
+// management server(s) are reachable ONLY via the Management API, no SSH at
+// all. Gates every SSH/SCP-to-management UI surface (Bootstrap, Connect to
+// Primary, the CPUSE tab's Management Servers panel, Upload to Mgmt); never
+// affects firewalls, which are patched independently of mgmt reachability.
+let envApiOnly = {}; // name -> boolean
+
+function apiOnly(name = currentEnv) {
+  return !!envApiOnly[name];
+}
+
 function storageEnabled(name = currentEnv) {
   return envStorage[name] !== false; // unknown → assume enabled (safe default)
 }
@@ -326,6 +337,7 @@ async function loadEnvironments() {
   envStorage = Object.fromEntries(envs.map((e) => [e.name, e.credential_storage_enabled]));
   envSkipVerifyDefault = Object.fromEntries(envs.map((e) => [e.name, e.skip_verify_by_default]));
   envIsMds = Object.fromEntries(envs.map((e) => [e.name, e.is_mds]));
+  envApiOnly = Object.fromEntries(envs.map((e) => [e.name, e.api_only]));
   picker.replaceChildren();
   if (!envs.length) {
     // Placeholder so the manage entry is never the pre-selected option — a
@@ -516,6 +528,32 @@ async function renderEnvManageList() {
       }
     });
 
+    // API-only toggle. When set, this environment's management server(s)
+    // have no SSH service account at all — only reachable via the
+    // Management API with an operator-supplied key. Orthogonal to the MDS
+    // toggle above.
+    const apiOnlyToggle = row.querySelector(".env-api-only-input");
+    apiOnlyToggle.checked = env.api_only;
+    apiOnlyToggle.addEventListener("change", async () => {
+      const isApiOnly = apiOnlyToggle.checked;
+      try {
+        await api(`/api/environments/${encodeURIComponent(env.name)}/access`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ api_only: isApiOnly }),
+        });
+        await loadEnvironments();
+        if (env.name === currentEnv) {
+          updateProvisionCollapse();
+          await loadServers();
+        }
+        await renderEnvManageList();
+      } catch (e) {
+        apiOnlyToggle.checked = !isApiOnly; // revert on failure
+        toast("Could not change environment access mode: " + e.message);
+      }
+    });
+
     // Credential-storage toggle. Disabling purges any stored credentials, so we
     // confirm first; the note reminds the operator what each mode means.
     const toggle = row.querySelector(".env-storage-input");
@@ -647,7 +685,11 @@ async function addServer({ name, address, role, ssh_user, ssh_port, credential_s
 // disabled environments have no sets to pick from, so they type a username.
 async function populateServerCredSelect(assignedSetName) {
   const enabled = storageEnabled();
-  document.getElementById("sm-user-label").classList.toggle("hidden", enabled);
+  // API-only: there's no SSH service account on this server at all, so
+  // neither a typed username nor a port means anything — only the
+  // credential-set picker (for the API-key set) is relevant.
+  document.getElementById("sm-user-label").classList.toggle("hidden", enabled || apiOnly());
+  document.getElementById("sm-port-label").classList.toggle("hidden", apiOnly());
   document.getElementById("sm-cred-label").classList.toggle("hidden", !enabled);
   if (!enabled) return;
   const select = document.getElementById("sm-cred-select");
@@ -1611,7 +1653,10 @@ let hasProvisionedPrimary = false;
 function updateServersInfoControls(provisioned) {
   hasProvisionedPrimary = provisioned;
   document.getElementById("discover-btn").classList.toggle("hidden", !provisioned);
-  document.getElementById("add-server-btn").classList.toggle("hidden", !provisioned);
+  // API-only environments have no Connect to Primary step to seed the first
+  // (primary) server — "Manually add a server" is the only way to create
+  // one, so it can't wait on a primary that will never otherwise appear.
+  document.getElementById("add-server-btn").classList.toggle("hidden", !provisioned && !apiOnly());
 }
 
 // host name -> "pending" | "running", for hosts (management servers and
@@ -1895,7 +1940,12 @@ function buildFirewallTagsLine(tags) {
 // Tags (firewalls only) render regardless of whether the host has ever been
 // refreshed — unlike everything else here, they're plain operator metadata
 // with no CPUSE/SSH dependency, so there's no reason to hide them behind a
-// "Refresh" click the way cluster membership genuinely has to be.
+// "Refresh" click the way cluster membership genuinely has to be. When a
+// cluster-membership line is also showing, tags share that same line
+// (appended after it) rather than getting a line of their own — that's the
+// one case there's another line worth sharing with; every other case (not
+// yet checked, Spark, not a cluster member) puts tags on their own first
+// line since there's nothing else to attach them to.
 function renderStateRow(stateRow, data, isSpark) {
   const summary = stateRow.querySelector(".srv-summary");
   const checked = stateRow.querySelector(".srv-checked");
@@ -1906,16 +1956,20 @@ function renderStateRow(stateRow, data, isSpark) {
     return false;
   }
   const tagsLine = buildFirewallTagsLine(data.tags);
-  if (tagsLine) {
-    summary.appendChild(tagsLine);
-    summary.appendChild(document.createElement("br"));
-  }
   if (!data.checked_at) {
+    if (tagsLine) {
+      summary.appendChild(tagsLine);
+      summary.appendChild(document.createElement("br"));
+    }
     summary.appendChild(document.createTextNode("Not yet checked."));
     checked.textContent = "";
     return false;
   }
   if (isSpark) {
+    if (tagsLine) {
+      summary.appendChild(tagsLine);
+      summary.appendChild(document.createElement("br"));
+    }
     summary.appendChild(document.createTextNode(data.version || "—"));
     checked.textContent = ` | Refreshed ${fmtTime(data.checked_at)}`;
     return false;
@@ -1942,6 +1996,13 @@ function renderStateRow(stateRow, data, isSpark) {
       : "cluster-other";
     cluster.textContent = `${label} cluster member in ${data.cluster_name}`;
     summary.appendChild(cluster);
+    if (tagsLine) {
+      summary.appendChild(document.createTextNode(" "));
+      summary.appendChild(tagsLine);
+    }
+    summary.appendChild(document.createElement("br"));
+  } else if (tagsLine) {
+    summary.appendChild(tagsLine);
     summary.appendChild(document.createElement("br"));
   }
   // The DA build normally reports "Build NNNN (Agent build is up to date)" —
@@ -3842,6 +3903,10 @@ async function loadPackages() {
     // rather than waiting here. Uses the environment name (not a host name —
     // the primary is resolved server-side, and the Packages tab has no
     // per-row host to key on) as the credential-prompt/cache key.
+    // SCPs the file to the mgmt server before registering it via the
+    // Management API (see services/pkg_repo_ops.py) — unavailable when the
+    // current environment has no SSH access to its management server(s).
+    row.querySelector(".btn-push-repo").classList.toggle("hidden", apiOnly());
     row.querySelector(".btn-push-repo").addEventListener("click", async () => {
       if (!currentEnv) { toast("Pick an environment first."); return; }
       const btn = row.querySelector(".btn-push-repo");
@@ -4042,6 +4107,23 @@ async function loadCredentialSets() {
 function updateProvisionCollapse() {
   document.getElementById("provision-details").open = !hasProvisionedPrimary;
   document.getElementById("connect-primary-details").open = !hasProvisionedPrimary;
+  updateApiOnlyVisibility();
+}
+
+// Hides the UI surfaces that assume SSH/SCP reachability to the management
+// server(s) when the current environment is API-only (see envApiOnly) —
+// Bootstrap and Connect to Primary (Provisioning tab) and the CPUSE tab's
+// whole Management Servers panel. (Packages' per-row "Upload to Mgmt"
+// button is handled separately at build time in loadPackages(), since it's
+// rebuilt on its own schedule.) Firewalls are unaffected everywhere —
+// patching them is independent of how the environment's management server
+// is reached. Called on every environment load/switch and whenever the
+// access-mode toggle changes.
+function updateApiOnlyVisibility() {
+  const hide = apiOnly();
+  document.getElementById("provision").classList.toggle("hidden", hide);
+  document.getElementById("connect-primary").classList.toggle("hidden", hide);
+  document.getElementById("servers").classList.toggle("hidden", hide);
 }
 
 // Whether the credential modal is editing an existing set (vs. adding a new one).
@@ -4054,17 +4136,23 @@ document.getElementById("credential-form").addEventListener("submit", async (ev)
   const keyInput = document.getElementById("cs-ssh-key");
   const password = pwInput.value;
   const key = keyInput.value.trim();
-  // Adding a new set needs an SSH secret; editing may leave them blank to keep
-  // the existing ones (e.g. adding only the API key to a bootstrap entry).
-  if (!password && !key && !credEditMode) { toast("Enter an SSH password or a private key."); return; }
-  if (password && key) { toast("Enter an SSH password OR a private key, not both."); return; }
   const expertInput = document.getElementById("cs-expert");
-  // Same relaxed-on-edit rule as the SSH secret above: a new set needs an
-  // expert password up front (every host may need to escalate to expert
-  // mode — see .claude/memory/gaia-shell-posture.md); editing may leave it
-  // blank to keep the set's current value.
-  if (!expertInput.value && !credEditMode) { toast("Enter an expert-mode password."); return; }
   const apiInput = document.getElementById("cs-api");
+  // API-only: no SSH service account exists at all — the only thing this set
+  // needs is an API key (see credentials.py's put_set(api_only=...)).
+  if (apiOnly()) {
+    if (!apiInput.value && !credEditMode) { toast("Enter an API key."); return; }
+  } else {
+    // Adding a new set needs an SSH secret; editing may leave them blank to keep
+    // the existing ones (e.g. adding only the API key to a bootstrap entry).
+    if (!password && !key && !credEditMode) { toast("Enter an SSH password or a private key."); return; }
+    if (password && key) { toast("Enter an SSH password OR a private key, not both."); return; }
+    // Same relaxed-on-edit rule as the SSH secret above: a new set needs an
+    // expert password up front (every host may need to escalate to expert
+    // mode — see .claude/memory/gaia-shell-posture.md); editing may leave it
+    // blank to keep the set's current value.
+    if (!expertInput.value && !credEditMode) { toast("Enter an expert-mode password."); return; }
+  }
   try {
     // Executes immediately (services/cred_ops.py) — the response is already
     // the finished cred.add/cred.edit job, tracked on the Jobs tab for audit
@@ -4089,6 +4177,27 @@ document.getElementById("credential-form").addEventListener("submit", async (ev)
   }
 });
 
+// API-only environments have no SSH service account at all — hide the SSH/
+// expert fields and relabel the username field, since the only thing such a
+// set needs is an API key (see credentials.py's put_set(api_only=...)).
+function updateCredFormApiOnlyVisibility() {
+  const hide = apiOnly();
+  for (const field of document.querySelectorAll(".cs-ssh-field")) field.classList.toggle("hidden", hide);
+  document.getElementById("cred-add-hint").textContent = hide
+    ? "A named login set, stored encrypted at rest; secrets are never displayed again " +
+      "after saving. This environment is API-only — give it the Management API key " +
+      "(and, optionally, the username it belongs to)."
+    : "A named login set, stored encrypted at rest; secrets are never displayed again " +
+      "after saving. Give it an SSH password or a private key, plus an expert-mode " +
+      "password — SSH logs in as a plain clish user and elevates to expert only when " +
+      "a job needs it.";
+  document.querySelector("#cs-ssh-user-label .cs-label-text").textContent =
+    hide ? "API username (optional)" : "SSH username";
+  document.getElementById("cs-ssh-user").placeholder = hide ? "" : "admin";
+  document.querySelector("#cs-api-label .cs-label-text").textContent =
+    hide ? "API key" : "API key (optional)";
+}
+
 // The credential-set editor lives in a modal opened from the panel's header.
 function openCredAddModal() {
   const form = document.getElementById("credential-form");
@@ -4098,6 +4207,7 @@ function openCredAddModal() {
   document.getElementById("cred-add-hint").classList.remove("hidden");
   document.getElementById("cred-edit-hint").classList.add("hidden");
   document.getElementById("cs-name").readOnly = false;
+  updateCredFormApiOnlyVisibility();
   document.getElementById("cred-add-modal").classList.remove("hidden");
   document.getElementById("cs-name").focus();
 }
@@ -4117,6 +4227,7 @@ function openCredEditModal(set) {
   nameInput.value = set.name;
   nameInput.readOnly = true; // name identifies the set being updated
   document.getElementById("cs-ssh-user").value = set.ssh_username ?? "";
+  updateCredFormApiOnlyVisibility();
   document.getElementById("cred-add-modal").classList.remove("hidden");
   document.getElementById("cs-api").focus(); // the common edit is pasting the API key
 }

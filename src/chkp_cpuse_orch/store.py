@@ -143,6 +143,12 @@ class EnvironmentRow(BaseModel):
     # which command variants (discovery, and future MDS-vs-SMS-specific tasks)
     # apply across every server in it.
     is_mds: bool = False
+    # Whether this environment is reachable ONLY via the Check Point
+    # Management API — no SSH/SCP to the management server at all (e.g. a
+    # cloud-hosted or third-party-managed SMS/MDS the operator only has an
+    # API key for). Orthogonal to is_mds: an API-only estate can still be
+    # Multi-Domain. See services/common.py's HostConnector.api_only.
+    api_only: bool = False
     # UI default for the Management tab's per-install "skip verify" checkbox.
     # Some environments chronically fail `installer verify` for reasons
     # unrelated to whether the install itself would succeed (operator-
@@ -569,6 +575,13 @@ _MIGRATIONS: tuple[str, ...] = (
     """
     ALTER TABLE firewalls ADD COLUMN tags TEXT NOT NULL DEFAULT '[]';
     """,
+    # v27: a third environment kind, orthogonal to is_mds — a management
+    # server (or Multi-Domain deployment) reachable only via the Management
+    # API, never SSH. See services/common.py's HostConnector.api_only for
+    # the enforcement and .claude/memory for the design writeup.
+    """
+    ALTER TABLE environments ADD COLUMN api_only INTEGER NOT NULL DEFAULT 0;
+    """,
 )
 
 
@@ -758,15 +771,28 @@ class Store:
         return row is not None
 
     def insert_environment(
-        self, name: str, *, credential_storage_enabled: bool = False, is_mds: bool = False
+        self,
+        name: str,
+        *,
+        credential_storage_enabled: bool = False,
+        is_mds: bool = False,
+        api_only: bool = False,
     ) -> None:
         """Raises sqlite3.IntegrityError if the name already exists. New
-        environments default to credential storage *disabled* and SMS (not MDS)."""
+        environments default to credential storage *disabled*, SMS (not MDS),
+        and SSH-reachable (not API-only)."""
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO environments (name, created_at, credential_storage_enabled, is_mds)"
-                " VALUES (?, ?, ?, ?)",
-                (name, utcnow().isoformat(), int(credential_storage_enabled), int(is_mds)),
+                "INSERT INTO environments"
+                " (name, created_at, credential_storage_enabled, is_mds, api_only)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (
+                    name,
+                    utcnow().isoformat(),
+                    int(credential_storage_enabled),
+                    int(is_mds),
+                    int(api_only),
+                ),
             )
 
     def set_environment_credential_storage(self, name: str, enabled: bool) -> bool:
@@ -784,6 +810,15 @@ class Store:
         with self._connect() as conn:
             cur = conn.execute(
                 "UPDATE environments SET is_mds = ? WHERE name = ?", (int(is_mds), name)
+            )
+        return cur.rowcount > 0
+
+    def set_environment_access(self, name: str, api_only: bool) -> bool:
+        """Declare an environment SSH-reachable (False) or API-only (True).
+        Returns False if unknown."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE environments SET api_only = ? WHERE name = ?", (int(api_only), name)
             )
         return cur.rowcount > 0
 
@@ -812,7 +847,8 @@ class Store:
         ``new`` is already taken."""
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT created_at, credential_storage_enabled, is_mds, skip_verify_by_default"
+                "SELECT created_at, credential_storage_enabled, is_mds, api_only,"
+                " skip_verify_by_default"
                 " FROM environments WHERE name = ?",
                 (old,),
             ).fetchone()
@@ -820,13 +856,15 @@ class Store:
                 return False
             conn.execute(
                 "INSERT INTO environments"
-                " (name, created_at, credential_storage_enabled, is_mds, skip_verify_by_default)"
-                " VALUES (?, ?, ?, ?, ?)",
+                " (name, created_at, credential_storage_enabled, is_mds, api_only,"
+                " skip_verify_by_default)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
                 (
                     new,
                     row["created_at"],
                     row["credential_storage_enabled"],
                     row["is_mds"],
+                    row["api_only"],
                     row["skip_verify_by_default"],
                 ),
             )
@@ -1408,6 +1446,7 @@ def _environment_from_row(row: sqlite3.Row) -> EnvironmentRow:
         created_at=datetime.fromisoformat(row["created_at"]),
         credential_storage_enabled=bool(row["credential_storage_enabled"]),
         is_mds=bool(row["is_mds"]),
+        api_only=bool(row["api_only"]),
         skip_verify_by_default=bool(row["skip_verify_by_default"]),
     )
 

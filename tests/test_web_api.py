@@ -251,6 +251,7 @@ def test_environments_endpoint(client: TestClient) -> None:
             "management_servers": 1,
             "credential_storage_enabled": True,
             "is_mds": False,
+            "api_only": False,
             "skip_verify_by_default": False,
         }
     ]
@@ -283,6 +284,21 @@ def test_set_environment_kind_toggles_is_mds(client: TestClient) -> None:
 
 def test_set_environment_kind_unknown_environment_404s(client: TestClient) -> None:
     resp = client.post("/api/environments/nope/kind", json={"is_mds": True})
+    assert resp.status_code == 404
+
+
+def test_set_environment_access_toggles_api_only(client: TestClient) -> None:
+    client.post("/api/environments", json={"name": "cloud-mgmt"})
+    resp = client.post("/api/environments/cloud-mgmt/access", json={"api_only": True})
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"api_only": True}
+    envs = {e["name"]: e["api_only"] for e in client.get("/api/environments").json()}
+    assert envs["cloud-mgmt"] is True
+    assert envs["default"] is False
+
+
+def test_set_environment_access_unknown_environment_404s(client: TestClient) -> None:
+    resp = client.post("/api/environments/nope/access", json={"api_only": True})
     assert resp.status_code == 404
 
 

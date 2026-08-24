@@ -74,6 +74,7 @@ from ..credentials import CredentialBundle, JobCredentialVault
 from ..errors import (
     ExpertModeError,
     JobError,
+    PreCheckError,
     TransportError,
     TransportTimeoutError,
 )
@@ -88,7 +89,9 @@ from .common import (
     ProgressReporter,
     Transport,
     ensure_host_free,
+    format_bytes,
     job_run_credentials,
+    remote_free_bytes,
     require_expert_password,
     submit_host_job,
     verify_uploaded_file,
@@ -109,6 +112,14 @@ JOB_INSTALL = "spark.install"
 
 # Gaia Embedded's fixed staging location for upgrade_revert_image.sh.
 _STORAGE_DIR = "/storage"
+
+# Operator-specified 2026-08-24: /storage just needs enough room for the
+# image itself plus 10% headroom — unlike the CPUSE-local import path
+# (services/patching.py's _DISK_CHECK_PATHS), there's no separate
+# extraction/bookkeeping filesystem to size for here, since the transfer is
+# a plain file copy and the actual upgrade extraction is
+# upgrade_revert_image.sh's own problem on the device, not this tool's.
+_STORAGE_SPACE_MULTIPLIER = 1.1
 
 # Generous — the script validates the image and copies/extracts a large
 # rootfs (the .tgz alone is ~200MB on the image real-hardware testing has
@@ -505,6 +516,7 @@ class SparkPatchingService:
         bundle = self._resolve_bundle(connector, host, ctx)
         expert_password = require_expert_password(bundle, host)  # no SSH before this
 
+        self._check_storage_space(connector, host, bundle, local_size, ctx)
         self._enable_bash_user(connector, host, bundle, expert_password, ctx)
         self._transfer_image(
             connector, host, bundle, local_path, local_size, expected_sha1, remote_path, ctx
@@ -566,6 +578,40 @@ class SparkPatchingService:
                 installed=existing.installed,
                 cluster_role=existing.cluster_role,
             )
+        )
+
+    def _check_storage_space(
+        self,
+        connector: HostConnector,
+        host: Host,
+        bundle: CredentialBundle,
+        local_size: int,
+        ctx: JobContext,
+    ) -> None:
+        """Fail fast — before ever enabling bashUser or touching the device
+        otherwise — if /storage doesn't have enough free space to hold the
+        image (operator-specified 2026-08-24: just the image size + 10%
+        headroom, no separate multiplier per path the way CPUSE's import
+        needs — see _STORAGE_SPACE_MULTIPLIER). Raises PreCheckError; never
+        mutates device state. A plain `df`, so this only ever needs expert
+        mode (via GaiaSession.run_bash, same as every other bash-native
+        command in this tool) — no bashUser required."""
+        client = self._connect(connector, host, bundle)
+        try:
+            available = remote_free_bytes(client, _STORAGE_DIR)
+        finally:
+            _safe_close(client)
+        required = int(local_size * _STORAGE_SPACE_MULTIPLIER)
+        if available < required:
+            raise PreCheckError(
+                f"not enough free space on {_STORAGE_DIR} to transfer this image: "
+                f"{format_bytes(available)} available, {format_bytes(required)} required "
+                f"({_STORAGE_SPACE_MULTIPLIER}x the {format_bytes(local_size)} image size) — "
+                "free up space and try again"
+            )
+        ctx.log(
+            f"disk space OK on {_STORAGE_DIR}: {format_bytes(available)} available "
+            f"(need {format_bytes(required)}, {_STORAGE_SPACE_MULTIPLIER}x the image size)"
         )
 
     def _enable_bash_user(

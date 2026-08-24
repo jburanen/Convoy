@@ -100,7 +100,9 @@ from .common import (
     ProgressReporter,
     Transport,
     ensure_host_free,
+    format_bytes,
     job_run_credentials,
+    remote_free_bytes,
     submit_host_job,
     verify_uploaded_file,
 )
@@ -139,16 +141,6 @@ _DISK_CHECK_PATHS = (("/var/log", 3), ("/", 2))
 # (operator-specified, 2026-07-24). Above it but still short of the full
 # requirement, the UI may offer the operator a way to proceed anyway.
 _MIN_OVERRIDE_MULTIPLIER = 1.5
-
-
-def _fmt_bytes(n: int) -> str:
-    """Human-readable byte count for pre-check error/log messages."""
-    size = float(n)
-    for unit in ("B", "KB", "MB", "GB"):
-        if size < 1024:
-            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
-        size /= 1024
-    return f"{size:.1f} TB"
 
 
 def _is_imported_now(cpuse: CPUSE, package_filename: str, hf_config: HfConfig | None) -> bool:
@@ -313,7 +305,7 @@ class PatchingService:
         Blocking (SSH) — call via ``asyncio.to_thread`` from async contexts."""
         connector = self.registry.get(environment)
         host = connector.patchable_host(host_name)
-        # Disk space is read via `df`, a bash-native command — see _free_bytes.
+        # Disk space is read via `df`, a bash-native command — see remote_free_bytes.
         creds = connector.require_credentials(host, credentials, require_expert=True)
         local_path = self._packages.path_for(package_filename)
         local_size = local_path.stat().st_size
@@ -614,7 +606,7 @@ class PatchingService:
         hard_floor = int(local_size * _MIN_OVERRIDE_MULTIPLIER)
         report = []
         for path, multiplier in _DISK_CHECK_PATHS:
-            available = self._free_bytes(client, path)
+            available = remote_free_bytes(client, path)
             required = local_size * multiplier
             ok = available >= required
             report.append(
@@ -642,14 +634,14 @@ class PatchingService:
         for check in self._disk_space_report(client, local_size):
             if check.ok:
                 ctx.log(
-                    f"disk space OK on {check.path}: {_fmt_bytes(check.available)} available "
-                    f"(need {_fmt_bytes(check.required)}, {check.multiplier}x the package size)"
+                    f"disk space OK on {check.path}: {format_bytes(check.available)} available "
+                    f"(need {format_bytes(check.required)}, {check.multiplier}x the package size)"
                 )
                 continue
             base = (
                 f"not enough free space on {check.path} to import this package: "
-                f"{_fmt_bytes(check.available)} available, {_fmt_bytes(check.required)} "
-                f"required ({check.multiplier}x the {_fmt_bytes(local_size)} package size)"
+                f"{format_bytes(check.available)} available, {format_bytes(check.required)} "
+                f"required ({check.multiplier}x the {format_bytes(local_size)} package size)"
             )
             if not check.override_eligible:
                 raise PreCheckError(
@@ -662,24 +654,6 @@ class PatchingService:
                     "so this can be overridden if you choose to proceed anyway"
                 )
             ctx.log(f"{base} — proceeding anyway (operator override confirmed)", level="warning")
-
-    def _free_bytes(self, client: Transport, path: str) -> int:
-        """Available space on ``path``, via `df -Pk` (POSIX output format —
-        one line per filesystem, immune to the line-wrapping long device
-        names can cause in `df`'s default format)."""
-        result = client.run_bash(f"df -Pk {shlex.quote(path)}")
-        if not result.ok:
-            detail = result.stderr.strip() or result.stdout.strip()
-            raise TransportError(f"could not check disk space on {path}: {detail}")
-        lines = [line for line in result.stdout.splitlines() if line.strip()]
-        fields = lines[-1].split() if lines else []
-        if len(fields) < 4:
-            raise TransportError(f"unexpected `df` output for {path}: {result.stdout!r}")
-        try:
-            available_kb = int(fields[3])
-        except ValueError as exc:
-            raise TransportError(f"unexpected `df` output for {path}: {result.stdout!r}") from exc
-        return available_kb * 1024
 
     def _wait_until_imported(
         self, cpuse: CPUSE, package_filename: str, hf_config: HfConfig | None, ctx: JobContext

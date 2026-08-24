@@ -110,6 +110,24 @@ def test_set_environment_kind_unknown_environment_raises(store: Store) -> None:
         mgr.set_environment_kind("nope", True)
 
 
+def test_set_environment_access_updates_registry(store: Store) -> None:
+    registry = EnvironmentRegistry()
+    mgr = _manager(store, registry)
+    mgr.create_environment("corp")
+    assert registry.get("corp").api_only is False
+
+    mgr.set_environment_access("corp", True)
+    assert registry.get("corp").api_only is True
+    # Orthogonal to is_mds — unaffected by the access-mode change.
+    assert registry.get("corp").is_mds is False
+
+
+def test_set_environment_access_unknown_environment_raises(store: Store) -> None:
+    mgr = _manager(store, EnvironmentRegistry())
+    with pytest.raises(InventoryError, match="unknown environment"):
+        mgr.set_environment_access("nope", True)
+
+
 def test_seed_infers_mds_kind_from_inventory(tmp_path: Path, store: Store) -> None:
     mds_yaml = """\
 sites:

@@ -108,6 +108,19 @@ def test_expert_password_required(creds: CredentialStore) -> None:
         creds.put_set("default", "noexpert", ssh_password="pw")
 
 
+def test_api_only_set_needs_only_an_api_key(creds: CredentialStore, store: Store) -> None:
+    creds.put_set("default", "api-set", api_key="abc123", api_only=True)
+    bundle = creds.get_set_bundle(_set_id(store, "api-set"), "mgmt-01")
+    assert bundle[CredentialKind.API_KEY].reveal() == "abc123"
+    assert CredentialKind.SSH_PASSWORD not in bundle
+    assert CredentialKind.EXPERT_PASSWORD not in bundle
+
+
+def test_api_only_set_rejects_missing_api_key(creds: CredentialStore) -> None:
+    with pytest.raises(CredentialError, match="API-only environment"):
+        creds.put_set("default", "no-key", ssh_password="pw", api_only=True)
+
+
 def test_expert_password_kept_across_an_edit_that_omits_it(
     creds: CredentialStore, store: Store
 ) -> None:

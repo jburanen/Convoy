@@ -49,6 +49,7 @@ class CredentialJobService:
         expert_password: str | None,
         api_key: str | None,
         default_if_none: bool,
+        api_only: bool = False,
         triggered_by: str | None = None,
     ) -> JobRecord:
         """Whether this is an add or an edit is decided here (a secret-free
@@ -71,6 +72,7 @@ class CredentialJobService:
                 ssh_private_key=ssh_private_key,
                 expert_password=expert_password,
                 api_key=api_key,
+                api_only=api_only,
             )
             no_default_yet = self._credentials.default_set_name(environment) is None
             if default_if_none and no_default_yet:
