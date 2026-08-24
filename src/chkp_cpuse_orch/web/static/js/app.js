@@ -626,6 +626,7 @@ document.getElementById("env-modal").addEventListener("click", (ev) => {
 document.addEventListener("keydown", (ev) => {
   if (ev.key !== "Escape") return;
   closeCredModal(null); // cancels a pending credential prompt (no-op otherwise)
+  closeHelpModal();
   closeEnvModal();
   closeCredAddModal();
   closeDiscoverModal();
@@ -1275,45 +1276,8 @@ function selectTab(name) {
   for (const panel of document.querySelectorAll(".tab-panel")) {
     panel.classList.toggle("active", panel.id === "tab-" + name);
   }
-  // Un-dim the guide blurb for the active tab (normal muted text).
-  for (const item of document.querySelectorAll("#tab-guide .tab-guide-item")) {
-    item.classList.toggle("active", item.dataset.tab === name);
-  }
-  positionTabGuide();
   tabChosen = true;
 }
-
-// Slide the tab-guide row so the active tab's block centers under its tab title.
-// The provisioning tab (left-most) is the exception: it keeps the bar at its
-// natural left-edge-aligned position (translateX 0). Every other tab slides left
-// by exactly the distance that brings its block's center under its tab's center.
-let guideTranslate = 0;
-function positionTabGuide() {
-  const guide = document.getElementById("tab-guide");
-  const viewport = document.getElementById("tab-guide-viewport");
-  const activeItem = guide.querySelector(".tab-guide-item.active");
-  const activeBtn = document.querySelector("#tabs .tab-btn.active");
-  const firstItem = guide.querySelector(".tab-guide-item");
-  if (!activeItem || !activeBtn || !firstItem) return;
-  if (!guide.offsetParent) return; // hidden (narrow screens) — nothing to place
-
-  // getBoundingClientRect() includes the current transform, so subtract it to
-  // recover each block's natural (untranslated) center. Tab buttons never move.
-  const centerOf = (el) => { const r = el.getBoundingClientRect(); return r.left + r.width / 2; };
-  const naturalCenter = (el) => centerOf(el) - guideTranslate;
-
-  // Provisioning stays left-aligned; others center under their tab (never sliding
-  // right past the natural layout).
-  const translate = activeItem === firstItem
-    ? 0
-    : Math.min(0, centerOf(activeBtn) - naturalCenter(activeItem));
-  guideTranslate = translate;
-  guide.style.transform = `translateX(${translate}px)`;
-  viewport.classList.toggle("slid", translate < -1);
-}
-
-window.addEventListener("resize", positionTabGuide);
-window.addEventListener("load", positionTabGuide); // reflow after fonts settle
 
 function chooseDefaultTab(serverCount) {
   if (tabChosen) return; // user (or a #tab- link) already picked one
@@ -1333,6 +1297,58 @@ function initTabs() {
   }
 }
 
+/* ---------- 1c. panel help (see panel-help.js for the actual text) ---------- */
+
+// Live value substituted into PANEL_HELP.jobs.full's {{archivePath}} token —
+// set by refreshStatus() below. Defaults to the same fallback text the old
+// static markup used, in case the modal is opened before the first status
+// fetch resolves.
+let jobArchivePath = "a flat file on the server";
+
+function substituteHelp(html) {
+  return html.replace(/\{\{archivePath\}\}/g, jobArchivePath);
+}
+
+// Fills each panel's brief <p class="hint" id="hint-<key>"> from PANEL_HELP.
+// Run once at startup — brief text is static content, not re-rendered on
+// every status poll (unlike the help modal, which always renders fresh from
+// the current jobArchivePath at open time — see openHelpModal below).
+function renderPanelHelp() {
+  for (const [key, info] of Object.entries(PANEL_HELP)) {
+    const hint = document.getElementById(`hint-${key}`);
+    if (hint) hint.innerHTML = substituteHelp(info.brief);
+  }
+}
+
+function openHelpModal(key) {
+  const info = PANEL_HELP[key];
+  if (!info) return;
+  document.getElementById("help-modal-title").textContent = info.title;
+  const paragraphs = Array.isArray(info.full) ? info.full : [info.full];
+  document.getElementById("help-modal-body").replaceChildren(
+    ...paragraphs.map((html) => {
+      const p = document.createElement("p");
+      p.className = "hint";
+      p.innerHTML = substituteHelp(html);
+      return p;
+    }),
+  );
+  document.getElementById("help-modal").classList.remove("hidden");
+}
+function closeHelpModal() {
+  document.getElementById("help-modal").classList.add("hidden");
+}
+document.getElementById("help-modal-close").addEventListener("click", closeHelpModal);
+document.getElementById("help-modal").addEventListener("click", (ev) => {
+  if (ev.target.id === "help-modal") closeHelpModal(); // backdrop click closes
+});
+// Delegated: covers every panel's help button (and any added later) with one
+// listener instead of wiring each individually.
+document.addEventListener("click", (ev) => {
+  const btn = ev.target.closest(".help-btn");
+  if (btn) openHelpModal(btn.dataset.help);
+});
+
 /* ---------- 2. status chips ---------- */
 
 async function refreshStatus() {
@@ -1341,10 +1357,7 @@ async function refreshStatus() {
   try {
     const s = await api("/api/status");
     document.getElementById("footer-version").textContent = "v" + s.version;
-    document.getElementById("job-archive-hint").textContent = s.job_archive_path;
-    // CHKP_CPUSE_SHOW_TAB_HINTS (default true — hide only on an explicit false).
-    document.getElementById("tab-guide-viewport").classList.toggle("hidden", s.show_tab_hints === false);
-    positionTabGuide();
+    jobArchivePath = s.job_archive_path;
     // Chips are for warnings only (counts live on their own tabs).
     if (!s.credentials_unlocked) {
       addChip(box, "credential store LOCKED — set CHKP_CPUSE_MASTER_KEY and restart", "warn");
@@ -1942,7 +1955,7 @@ function buildFirewallTagsLine(tags) {
 // with no CPUSE/SSH dependency, so there's no reason to hide them behind a
 // "Refresh" click the way cluster membership genuinely has to be. When a
 // cluster-membership line is also showing, tags share that same line
-// (appended after it) rather than getting a line of their own — that's the
+// (prepended before it) rather than getting a line of their own — that's the
 // one case there's another line worth sharing with; every other case (not
 // yet checked, Spark, not a cluster member) puts tags on their own first
 // line since there's nothing else to attach them to.
@@ -1994,12 +2007,12 @@ function renderStateRow(stateRow, data, isSpark) {
     cluster.className = role.startsWith("ACTIVE") ? "cluster-active"
       : role.startsWith("STANDBY") ? "cluster-standby"
       : "cluster-other";
-    cluster.textContent = `${label} cluster member in ${data.cluster_name}`;
-    summary.appendChild(cluster);
+    cluster.textContent = `${label} member in ${data.cluster_name}`;
     if (tagsLine) {
-      summary.appendChild(document.createTextNode(" "));
       summary.appendChild(tagsLine);
+      summary.appendChild(document.createTextNode(" "));
     }
+    summary.appendChild(cluster);
     summary.appendChild(document.createElement("br"));
   } else if (tagsLine) {
     summary.appendChild(tagsLine);
@@ -4722,6 +4735,7 @@ async function pollJobs() {
 
 (async function init() {
   initTabs();
+  renderPanelHelp();
   await initAuth(); // establish session state (logout control, idle timer) first
   const envs = await loadEnvironments(); // must resolve currentEnv before env-scoped loads
   await refreshStatus();

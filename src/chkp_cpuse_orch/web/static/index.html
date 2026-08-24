@@ -64,9 +64,7 @@
      to stick a screen's height into any tab's content and just scroll away
      with the rest of the header. As a sibling of <header>/<main>/<footer>
      directly under <body> (tall as the whole page), it has room to stay
-     pinned to the top of the viewport for the full scroll. The descriptive
-     guide row below it deliberately does NOT get the same treatment — only
-     the tabs themselves need to stay reachable while scrolling. -->
+     pinned to the top of the viewport for the full scroll. -->
 <nav id="tabs">
   <button class="tab-btn" data-tab="provisioning">Provisioning</button>
   <button class="tab-btn" data-tab="packages">Packages</button>
@@ -75,26 +73,6 @@
           title="Work in progress — coming soon">Bulk Patching (CDT) Firewalls only</button>
   <button class="tab-btn" data-tab="jobs">Jobs<span id="jobs-badge" class="tab-badge hidden"></span></button>
 </nav>
-
-<!-- Descriptive guide under the tab bar: one block per tab, always visible on
-     every tab, distributed in five equal columns with a right-pointing chevron
-     between them to signal the intended left-to-right sequential workflow. The
-     whole row slides horizontally (positionTabGuide in app.js) so the active
-     tab's block centers under its tab; content sliding off the left edge fades
-     out via the viewport's mask. -->
-<div id="tab-guide-viewport">
-  <div id="tab-guide">
-    <p class="tab-guide-item" data-tab="provisioning">Bootstrap initial access to primary management and discover other servers</p>
-    <span class="tab-guide-chevron" aria-hidden="true">&rsaquo;</span>
-    <p class="tab-guide-item" data-tab="packages">Upload, stage, and manage packages for deployment</p>
-    <span class="tab-guide-chevron" aria-hidden="true">&rsaquo;</span>
-    <p class="tab-guide-item" data-tab="management">Deploy patches to management servers and a few firewalls using CPUSE</p>
-    <span class="tab-guide-chevron" aria-hidden="true">&rsaquo;</span>
-    <p class="tab-guide-item" data-tab="gateways">Version 2.0 will add bulk patching on firewalls using the Central Deployment Tool</p>
-    <span class="tab-guide-chevron" aria-hidden="true">&rsaquo;</span>
-    <p class="tab-guide-item" data-tab="jobs">Monitor job status and results</p>
-  </div>
-</div>
 
 <main>
 
@@ -115,14 +93,9 @@
         <summary><h2>Bootstrap initial management access</h2></summary>
         <div class="section-head-actions">
           <button type="submit" form="provision-form" id="prov-generate" class="small">Generate commands</button>
+          <button type="button" class="help-btn" data-help="provision" title="About this panel" aria-label="About this panel">?</button>
         </div>
-        <p class="hint">
-          Generates clish commands to provision this tool's service account on
-          management servers. These credentials are saved to the <strong>Credentials</strong>
-          table below automatically. <strong class="prov-note-warn">Apply the generated
-          commands in clish on every management server</strong>, then continue to
-          <strong>Connect to Primary</strong> below.
-        </p>
+        <p class="hint" id="hint-provision"></p>
         <form id="provision-form">
           <div class="field-grid">
             <label for="prov-cred-name">Credential name</label>
@@ -163,13 +136,9 @@
         <summary><h2>Connect to Primary</h2></summary>
         <div class="section-head-actions">
           <button type="submit" form="connect-primary-form" id="connect-primary-btn" class="small">Connect to Primary</button>
+          <button type="button" class="help-btn" data-help="connect-primary" title="About this panel" aria-label="About this panel">?</button>
         </div>
-        <p class="hint">
-          Once the clish commands above have been applied on the box, connect
-          to it here — this creates (or re-issues a key for) a Management API
-          administrator over SSH, no copy-paste required. You'll be shown the
-          exact commands to confirm before anything runs.
-        </p>
+        <p class="hint" id="hint-connect-primary"></p>
         <form id="connect-primary-form">
           <div class="field-grid">
             <label for="cp-name">Name</label>
@@ -207,15 +176,13 @@
     <section id="credentials">
       <div class="section-head">
         <h2>Credentials</h2>
-        <!-- Opens the Add Credential modal; hidden when storage is disabled. -->
-        <button type="button" id="cred-add-btn" class="small">Add Credential</button>
+        <div class="section-head-actions">
+          <!-- Opens the Add Credential modal; hidden when storage is disabled. -->
+          <button type="button" id="cred-add-btn" class="small">Add Credential</button>
+          <button type="button" class="help-btn" data-help="credentials" title="About this panel" aria-label="About this panel">?</button>
+        </div>
       </div>
-      <p class="hint">
-        Named login sets, stored encrypted at rest using <strong>argon2id</strong>; secrets are never
-        displayed again after saving. Give one an SSH password <em>or</em> a private key
-        (plus an optional expert password for privileged CPUSE steps), then assign it to
-        servers below. One set can be assigned to many servers.
-      </p>
+      <p class="hint" id="hint-credentials"></p>
       <p class="hint warn hidden" id="cred-storage-notice">
         Credential storage is <strong>disabled</strong> for this environment, so
         nothing is stored here. You'll be prompted for credentials each time you run
@@ -241,15 +208,10 @@
           <!-- Scans the estate from the primary via the Management API (+ SSH for
                MDS) and offers the discovered servers for review before import. -->
           <button type="button" id="discover-btn" class="small hidden">Discover servers</button>
+          <button type="button" class="help-btn" data-help="servers-info" title="About this panel" aria-label="About this panel">?</button>
         </div>
       </div>
-      <p class="hint">
-        Once <strong>Connect to Primary</strong> above has succeeded, discover and
-        import any secondary servers and SmartEvent servers, or add them manually.
-        These will be used to orchestrate bulk patching of firewalls owned by this
-        environment. The management servers can also be patched with this tool on
-        the <strong>CPUSE</strong> tab.
-      </p>
+      <p class="hint" id="hint-servers-info"></p>
       <table id="servers-info-table">
         <thead>
           <tr>
@@ -272,23 +234,13 @@
   <div class="tab-panel" id="tab-packages">
 
     <section id="packages">
-      <h2>Packages</h2>
-      <p class="hint">
-        Upload a package once, then distribute it to any server — pick a file below
-        or <strong>drag &amp; drop</strong> it anywhere on this panel. Compare the
-        SHA-1 / SHA-256 with the values published on the Check Point download page
-        before importing anywhere. Uploads are <strong>auto-deleted after the
-        retention window</strong> (30 days by default) unless you tick
-        <strong>Keep</strong> to store them indefinitely.
-      </p>
-      <p class="hint">
-        <strong>Upload to Mgmt</strong>, below, is a separate step: it pushes an
-        already-stored package into the current environment's primary management
-        server's own package repository via the Management API, so it's available
-        there for policy installs and hotfix imports from SmartConsole or CDT. It
-        runs as a background job (large-file transfer + server-side import) — track
-        it on the <strong>Jobs</strong> tab.
-      </p>
+      <div class="section-head">
+        <h2>Packages</h2>
+        <div class="section-head-actions">
+          <button type="button" class="help-btn" data-help="packages" title="About this panel" aria-label="About this panel">?</button>
+        </div>
+      </div>
+      <p class="hint" id="hint-packages"></p>
       <label id="upload-field" for="upload-file">
         <input type="file" id="upload-file" class="sr-hide">
         <span id="upload-field-text">Click to choose a file, or drag and drop to begin upload</span>
@@ -325,14 +277,9 @@
           <!-- Queries live show installer packages state for every server in
                this environment, one after another. -->
           <button type="button" id="refresh-all-btn" class="small">Refresh all</button>
+          <button type="button" class="help-btn" data-help="servers" title="About this panel" aria-label="About this panel">?</button>
         </div>
-        <p class="hint">
-          Patched locally via CPUSE (CDT does not patch management servers). The
-          detected state shown below (last row per server) is cached — click
-          <strong>Refresh</strong> on a server, or <strong>Refresh all</strong> above, to
-          query it live over SSH. Assign or change a server's credential set from
-          the <strong>Edit</strong> button on the Provisioning tab.
-        </p>
+        <p class="hint" id="hint-servers"></p>
 
         <div id="bulk-import">
           <div class="bulk-import-row">
@@ -374,19 +321,9 @@
           <button type="button" id="add-firewall-btn" class="small">Manually add a firewall</button>
           <button type="button" id="discover-firewalls-btn" class="small">Discover firewalls</button>
           <button type="button" id="fw-refresh-all-btn" class="small">Refresh all</button>
+          <button type="button" class="help-btn" data-help="firewalls" title="About this panel" aria-label="About this panel">?</button>
         </div>
-        <p class="hint">
-          Direct CPUSE patching here — one host at a time over SSH — is best suited to
-          management servers and a small number of gateways: standalone gateways or
-          cluster members. Gateways can also be patched from SmartConsole or Web
-          SmartConsole — see
-          <a class="sk-link" href="https://support.checkpoint.com/results/sk/sk170314" target="_blank" rel="noopener">sk170314</a>.
-          For large numbers of gateways, use the <strong>Gateways</strong> tab (CDT bulk
-          fleet push, planned for version 2). Add firewalls manually or discover
-          them from a Primary SMS/MDS. The detected state shown below (last row per
-          firewall) is cached — click <strong>Refresh</strong> on a firewall, or
-          <strong>Refresh all</strong> above, to query it live over SSH.
-        </p>
+        <p class="hint" id="hint-firewalls"></p>
 
         <div id="fw-bulk-import">
           <div class="bulk-import-row">
@@ -428,15 +365,13 @@
   <div class="tab-panel" id="tab-gateways">
 
     <section id="cdt">
-      <h2>Gateway deployment (CDT)</h2>
-      <p class="hint">
-        CDT runs <em>on</em> a management server and pushes a package to many gateways.
-        Flow: <strong>Stage</strong> (upload package + write CDT config) →
-        <strong>Generate</strong> candidates → <strong>Load</strong>, reorder and trim the
-        list (row order = deployment order = blast-radius control) → <strong>Save order</strong>
-        → optional <strong>Prepare</strong> → <strong>Execute</strong>. Execute runs under
-        nohup on the server and is followed live on the Jobs tab.
-      </p>
+      <div class="section-head">
+        <h2>Gateway deployment (CDT)</h2>
+        <div class="section-head-actions">
+          <button type="button" class="help-btn" data-help="cdt" title="About this panel" aria-label="About this panel">?</button>
+        </div>
+      </div>
+      <p class="hint" id="hint-cdt"></p>
 
       <div class="cdt-controls">
         <select id="cdt-server"><option value="">— management server —</option></select>
@@ -478,15 +413,10 @@
             </select>
             jobs
           </label>
+          <button type="button" class="help-btn" data-help="jobs" title="About this panel" aria-label="About this panel">?</button>
         </div>
       </div>
-      <p class="hint">
-        Click a row to see its progress log or view installation logs for completed install
-        jobs. Running jobs can be cancelled at the next safe point. Jobs older than a year
-        are removed from this list, archived to
-        <span id="job-archive-hint" class="mono">a flat file on the server</span>, and stored
-        there for three additional years.
-      </p>
+      <p class="hint" id="hint-jobs"></p>
       <!-- Multiselect filters, one per column — options are populated from
            /api/jobs/facets (every job that exists, not just the currently
            displayed page) by loadJobFacets() in app.js. Click toggles one
@@ -584,6 +514,20 @@
 <!-- Create + rename only: a rename moves the environment's servers, credentials,
      and job history to the new name atomically. Server add/remove, deletion, and
      credentials all live on the Provisioning tab. -->
+<!-- ============ Panel help modal (opened from a panel's ? button) =========== -->
+<!-- One shared modal for every panel's long-form help text. Content is filled
+     in per open by openHelpModal() (app.js) from PANEL_HELP (panel-help.js) —
+     the body below is intentionally empty in markup. -->
+<div id="help-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="help-modal-title">
+  <div class="modal-card narrow">
+    <div class="modal-head">
+      <h2 id="help-modal-title"></h2>
+      <button id="help-modal-close" class="small" title="Close">✕</button>
+    </div>
+    <div id="help-modal-body"><!-- filled by openHelpModal() --></div>
+  </div>
+</div>
+
 <div id="env-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="env-modal-title">
   <div class="modal-card">
     <div class="modal-head">
@@ -1398,7 +1342,7 @@
     <label class="env-storage-toggle">
       <input type="checkbox" class="env-api-only-input">
       <span class="env-storage-main">
-        API-only management access
+        API-only (ie: Smart-1 Cloud)
         <span class="hint">
           No SSH/SCP to the management server(s) at all — only an operator-
           supplied Management API key. Hides Bootstrap, Connect to Primary,
@@ -1435,6 +1379,7 @@
   </tr>
 </template>
 
+<script src="/js/panel-help.js"></script>
 <script src="/js/app.js"></script>
 </body>
 </html>
