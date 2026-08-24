@@ -347,9 +347,13 @@
           </div>
         </div>
 
-        <input type="text" id="fw-filter" class="fw-filter-input"
-          placeholder="Filter by name, address (IP or CIDR), role, credential set, version/build, or tag — space-separated, all must match"
-          autocomplete="off">
+        <div class="fw-filter-row">
+          <input type="text" id="fw-filter" class="fw-filter-input"
+            placeholder="Filter by name, address (IP or CIDR), role, credential set, version/build, or tag — space-separated, all must match"
+            autocomplete="off">
+          <!-- Shown only while the filter has text (see applyFirewallTableFilter). -->
+          <button type="button" id="fw-filter-clear" class="fw-filter-clear hidden" title="Clear filter" aria-label="Clear filter">✕</button>
+        </div>
         <table id="firewalls-table">
           <thead>
             <tr>
