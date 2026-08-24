@@ -1290,6 +1290,23 @@ document.getElementById("discover-modal").addEventListener("click", (ev) => {
   if (ev.target.id === "discover-modal") closeDiscoverModal(); // backdrop click closes
 });
 
+/* ---------- 1a-header. sticky header condense-on-scroll ---------- */
+
+// <header> (identity row + tabs) is pinned via CSS position:sticky — this
+// just shrinks its vertical padding a few px into any scroll so the pinned
+// bar doesn't keep eating a full header's worth of whitespace for the rest
+// of the page. Purely cosmetic (CSS transition does the animating); nothing
+// ever hides. Threshold is deliberately tiny — the header is already stuck
+// to the top the instant you start scrolling, not just once you're deep
+// into the page.
+const HEADER_CONDENSE_THRESHOLD_PX = 8;
+function updateHeaderCondensed() {
+  document.querySelector("header").classList.toggle(
+    "condensed", window.scrollY > HEADER_CONDENSE_THRESHOLD_PX
+  );
+}
+window.addEventListener("scroll", updateHeaderCondensed, { passive: true });
+
 /* ---------- 1b. tabs ---------- */
 
 // Default tab: Provisioning when the inventory has no management servers yet,
@@ -4872,6 +4889,7 @@ async function pollJobs() {
 (async function init() {
   initTabs();
   renderPanelHelp();
+  updateHeaderCondensed(); // in case the page loads already scrolled (e.g. a #tab- deep link)
   await initAuth(); // establish session state (logout control, idle timer) first
   const envs = await loadEnvironments(); // must resolve currentEnv before env-scoped loads
   await refreshStatus();
