@@ -124,7 +124,7 @@ These gates define the major version releases - the milestones may change in the
 🤞 Add columnn filters in firewalls panel for name, address and role and cred set  
 🤞 Are we checking for available disk on /storage for Spark copies - only need to care about room for the file  
 🤞 Separate firewalls into two panels - Spark and non-Spark  
-🤞 For Spark gateways, warn if you've chosen a firemware package from a different major version  
+🤞 For Spark gateways, warn if you've chosen a firmware package from a different major version  
 🤞 Leverage the gateway family identifier built into Spark filenames to limit choices  
 🤞 Add tags concept to firewalls for sorting/grouping/filtering  
 
@@ -134,7 +134,7 @@ These gates define the major version releases - the milestones may change in the
 🤞 Allow import jobs to be cancelled during file copy stage - clean up partial file on target  
 ✨ Affirm in a push_to_repo job output that the temp storage was cleaned up  
 ✨ On jobs with error output, never let the error output spill outside the table boundary - direct the user to view details in the output box or something like that  
-✨ Show current percentage when available in the output column so I don't have to expand the full job progress to see it
+✨ Show current percentage when available in the output column so I don't have to expand the full job progress to see it  
 
 #### Squashed Bugs
 v0.59.0 Spark install used to guess at its own outcome from whatever its SSH session happened to observe issuing `upgrade_revert_image.sh` - real-hardware testing showed that observation is unreliable in both directions (see v0.58.2/v0.58.3), so it no longer tries. It now leaves that session alone, waits for the device's scheduled reboot to close it, pings the firewall until it responds again, reconnects over SSH, and compares `fw ver`'s reported build number against the installed package's own filename before declaring success - a confirmed mismatch fails the job, and giving up at the ping/reconnect stage without ever finding out is a distinct "timed out, go check" outcome rather than a false failure. The Jobs tab's Output column also now shows live status text ("installing", "waiting for reboot", "pinging", etc.) while an install runs, instead of staying blank until it finishes  
