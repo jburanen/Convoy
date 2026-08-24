@@ -95,13 +95,13 @@ footer {
 }
 .chip.warn { color: var(--warn); border-color: var(--warn); }
 
-/* ---- header top row: title left, environment picker top-right ---- */
+/* ---- header top row: title left, session controls top-right ---- */
 #header-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  flex-wrap: wrap; /* picker drops below the title on narrow screens */
+  flex-wrap: wrap;
   margin-bottom: 0.75rem; /* space before status chips; used to live on .subtitle */
 }
 #header-title {
@@ -112,26 +112,18 @@ footer {
 #header-logo { flex-shrink: 0; }
 #header-right {
   display: flex;
-  flex-direction: column; /* env picker on top, session controls below */
-  align-items: flex-end;
-  gap: 0.4rem;
-}
-#env-row {
-  display: flex;
-  gap: 0.5rem;
   align-items: center;
 }
-#env-picker { font-weight: 600; }
 
-/* ---- tabs ---- */
+/* ---- tabs (environment picker lives here too, pushed to the right) ---- */
 /* Pinned to the top of the viewport on scroll so the tab bar (and the active
    tab, for switching without scrolling back up) stays reachable on long
-   pages — the descriptive guide row below it is NOT pinned, just the tabs
-   themselves. Needs its own background since page content now scrolls
-   underneath; z-index only needs to clear ordinary content, well below the
-   modal layer (100+, see .modal-card z-index rules further down). */
+   pages. Needs its own background since page content now scrolls underneath;
+   z-index only needs to clear ordinary content, well below the modal layer
+   (100+, see .modal-card z-index rules further down). */
 #tabs {
   display: flex;
+  align-items: center;
   gap: 0.25rem;
   margin-top: 1rem;
   border-bottom: 1px solid var(--border);
@@ -140,6 +132,17 @@ footer {
   z-index: 5;
   background: var(--bg);
 }
+#env-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto; /* pushed to the row's right edge, past the tab buttons' own gap */
+}
+/* Base width is a fallback only — resizeEnvPicker() (app.js) sets an inline
+   width fitting just the selected environment's name on every load/switch,
+   since a plain <select> otherwise sizes its closed box to the WIDEST
+   option, not the selected one. */
+#env-picker { font-weight: 600; }
 .tab-btn {
   background: transparent;
   color: var(--muted);

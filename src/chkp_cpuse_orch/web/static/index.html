@@ -30,17 +30,14 @@
         <p class="subtitle">CPUSE and CDT patch orchestration for on-prem SMS and MDS deployments</p>
       </div>
     </div>
-    <!-- right-aligned header cluster: env picker, then session controls below it -->
+    <!-- right-aligned header cluster: session controls only — the
+         environment picker itself now lives in the #tabs nav below, so it
+         stays visible while scrolling (see that nav's comment). -->
     <div id="header-right">
-      <!-- environment picker: top-right, same line as the title -->
-      <div id="env-row">
-        <label class="muted" for="env-picker">Environment:</label>
-        <select id="env-picker"><!-- filled from /api/environments --></select>
-      </div>
-      <!-- Signed-in user + logout; shown only when auth is enabled. Sits below
-           the picker. The username opens the User Settings modal (password
-           change; basic-auth only — see app.js initAuth). Logout also clears
-           any credentials cached in this tab (see app.js). -->
+      <!-- Signed-in user + logout; shown only when auth is enabled. The
+           username opens the User Settings modal (password change;
+           basic-auth only — see app.js initAuth). Logout also clears any
+           credentials cached in this tab (see app.js). -->
       <div id="session-row" class="hidden">
         <button id="session-user" class="link-btn"></button>
         <button id="logout-btn" class="small secondary">Log out</button>
@@ -64,7 +61,10 @@
      to stick a screen's height into any tab's content and just scroll away
      with the rest of the header. As a sibling of <header>/<main>/<footer>
      directly under <body> (tall as the whole page), it has room to stay
-     pinned to the top of the viewport for the full scroll. -->
+     pinned to the top of the viewport for the full scroll. The environment
+     picker lives in this row too (pushed to the right via #env-row's own
+     margin-left:auto), not in <header>, for the same reason: it needs to
+     stay reachable without scrolling back up. -->
 <nav id="tabs">
   <button class="tab-btn" data-tab="provisioning">Provisioning</button>
   <button class="tab-btn" data-tab="packages">Packages</button>
@@ -72,6 +72,15 @@
   <button class="tab-btn wip" data-tab="gateways" disabled
           title="Work in progress — coming soon">Bulk Patching (CDT) Firewalls only</button>
   <button class="tab-btn" data-tab="jobs">Jobs<span id="jobs-badge" class="tab-badge hidden"></span></button>
+  <div id="env-row">
+    <label class="muted" for="env-picker">Env:</label>
+    <!-- Narrowed to fit only the selected environment's name by
+         resizeEnvPicker() (app.js) — a plain <select> otherwise sizes its
+         closed box to the WIDEST option, not the selected one. The opened
+         dropdown's own item widths are unaffected; that's native <select>
+         popup behavior, independent of the closed control's width. -->
+    <select id="env-picker"><!-- filled from /api/environments --></select>
+  </div>
 </nav>
 
 <main>
