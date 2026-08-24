@@ -356,10 +356,12 @@ async function selectEnvironment(name) {
   currentEnv = name;
   localStorage.setItem("currentEnv", currentEnv);
   document.getElementById("env-picker").value = name;
-  // Reload everything env-scoped; clear CDT state from the previous env.
+  // Reload everything env-scoped; clear CDT state and the firewalls-table
+  // filter (both are per-environment context) from the previous env.
   cdtCandidates = null;
   renderCdtCandidates();
   document.getElementById("cdt-status").textContent = "";
+  document.getElementById("fw-filter").value = "";
   await Promise.all([loadServers(), loadPackages(), loadCredentialSets(), refreshStatus()]);
   updateProvisionCollapse();
 }
@@ -1864,15 +1866,36 @@ function formatAgentBuild(raw) {
   return raw.replace(/^\s*build\s*number\s*:\s*/i, "").replace(/\s+/g, " ").trim();
 }
 
+// Firewall tags (see services/firewalls.py) rendered as .badge chips, one
+// line — null when there's nothing to show so callers can skip the <br>
+// too. Servers never carry a `tags` field on their state object, so this is
+// always a no-op there.
+function buildFirewallTagsLine(tags) {
+  if (!tags || !tags.length) return null;
+  const line = document.createElement("span");
+  line.className = "fw-tags-line";
+  for (const tag of tags) {
+    const badge = document.createElement("span");
+    badge.className = "badge";
+    badge.textContent = tag;
+    line.appendChild(badge);
+  }
+  return line;
+}
+
 // Detected-state summary row: version/JHF/agent build are derived server-side
 // (cpuse.summarize_jumbo) and cached in the DB, so `data` here is either a
-// server record carrying those fields (from GET /servers, or a fresh /state
-// response) or null when nothing has been checked yet. `isSpark` is only
-// ever true for a Firewalls-panel row (Servers are never Spark) — Spark has
-// no CPUSE agent, so none of version/JHF/CPUSE-Agent/cluster-role apply the
-// way they do for a Gaia host; the summary is just the truncated `fw ver`
-// banner text SparkPatchingService.detect() cached (see spark-patching's
-// module docstring / .claude/memory/spark-firmware-patching.md).
+// server/firewall record (from GET /servers or /firewalls, or a fresh
+// /state response) or null when there's no cached row at all. `isSpark` is
+// only ever true for a Firewalls-panel row (Servers are never Spark) — Spark
+// has no CPUSE agent, so none of version/JHF/CPUSE-Agent/cluster-role apply
+// the way they do for a Gaia host; the summary is just the truncated `fw
+// ver` banner text SparkPatchingService.detect() cached (see spark-
+// patching's module docstring / .claude/memory/spark-firmware-patching.md).
+// Tags (firewalls only) render regardless of whether the host has ever been
+// refreshed — unlike everything else here, they're plain operator metadata
+// with no CPUSE/SSH dependency, so there's no reason to hide them behind a
+// "Refresh" click the way cluster membership genuinely has to be.
 function renderStateRow(stateRow, data, isSpark) {
   const summary = stateRow.querySelector(".srv-summary");
   const checked = stateRow.querySelector(".srv-checked");
@@ -1882,9 +1905,19 @@ function renderStateRow(stateRow, data, isSpark) {
     checked.textContent = "";
     return false;
   }
+  const tagsLine = buildFirewallTagsLine(data.tags);
+  if (tagsLine) {
+    summary.appendChild(tagsLine);
+    summary.appendChild(document.createElement("br"));
+  }
+  if (!data.checked_at) {
+    summary.appendChild(document.createTextNode("Not yet checked."));
+    checked.textContent = "";
+    return false;
+  }
   if (isSpark) {
-    summary.textContent = data.version || "—";
-    checked.textContent = data.checked_at ? ` | Refreshed ${fmtTime(data.checked_at)}` : "";
+    summary.appendChild(document.createTextNode(data.version || "—"));
+    checked.textContent = ` | Refreshed ${fmtTime(data.checked_at)}`;
     return false;
   }
   // ClusterXL role, when this host is a live cluster member. cluster_role is
@@ -1911,25 +1944,15 @@ function renderStateRow(stateRow, data, isSpark) {
     summary.appendChild(cluster);
     summary.appendChild(document.createElement("br"));
   }
+  // The DA build normally reports "Build NNNN (Agent build is up to date)" —
+  // the parenthetical update-status text is dropped here (operator-directed),
+  // keeping just the build number itself.
   const agentBuild = formatAgentBuild(data.agent_build);
-  summary.appendChild(document.createTextNode(
-    `Running ${data.version ?? "—"} w/JHF ${data.jhf ?? "—"} | CPUSE Agent `
-  ));
-  // The DA build normally reports "(Agent build is up to date)". Any other
-  // status — a newer build available, an error string — warrants the operator's
-  // eye, so render just the parenthetical status text in orange; the build
-  // number itself (before the "(") stays the normal muted colour.
-  const upToDate = /agent build is up to date/i.test(data.agent_build || "");
   const parenIdx = agentBuild.indexOf("(");
-  if (agentBuild === "—" || upToDate || parenIdx === -1) {
-    summary.appendChild(document.createTextNode(agentBuild));
-  } else {
-    summary.appendChild(document.createTextNode(agentBuild.slice(0, parenIdx)));
-    const attn = document.createElement("span");
-    attn.className = "agent-build-attention";
-    attn.textContent = agentBuild.slice(parenIdx);
-    summary.appendChild(attn);
-  }
+  const agentBuildNumber = parenIdx === -1 ? agentBuild : agentBuild.slice(0, parenIdx).trim();
+  summary.appendChild(document.createTextNode(
+    `Running ${data.version ?? "—"} w/JHF ${data.jhf ?? "—"} | CPUSE Agent ${agentBuildNumber}`
+  ));
   checked.textContent = data.checked_at ? ` | Refreshed ${fmtTime(data.checked_at)}` : "";
   return hasClusterLine;
 }
@@ -2349,6 +2372,104 @@ function applyFirewallRowLockFromPackage() {
   setFirewallRowLock(value ? packageKind(value) : null);
 }
 
+// -- firewalls-table filter (name / address / role / credential set) -------------
+//
+// A single free-text box, space-separated tokens ANDed together (typing a
+// second word narrows further) — each token OR-matched against name/address/
+// role/credential-set/tags as a case-insensitive substring, EXCEPT a token
+// shaped like a full IPv4 address or a CIDR block, which is matched only
+// against the address column using real IP semantics (exact equality, or
+// subnet containment for a CIDR) instead of substring — a plain substring
+// match on an IP would be actively misleading (e.g. "10" would hit any
+// address with a "10" in any octet). A partially-typed address (not a
+// complete valid IPv4) simply isn't IP-shaped, so it falls through to the
+// substring path like everything else — search-as-you-type on an address
+// prefix still works. Tags are read from the state row's rendered
+// .fw-tags-line (renderStateRow), not the editable-list data, since that's
+// the one place both are already resolved into plain text on the DOM.
+
+function _parseIpv4(text) {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(text);
+  if (!m) return null;
+  const octets = m.slice(1, 5).map(Number);
+  if (octets.some((o) => o > 255)) return null;
+  return octets.reduce((acc, o) => acc * 256 + o, 0);
+}
+
+// Returns true/false when `token` is IP-shaped (address should be judged by
+// this verdict alone), or null when it isn't (caller falls back to substring
+// matching across every field, address included).
+function _matchFirewallIpToken(address, token) {
+  const slash = token.indexOf("/");
+  if (slash !== -1) {
+    const prefixText = token.slice(slash + 1);
+    const prefix = Number(prefixText);
+    if (!/^\d{1,2}$/.test(prefixText) || prefix < 0 || prefix > 32) return null;
+    const network = _parseIpv4(token.slice(0, slash));
+    if (network === null) return null;
+    const addr = _parseIpv4(address);
+    if (addr === null) return false; // a CIDR token against a non-IP address never matches
+    const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+    return ((addr & mask) >>> 0) === ((network & mask) >>> 0);
+  }
+  const asIp = _parseIpv4(token);
+  if (asIp === null) return null;
+  return _parseIpv4(address) === asIp;
+}
+
+function _firewallRowMatchesToken(fields, token) {
+  const ipVerdict = _matchFirewallIpToken(fields.address, token);
+  if (ipVerdict !== null) return ipVerdict;
+  const needle = token.toLowerCase();
+  return (
+    fields.name.toLowerCase().includes(needle) ||
+    fields.address.toLowerCase().includes(needle) ||
+    fields.role.toLowerCase().includes(needle) ||
+    fields.creds.toLowerCase().includes(needle) ||
+    fields.tags.toLowerCase().includes(needle)
+  );
+}
+
+// Applied client-side over the already-rendered rows (no API round trip) —
+// re-run after every loadFirewalls() rebuild so the filter survives a
+// refresh/add/edit, and on every keystroke in #fw-filter.
+function applyFirewallTableFilter() {
+  const tokens = document.getElementById("fw-filter").value.trim().split(/\s+/).filter(Boolean);
+  const tbody = document.querySelector("#firewalls-table tbody");
+  let anyRow = false;
+  let anyVisible = false;
+  for (const row of tbody.querySelectorAll("tr.srv-row")) {
+    anyRow = true;
+    const stateRow = row.nextElementSibling;
+    const fields = {
+      name: row.querySelector(".fw-name-link")?.textContent || "",
+      address: row.querySelector(".fw-address")?.textContent || "",
+      role: row.querySelector(".fw-role")?.textContent || "",
+      creds: row.querySelector(".fw-creds")?.textContent || "",
+      tags: stateRow?.querySelector(".fw-tags-line")?.textContent || "",
+    };
+    const matches = tokens.every((t) => _firewallRowMatchesToken(fields, t));
+    row.classList.toggle("hidden", !matches);
+    if (stateRow?.classList.contains("srv-state-row")) {
+      stateRow.classList.toggle("hidden", !matches);
+    }
+    if (matches) anyVisible = true;
+  }
+  document.getElementById("fw-filter-empty")?.remove();
+  if (anyRow && tokens.length && !anyVisible) {
+    const tr = document.createElement("tr");
+    tr.id = "fw-filter-empty";
+    const td = document.createElement("td");
+    td.colSpan = 6;
+    td.className = "muted";
+    td.textContent = "No firewalls match this filter.";
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+  }
+}
+
+document.getElementById("fw-filter").addEventListener("input", applyFirewallTableFilter);
+
 // Bumped on every call, checked after the awaits below — any two callers
 // racing loadFirewalls() (e.g. the firewall-remove handler's own reload
 // landing mid-flight with a pollJobs()-triggered loadServers()->loadFirewalls()
@@ -2380,6 +2501,7 @@ async function loadFirewalls() {
   const savedSelections = captureRowSelections(tbody, ".fw-name-link");
   tbody.replaceChildren();
   const stateByName = new Map(firewalls.map((f) => [f.name, f]));
+  populateFirewallTagsDatalist(editable);
 
   const bulkPackageSelect = document.getElementById("fw-bulk-import-package");
   bulkPackageSelect.replaceChildren(new Option("— package —", ""));
@@ -2407,11 +2529,12 @@ async function loadFirewalls() {
 
     const stateRow = el("tpl-firewall-state-row");
     stateRow.dataset.firewall = fw.name; // looked up by the "Refresh all" button
-    const hasClusterLine = renderStateRow(
-      stateRow,
-      state && state.checked_at ? state : null,
-      fw.role === "spark_firewall",
-    );
+    // Unlike the Management Servers table (which still nulls out `state`
+    // pre-refresh), `state` is passed through as-is here even before the
+    // first refresh — renderStateRow shows "Not yet checked." itself in
+    // that case, but tags (plain operator metadata, no CPUSE dependency)
+    // still need to render regardless of checked_at.
+    const hasClusterLine = renderStateRow(stateRow, state, fw.role === "spark_firewall");
     row.classList.toggle("fw-cluster-member", hasClusterLine);
     stateRow
       .querySelector(".srv-refresh-link")
@@ -2449,6 +2572,7 @@ async function loadFirewalls() {
   // Rows were just rebuilt — reset select-all state and the package/row kind
   // lock together (restored selections may already imply a lock).
   applyFirewallPackageFilter();
+  applyFirewallTableFilter(); // rows were just rebuilt — re-apply any typed filter
 }
 
 async function refreshFirewallState(name, row, stateRow) {
@@ -2867,12 +2991,73 @@ async function populateFirewallCredSelect(assignedSetName) {
 
 // `credential_set` (string, null, or omitted/undefined) rides in the same
 // prov.add/prov.edit job — see addServer above. Returns the JobRecord too.
-async function addFirewall({ name, address, role, ssh_user, ssh_port, credential_set }) {
+async function addFirewall({ name, address, role, ssh_user, ssh_port, credential_set, tags }) {
   return await api(`/api/environments/${encodeURIComponent(currentEnv)}/firewalls`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, address, role, ssh_user, ssh_port, credential_set }),
+    body: JSON.stringify({ name, address, role, ssh_user, ssh_port, credential_set, tags }),
   });
+}
+
+// -- firewall tags: chip-list widget (Add/Edit modal) ------------------------------
+//
+// currentFirewallTags is the modal's working list while it's open — reset in
+// openAddFirewallModal/openEditFirewallModal, mutated by the add/remove
+// handlers below, and read once at submit time. Free text is always
+// accepted (typing anything and pressing Enter/Add commits it); the
+// datalist attached to #fm-tag-input just surfaces tags already used
+// elsewhere in this environment as suggestions — native browser autocomplete,
+// nothing enforced.
+let currentFirewallTags = [];
+
+function renderFirewallTagsChips() {
+  const container = document.getElementById("fm-tags-list");
+  container.replaceChildren();
+  for (const tag of currentFirewallTags) {
+    const chip = document.createElement("span");
+    chip.className = "badge";
+    chip.append(tag);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "tag-chip-remove";
+    remove.textContent = "×";
+    remove.title = `Remove tag "${tag}"`;
+    remove.addEventListener("click", () => {
+      currentFirewallTags = currentFirewallTags.filter((t) => t !== tag);
+      renderFirewallTagsChips();
+    });
+    chip.appendChild(remove);
+    container.appendChild(chip);
+  }
+}
+
+function addFirewallTagFromInput() {
+  const input = document.getElementById("fm-tag-input");
+  const value = input.value.trim();
+  input.value = "";
+  input.focus();
+  if (!value) return;
+  if (currentFirewallTags.some((t) => t.toLowerCase() === value.toLowerCase())) return;
+  currentFirewallTags.push(value);
+  renderFirewallTagsChips();
+}
+
+document.getElementById("fm-tag-add").addEventListener("click", addFirewallTagFromInput);
+document.getElementById("fm-tag-input").addEventListener("keydown", (ev) => {
+  if (ev.key !== "Enter") return;
+  ev.preventDefault(); // don't submit the surrounding form
+  addFirewallTagFromInput();
+});
+
+// Every distinct tag already used on any firewall in the current environment
+// — refreshed on every loadFirewalls() so the datalist stays current after
+// an add/edit/delete elsewhere.
+function populateFirewallTagsDatalist(editableFirewalls) {
+  const seen = new Set();
+  for (const fw of editableFirewalls) for (const t of fw.tags || []) seen.add(t);
+  const datalist = document.getElementById("fw-tags-datalist");
+  datalist.replaceChildren();
+  for (const t of [...seen].sort((a, b) => a.localeCompare(b))) datalist.appendChild(new Option(t));
 }
 
 // Set while the modal is in edit mode — read by the modal's own Remove button,
@@ -2913,6 +3098,8 @@ async function openAddFirewallModal() {
   document.getElementById("firewall-modal-title").textContent = "Add firewall";
   document.getElementById("firewall-modal-submit").textContent = "Add firewall";
   document.getElementById("firewall-modal-remove").classList.add("hidden");
+  currentFirewallTags = [];
+  renderFirewallTagsChips();
   // Nothing to check yet — the host doesn't exist in the store until this
   // form is submitted, and cluster-recheck/domain need an existing firewall.
   document.getElementById("fm-cluster-info").classList.add("hidden");
@@ -2930,6 +3117,8 @@ async function openEditFirewallModal(fw, assignedSetName, clusterName, mdsDomain
   document.getElementById("fm-role").value = fw.role;
   document.getElementById("fm-user").value = fw.ssh_user;
   document.getElementById("fm-port").value = fw.ssh_port;
+  currentFirewallTags = [...(fw.tags || [])];
+  renderFirewallTagsChips();
   document.getElementById("firewall-modal-title").textContent = `Edit ${fw.name}`;
   document.getElementById("firewall-modal-submit").textContent = "Save changes";
   document.getElementById("firewall-modal-remove").classList.remove("hidden");
@@ -3081,6 +3270,9 @@ document.getElementById("firewall-form").addEventListener("submit", async (ev) =
       // Storage-enabled: always explicit (clears to null if left at "none"),
       // matching this modal's previous always-fires-the-assignment behavior.
       credential_set: storageEnabled() ? (credSet || null) : undefined,
+      // The full current list, not a diff — same replace-on-every-save
+      // semantics as notes (see services/prov_ops.py's tags handling).
+      tags: currentFirewallTags,
     });
     lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if another tab is watching
     if (job.status !== "succeeded") {

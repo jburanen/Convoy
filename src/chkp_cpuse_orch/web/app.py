@@ -401,6 +401,9 @@ class FirewallIn(BaseModel):
     # against). Same JOB_ADD-only gating as cluster_name — manual correction
     # goes through the dedicated mds-domain endpoint instead.
     mds_domain: str | None = None
+    # Operator-entered free-text labels, applied on every add AND edit
+    # (unlike cluster_name/mds_domain above) — plain UI metadata.
+    tags: list[str] = Field(default_factory=list)
 
 
 # -- app factory -------------------------------------------------------------------
@@ -1042,6 +1045,7 @@ def _register_routes(app: FastAPI) -> None:
                     "role": h.role,
                     "ssh_user": h.ssh_user,
                     "ssh_port": h.ssh_port,
+                    "tags": h.tags,
                 }
                 for h in _fwmgr(request).list_firewalls(env)
             ]
@@ -1067,6 +1071,7 @@ def _register_routes(app: FastAPI) -> None:
                 ),
                 cluster_name=body.cluster_name,
                 mds_domain=body.mds_domain,
+                tags=body.tags,
                 triggered_by=_current_user(request),
             )
         except OrchestratorError as exc:
@@ -1424,6 +1429,7 @@ def _register_routes(app: FastAPI) -> None:
                         "cluster_role": cached.cluster_role if cached else None,
                         "cluster_name": fw_row.cluster_name if fw_row else None,
                         "mds_domain": fw_row.mds_domain if fw_row else None,
+                        "tags": fw_row.tags if fw_row else [],
                     }
                 )
             return result
@@ -1479,6 +1485,7 @@ def _register_routes(app: FastAPI) -> None:
             "cluster_role": cached.cluster_role,
             "cluster_name": fw_row.cluster_name if fw_row else None,
             "mds_domain": fw_row.mds_domain if fw_row else None,
+            "tags": fw_row.tags if fw_row else [],
             "packages": packages,
         }
 

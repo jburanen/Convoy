@@ -251,6 +251,36 @@ def test_existing_firewall_submits_as_edit(
     assert firewalls[0].role == "cluster_member"
 
 
+def test_tags_are_applied_on_both_creation_and_edit(
+    service: ProvisioningJobService, firewall_manager: FirewallManager
+) -> None:
+    """Unlike cluster_name/mds_domain, tags are plain operator-edited data
+    (like notes) — applied on every add AND edit, never kind-gated."""
+    service.submit_put_firewall(
+        ENV,
+        name="fw-01",
+        address="192.0.2.20",
+        role="gateway",
+        ssh_user="admin",
+        ssh_port=22,
+        notes=None,
+        tags=["prod"],
+    )
+    assert firewall_manager.list_firewalls(ENV)[0].tags == ["prod"]
+
+    service.submit_put_firewall(
+        ENV,
+        name="fw-01",
+        address="192.0.2.20",
+        role="gateway",
+        ssh_user="admin",
+        ssh_port=22,
+        notes=None,
+        tags=["prod", "east-region"],
+    )
+    assert firewall_manager.list_firewalls(ENV)[0].tags == ["prod", "east-region"]
+
+
 def test_cluster_name_is_applied_on_creation(
     service: ProvisioningJobService, firewall_manager: FirewallManager
 ) -> None:
