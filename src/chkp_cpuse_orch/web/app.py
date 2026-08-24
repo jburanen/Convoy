@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import os
 import shutil
 import uuid
 from collections.abc import AsyncIterator, Callable
@@ -95,18 +94,6 @@ from .auth import (
 logger = get_logger(__name__)
 
 _STATIC_DIR = Path(__file__).parent / "static"
-
-# Shows the descriptive per-tab guide row under the tab bar by default; set to
-# false/0/no/off to hide it for operators who find it redundant once familiar.
-SHOW_TAB_HINTS_ENV = "CHKP_CPUSE_SHOW_TAB_HINTS"
-
-
-def _env_bool(name: str, default: bool) -> bool:
-    raw = os.environ.get(name)
-    if raw is None or raw == "":
-        return default
-    return raw.strip().lower() in ("1", "true", "yes", "on")
-
 
 # How often the background reaper sweeps for expired packages.
 _REAP_INTERVAL_SECONDS = 3600.0
@@ -769,7 +756,6 @@ def _register_routes(app: FastAPI) -> None:
             "version": __version__,
             "credentials_unlocked": request.app.state.credentials is not None,
             "auth_enabled": request.app.state.auth is not None,
-            "show_tab_hints": _env_bool(SHOW_TAB_HINTS_ENV, True),
             "environments": _registry(request).names(),
             "management_servers": sum(
                 len(service.management_servers(env)) for env in _registry(request).names()

@@ -45,7 +45,7 @@ body {
   color: var(--text);
 }
 
-header, main, footer, #tabs, #tab-guide-viewport {
+header, main, footer, #tabs {
   max-width: 1100px;
   margin: 0 auto;
   padding: 0 1.25rem;
@@ -179,53 +179,6 @@ footer {
   vertical-align: middle;
 }
 .tab-badge.hidden { display: none; } /* out-rank the generic .hidden */
-
-/* ---- tab guide: descriptive row under the tab bar ----
-   Five equal-width blocks (one per tab), always visible on every tab, with a
-   right-pointing chevron between them to signal the left-to-right sequence.
-   Text uses the disabled/CDT-tab color (muted + 0.4 opacity) at footer size.
-   The row slides horizontally so the active block centers under its tab; the
-   viewport clips the overflow and (when slid) fades content off the left edge. */
-#tab-guide-viewport {
-  margin-top: 0.75rem;
-  overflow: hidden;
-}
-#tab-guide-viewport.slid {
-  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 90px);
-  mask-image: linear-gradient(to right, transparent 0, #000 90px);
-}
-#tab-guide {
-  display: flex;
-  align-items: flex-start; /* blocks top-align; unequal-length text hangs down */
-  gap: 0.5rem;
-  transform: translateX(0);
-  transition: transform 0.35s ease;
-  will-change: transform;
-}
-.tab-guide-item {
-  flex: 1 1 0; /* five equal-width columns */
-  margin: 0;
-  text-align: center;
-  color: var(--muted);
-  opacity: 0.4; /* matches the disabled CDT tab title text */
-  font-size: 0.85rem; /* matches the footer text size */
-  line-height: 1.35;
-}
-.tab-guide-item.active {
-  opacity: 1; /* the active tab's blurb reads as normal muted text */
-}
-.tab-guide-chevron {
-  flex: 0 0 auto;
-  color: var(--muted);
-  opacity: 0.4;
-  font-size: 1.1rem;
-  line-height: 1;
-  user-select: none;
-}
-/* Too cramped for five text columns on narrow screens — hide the whole row. */
-@media (max-width: 720px) {
-  #tab-guide-viewport { display: none; }
-}
 
 /* panels: only the active tab's panel is shown */
 .tab-panel { display: none; }
@@ -905,6 +858,24 @@ button.link-btn.fw-name-link {
 .copy-icon:hover { color: var(--text); background: var(--badge-bg); filter: none; }
 .copy-icon.copied { color: var(--accent); border-color: var(--accent); }
 .copy-icon svg { width: 16px; height: 16px; display: block; }
+
+/* Per-panel help button: small "?" circle, always the right-most item in a
+   .section-head-actions row (see PANEL_HELP in panel-help.js). */
+.help-btn {
+  width: 1.5rem;
+  height: 1.5rem;
+  flex: none;
+  padding: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  font-size: 0.8rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+.help-btn:hover { color: var(--text); background: var(--badge-bg); filter: none; }
 
 /* New-environment form: let the name field grow so the row fills the modal and
    the placeholder example is fully readable. */

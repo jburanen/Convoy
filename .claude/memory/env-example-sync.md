@@ -21,7 +21,7 @@ undiscoverable — the operator won't know the knob exists.
   optional/tunable vars stay commented out showing their default.
 - Current runtime env vars: `CHKP_CPUSE_MASTER_KEY` (+ `_FILE`), `CHKP_CPUSE_CONFIG`,
   `CHKP_CPUSE_PACKAGE_RETENTION_DAYS`, `CHKP_CPUSE_SSL_CERTFILE`/`_KEYFILE` (native
-  HTTPS, `web/__main__.py`), `CHKP_CPUSE_SHOW_TAB_HINTS` (`web/app.py`),
+  HTTPS, `web/__main__.py`),
   `CHKP_CPUSE_WEB_LOG_LEVEL` (`reporting.resolve_log_level`, also applied to
   uvicorn's own logs by `web/__main__.py`), `CHKP_CPUSE_LOG_API_CALLS`
   (`transport/mgmt_api.py` — sanitized request/response logging), and the
