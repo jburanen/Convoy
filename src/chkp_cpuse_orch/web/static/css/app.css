@@ -682,12 +682,31 @@ button.link-btn.fw-name-link {
 #bulk-import-cloud-id, #fw-bulk-import-cloud-id { min-width: 22rem; }
 
 /* ---- firewalls-table free-text filter ---- */
+.fw-filter-row {
+  position: relative;
+  margin-top: 0.5rem;
+}
 .fw-filter-input {
   display: block;
   width: 100%;
   box-sizing: border-box;
-  margin-top: 0.5rem;
+  padding-right: 2rem; /* room for the clear button below */
 }
+.fw-filter-clear {
+  position: absolute;
+  top: 50%;
+  right: 0.4rem;
+  transform: translateY(-50%);
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  padding: 0.2rem;
+  line-height: 1;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.fw-filter-clear:hover { color: var(--text); filter: none; }
+.fw-filter-clear.hidden { display: none; }
 
 /* ---- firewall tags: chip-list input (Add/Edit modal) + display badges ---- */
 .tags-input-row { display: flex; gap: 0.4rem; align-items: center; }

@@ -1955,14 +1955,15 @@ function formatAgentBuild(raw) {
   return raw.replace(/^\s*build\s*number\s*:\s*/i, "").replace(/\s+/g, " ").trim();
 }
 
-// Adds `tag` as a token in #fw-filter (a no-op if it's already there — see
-// applyFirewallTableFilter's AND-of-space-separated-tokens design) and
-// re-applies the filter. Clicking a second tag badge narrows further
-// (AND), same as typing a second word would.
-function addTagToFirewallFilter(tag) {
+// Toggles `tag` as a token in #fw-filter — adds it if it isn't already
+// there (clicking a second tag badge narrows further, AND, same as typing a
+// second word would), or removes it if it is (clicking the same tag again
+// undoes that narrowing) — then re-applies the filter.
+function toggleTagInFirewallFilter(tag) {
   const input = document.getElementById("fw-filter");
   const tokens = input.value.trim().split(/\s+/).filter(Boolean);
-  if (!tokens.includes(tag)) tokens.push(tag);
+  const i = tokens.indexOf(tag);
+  if (i === -1) tokens.push(tag); else tokens.splice(i, 1);
   input.value = tokens.join(" ");
   applyFirewallTableFilter();
 }
@@ -1970,8 +1971,8 @@ function addTagToFirewallFilter(tag) {
 // Firewall tags (see services/firewalls.py) rendered as .badge chips, one
 // line — null when there's nothing to show so callers can skip the <br>
 // too. Servers never carry a `tags` field on their state object, so this is
-// always a no-op there. Each chip is clickable (mouse or keyboard) to filter
-// the table down to that tag — see addTagToFirewallFilter above.
+// always a no-op there. Each chip is clickable (mouse or keyboard) to
+// toggle that tag in the table filter — see toggleTagInFirewallFilter above.
 function buildFirewallTagsLine(tags) {
   if (!tags || !tags.length) return null;
   const line = document.createElement("span");
@@ -1982,12 +1983,12 @@ function buildFirewallTagsLine(tags) {
     badge.textContent = tag;
     badge.setAttribute("role", "button");
     badge.tabIndex = 0;
-    badge.title = `Filter the table to tag "${tag}"`;
-    badge.addEventListener("click", () => addTagToFirewallFilter(tag));
+    badge.title = `Toggle filtering the table to tag "${tag}"`;
+    badge.addEventListener("click", () => toggleTagInFirewallFilter(tag));
     badge.addEventListener("keydown", (ev) => {
       if (ev.key !== "Enter" && ev.key !== " ") return;
       ev.preventDefault(); // Space shouldn't also scroll the page
-      addTagToFirewallFilter(tag);
+      toggleTagInFirewallFilter(tag);
     });
     line.appendChild(badge);
   }
@@ -2563,7 +2564,9 @@ function _firewallRowMatchesToken(fields, token) {
 // re-run after every loadFirewalls() rebuild so the filter survives a
 // refresh/add/edit, and on every keystroke in #fw-filter.
 function applyFirewallTableFilter() {
-  const tokens = document.getElementById("fw-filter").value.trim().split(/\s+/).filter(Boolean);
+  const filterInput = document.getElementById("fw-filter");
+  const tokens = filterInput.value.trim().split(/\s+/).filter(Boolean);
+  document.getElementById("fw-filter-clear").classList.toggle("hidden", !filterInput.value);
   const tbody = document.querySelector("#firewalls-table tbody");
   let anyRow = false;
   let anyVisible = false;
@@ -2603,6 +2606,12 @@ function applyFirewallTableFilter() {
 }
 
 document.getElementById("fw-filter").addEventListener("input", applyFirewallTableFilter);
+document.getElementById("fw-filter-clear").addEventListener("click", () => {
+  const input = document.getElementById("fw-filter");
+  input.value = "";
+  applyFirewallTableFilter();
+  input.focus();
+});
 
 // Bumped on every call, checked after the awaits below — any two callers
 // racing loadFirewalls() (e.g. the firewall-remove handler's own reload
