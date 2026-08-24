@@ -1955,15 +1955,31 @@ function formatAgentBuild(raw) {
   return raw.replace(/^\s*build\s*number\s*:\s*/i, "").replace(/\s+/g, " ").trim();
 }
 
-// Toggles `tag` as a token in #fw-filter — adds it if it isn't already
-// there (clicking a second tag badge narrows further, AND, same as typing a
-// second word would), or removes it if it is (clicking the same tag again
-// undoes that narrowing) — then re-applies the filter.
+// Toggles `tag` as a run of tokens in #fw-filter — adds it if it isn't
+// already there (clicking a second tag badge narrows further, AND, same as
+// typing a second word would), or removes it if it is (clicking the same
+// tag again undoes that narrowing) — then re-applies the filter.
+//
+// #fw-filter has no quoting syntax (see applyFirewallTableFilter): its
+// value is always just whitespace-separated tokens, so a multi-word tag is
+// pushed as SEVERAL tokens (its own words), not one array element holding a
+// space — an earlier version pushed it as one element, which looked right
+// immediately but broke the moment the value round-tripped through the
+// input and got re-split on whitespace, since a plain indexOf could then
+// never find a multi-word tag as a single token again (it'd just get
+// re-added instead of removed). Matching/removal here instead looks for the
+// tag's own words as a contiguous run, so multi-word tags toggle as one
+// unit correctly.
 function toggleTagInFirewallFilter(tag) {
   const input = document.getElementById("fw-filter");
+  const tagWords = tag.trim().split(/\s+/).filter(Boolean);
+  if (!tagWords.length) return;
   const tokens = input.value.trim().split(/\s+/).filter(Boolean);
-  const i = tokens.indexOf(tag);
-  if (i === -1) tokens.push(tag); else tokens.splice(i, 1);
+  let start = -1;
+  for (let i = 0; i + tagWords.length <= tokens.length; i++) {
+    if (tagWords.every((w, j) => tokens[i + j] === w)) { start = i; break; }
+  }
+  if (start === -1) tokens.push(...tagWords); else tokens.splice(start, tagWords.length);
   input.value = tokens.join(" ");
   applyFirewallTableFilter();
 }
