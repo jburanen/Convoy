@@ -664,6 +664,7 @@ document.addEventListener("keydown", (ev) => {
   closeApiKeyRevealModal();
   closeServerModal();
   closeUninstallModal();
+  closeSparkMajorVersionModal(false);
   hideWelcome(); // soft close — the welcome dialog returns next load if still fresh
 });
 
@@ -1954,18 +1955,40 @@ function formatAgentBuild(raw) {
   return raw.replace(/^\s*build\s*number\s*:\s*/i, "").replace(/\s+/g, " ").trim();
 }
 
+// Adds `tag` as a token in #fw-filter (a no-op if it's already there — see
+// applyFirewallTableFilter's AND-of-space-separated-tokens design) and
+// re-applies the filter. Clicking a second tag badge narrows further
+// (AND), same as typing a second word would.
+function addTagToFirewallFilter(tag) {
+  const input = document.getElementById("fw-filter");
+  const tokens = input.value.trim().split(/\s+/).filter(Boolean);
+  if (!tokens.includes(tag)) tokens.push(tag);
+  input.value = tokens.join(" ");
+  applyFirewallTableFilter();
+}
+
 // Firewall tags (see services/firewalls.py) rendered as .badge chips, one
 // line — null when there's nothing to show so callers can skip the <br>
 // too. Servers never carry a `tags` field on their state object, so this is
-// always a no-op there.
+// always a no-op there. Each chip is clickable (mouse or keyboard) to filter
+// the table down to that tag — see addTagToFirewallFilter above.
 function buildFirewallTagsLine(tags) {
   if (!tags || !tags.length) return null;
   const line = document.createElement("span");
   line.className = "fw-tags-line";
   for (const tag of tags) {
     const badge = document.createElement("span");
-    badge.className = "badge";
+    badge.className = "badge fw-tag-badge";
     badge.textContent = tag;
+    badge.setAttribute("role", "button");
+    badge.tabIndex = 0;
+    badge.title = `Filter the table to tag "${tag}"`;
+    badge.addEventListener("click", () => addTagToFirewallFilter(tag));
+    badge.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Enter" && ev.key !== " ") return;
+      ev.preventDefault(); // Space shouldn't also scroll the page
+      addTagToFirewallFilter(tag);
+    });
     line.appendChild(badge);
   }
   return line;
@@ -2476,21 +2499,23 @@ function applyFirewallRowLockFromPackage() {
   setFirewallRowLock(value ? packageKind(value) : null);
 }
 
-// -- firewalls-table filter (name / address / role / credential set) -------------
+// -- firewalls-table filter (name / address / role / credential set / status) ----
 //
 // A single free-text box, space-separated tokens ANDed together (typing a
 // second word narrows further) — each token OR-matched against name/address/
-// role/credential-set/tags as a case-insensitive substring, EXCEPT a token
-// shaped like a full IPv4 address or a CIDR block, which is matched only
-// against the address column using real IP semantics (exact equality, or
-// subnet containment for a CIDR) instead of substring — a plain substring
-// match on an IP would be actively misleading (e.g. "10" would hit any
-// address with a "10" in any octet). A partially-typed address (not a
+// role/credential-set/detected-state-line as a case-insensitive substring,
+// EXCEPT a token shaped like a full IPv4 address or a CIDR block, which is
+// matched only against the address column using real IP semantics (exact
+// equality, or subnet containment for a CIDR) instead of substring — a plain
+// substring match on an IP would be actively misleading (e.g. "10" would hit
+// any address with a "10" in any octet). A partially-typed address (not a
 // complete valid IPv4) simply isn't IP-shaped, so it falls through to the
 // substring path like everything else — search-as-you-type on an address
-// prefix still works. Tags are read from the state row's rendered
-// .fw-tags-line (renderStateRow), not the editable-list data, since that's
-// the one place both are already resolved into plain text on the DOM.
+// prefix still works. The detected-state line (.srv-summary, renderStateRow)
+// covers version, JHF, CPUSE Agent build, cluster membership, and tags all
+// at once — read from the rendered DOM rather than the raw state object
+// since that's the one place all of it is already resolved into plain text
+// (e.g. the agent build's parenthetical status text already stripped).
 
 function _parseIpv4(text) {
   const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(text);
@@ -2530,7 +2555,7 @@ function _firewallRowMatchesToken(fields, token) {
     fields.address.toLowerCase().includes(needle) ||
     fields.role.toLowerCase().includes(needle) ||
     fields.creds.toLowerCase().includes(needle) ||
-    fields.tags.toLowerCase().includes(needle)
+    fields.status.toLowerCase().includes(needle)
   );
 }
 
@@ -2550,7 +2575,12 @@ function applyFirewallTableFilter() {
       address: row.querySelector(".fw-address")?.textContent || "",
       role: row.querySelector(".fw-role")?.textContent || "",
       creds: row.querySelector(".fw-creds")?.textContent || "",
-      tags: stateRow?.querySelector(".fw-tags-line")?.textContent || "",
+      // The whole detected-state line: version, JHF, CPUSE Agent build,
+      // cluster membership, and tags (.fw-tags-line is itself a child of
+      // .srv-summary, so this already covers what the old tags-only field
+      // did too) — lets version/build numbers be filtered on, not just
+      // inventory fields.
+      status: stateRow?.querySelector(".srv-summary")?.textContent || "",
     };
     const matches = tokens.every((t) => _firewallRowMatchesToken(fields, t));
     row.classList.toggle("hidden", !matches);
@@ -2627,6 +2657,9 @@ async function loadFirewalls() {
     // syncActionButtons (skip-verify hiding) — set before renderInstallSelect
     // below, which triggers the latter.
     row.dataset.role = fw.role;
+    // Read by installFirewallPackage's Spark major-version mismatch check —
+    // kept in sync on every refresh too (see refreshFirewallState below).
+    row.dataset.version = state?.version || "";
     renderInstallSelect(row, state?.installable ?? [], state?.installed ?? [], fw.name);
     row.querySelector(".skip-verify").checked = !!envSkipVerifyDefault[currentEnv];
     restoreRowSelection(row, fw.name, savedSelections);
@@ -2700,6 +2733,7 @@ async function refreshFirewallState(name, row, stateRow) {
     });
     const hasClusterLine = renderStateRow(stateRow, state, isSpark);
     row.classList.toggle("fw-cluster-member", hasClusterLine);
+    row.dataset.version = state.version || "";
     renderInstallSelect(row, state.installable ?? [], state.installed ?? [], name);
   } catch (e) {
     cacheEvictCreds(name); // a cached wrong/stale password re-prompts next time
@@ -2955,6 +2989,43 @@ document.getElementById("fw-refresh-all-btn").addEventListener("click", async ()
   }
 });
 
+// R80.10.00 and R80.10.10 are minor/take variants of the same R80.10 major
+// version — the major version is just the first two dot-separated numeric
+// groups. Tolerant of both the device-reported dotted form ("R81.10.17",
+// from a Spark row's cached data.version) and the package filename's
+// underscore form ("fw1_vx_dep_R81_10_17_996004936.img") since it's matched
+// against both. Returns null if nothing version-shaped is found (an
+// unrefreshed row, or a filename that doesn't follow the usual pattern) —
+// callers skip the mismatch check rather than guess.
+function sparkMajorVersion(text) {
+  const m = /R?(\d+)[._](\d+)/i.exec(text || "");
+  return m ? `${m[1]}.${m[2]}` : null;
+}
+
+// Resolves true (proceed) or false (cancel/close/backdrop) — same
+// Promise-per-button pattern as promptOverwriteChoice above.
+let _sparkMajorVersionResolve = null;
+function promptSparkMajorVersionConfirm(name, installedVersion, packageId, installedMajor, targetMajor) {
+  document.getElementById("spark-major-version-hint").textContent =
+    `${name} is currently running ${installedVersion} (major version R${installedMajor}), but ` +
+    `${packageId} is a different major version (R${targetMajor}). This is a bigger change than a ` +
+    "routine minor/take update — confirm this is intentional before continuing.";
+  document.getElementById("spark-major-version-modal").classList.remove("hidden");
+  return new Promise((resolve) => { _sparkMajorVersionResolve = resolve; });
+}
+function closeSparkMajorVersionModal(result) {
+  document.getElementById("spark-major-version-modal").classList.add("hidden");
+  const resolve = _sparkMajorVersionResolve;
+  _sparkMajorVersionResolve = null;
+  if (resolve) resolve(result);
+}
+document.getElementById("spark-major-version-close").addEventListener("click", () => closeSparkMajorVersionModal(false));
+document.getElementById("spark-major-version-cancel").addEventListener("click", () => closeSparkMajorVersionModal(false));
+document.getElementById("spark-major-version-confirm").addEventListener("click", () => closeSparkMajorVersionModal(true));
+document.getElementById("spark-major-version-modal").addEventListener("click", (ev) => {
+  if (ev.target.id === "spark-major-version-modal") closeSparkMajorVersionModal(false); // backdrop click cancels
+});
+
 async function installFirewallPackage(name, row) {
   const select = row.querySelector(".install-select");
   if (!select.value) { toast("Choose a package first."); return; }
@@ -2966,6 +3037,16 @@ async function installFirewallPackage(name, row) {
   // input still carries the environment's default checked state — don't
   // surface a CPUSE-only line about it here either.
   const isSpark = row.dataset.role === "spark_firewall";
+  if (isSpark) {
+    const installedMajor = sparkMajorVersion(row.dataset.version);
+    const targetMajor = sparkMajorVersion(packageId);
+    if (installedMajor && targetMajor && installedMajor !== targetMajor) {
+      const proceed = await promptSparkMajorVersionConfirm(
+        name, row.dataset.version, packageId, installedMajor, targetMajor
+      );
+      if (!proceed) return;
+    }
+  }
   // Installs can REBOOT the firewall — always confirm explicitly.
   const sure = confirm(
     `Install ${packageId} on ${name}?\n\n` +
