@@ -48,7 +48,13 @@ def transport() -> FakeTransport:
 def service(store: Store, tmp_path: Path, transport: FakeTransport) -> CDTService:
     store.insert_environment("default", credential_storage_enabled=True)
     creds = CredentialStore(store, master_key="unit test master key")
-    creds.put_set("default", "primary", ssh_username="admin", ssh_password="pw")
+    creds.put_set(
+        "default",
+        "primary",
+        ssh_username="admin",
+        ssh_password="pw",
+        expert_password="expert-pw",
+    )
     set_id = store.get_credential_set_by_name("default", "primary").id  # type: ignore[union-attr]
     packages = PackageStore(store, tmp_path / "packages")
     packages.add_stream(PKG, io.BytesIO(PKG_CONTENT))

@@ -110,6 +110,38 @@ def test_exit_expert_returns_to_login_prompt() -> None:
     assert channel.sent == [b"exit\n"]
 
 
+# -- run_expert_command (bash-native commands, real exit status) -----------------
+
+
+def test_run_expert_command_recovers_exit_status_and_strips_marker() -> None:
+    # The device echoes back the exact combined line run_expert_command sent
+    # (command + the appended `; echo <marker>:$?`) before its real output.
+    channel = FakeChannel(
+        [b"df -Pk /; echo __CHKP_ORCH_RC__:$?\nsome output\n__CHKP_ORCH_RC__:0\n[Expert@gw01]# "]
+    )
+    session = GaiaExpertSession(InteractiveShell(channel))
+    result = session.run_expert_command("df -Pk /", timeout=1.0)
+    assert result.exit_status == 0
+    assert result.stdout == "some output"
+    assert result.stderr == ""
+
+
+def test_run_expert_command_recovers_nonzero_exit_status() -> None:
+    channel = FakeChannel([b"false; echo __CHKP_ORCH_RC__:$?\n__CHKP_ORCH_RC__:1\n[Expert@gw01]# "])
+    session = GaiaExpertSession(InteractiveShell(channel))
+    result = session.run_expert_command("false", timeout=1.0)
+    assert result.exit_status == 1
+
+
+def test_run_expert_command_raises_when_marker_missing() -> None:
+    # Simulates output that doesn't carry the sentinel for some reason (e.g.
+    # an unexpected prompt) — must fail closed rather than guess a status.
+    channel = FakeChannel([b"echo hi; echo __CHKP_ORCH_RC__:$?\nhi\n[Expert@gw01]# "])
+    session = GaiaExpertSession(InteractiveShell(channel))
+    with pytest.raises(TransportError, match="could not recover an exit status"):
+        session.run_expert_command("echo hi", timeout=1.0)
+
+
 def test_full_expert_conversation() -> None:
     channel = FakeChannel(
         [

@@ -1,10 +1,28 @@
 """Render Gaia clish commands that provision this tool's service account.
 
-The operator pastes the generated commands into clish on EACH management server.
-The account gets ``/bin/bash`` as its login shell — required so SCP/SFTP package
-staging works (clish as a login shell blocks it). Because the shell is bash, all
-CPUSE operations go through the ``clish -c`` wrapper (``GaiaShell.EXPERT``, the
-default) and CDT/stat/pgrep commands run natively.
+The operator pastes the generated commands into clish on EACH management
+server. The account keeps Gaia's own default login shell — clish — rather
+than being switched to ``/bin/bash``: SSH lands the tool in clish, and it
+escalates to ``expert`` only for the specific commands that actually need it
+(CDT, disk checks, sha1 verification, ...), never standing root/bash access
+on connect. See .claude/memory/gaia-shell-posture.md.
+
+Gaia's SFTP/SCP subsystem needs a genuinely bash-shell session, which a
+clish login can't serve — package transfer handles this itself by
+temporarily flipping the account's own shell to ``/bin/bash`` for the
+duration of the transfer only, then flipping it back (``GaiaSession`` in
+transport/ssh.py), so nothing here needs to provision a standing bash shell
+for that purpose either.
+
+An account an operator supplies that already has ``/bin/bash`` as its login
+shell (older provisioning, or a pre-existing admin account) still works
+unchanged — detected live per connection, not configured here.
+
+Gaia's ``expert`` password (``set expert-password``) is a single secret
+configured on the device itself, not tied to any one OS account — whatever
+value is actually set on a given box is what belongs in that box's stored
+credential set (or a storage-disabled job's inline prompt), regardless of
+which account logs in.
 
 The password is embedded ONLY as a salted SHA-512 crypt hash (Gaia's
 ``set user ... password-hash``), so the rendered script is safe to display,
@@ -45,8 +63,13 @@ def render_gaia_user_commands(
 ) -> list[str]:
     """Clish commands to create the service account on one management server.
 
-    Rounds=5000 keeps the classic ``$6$salt$hash`` format (no ``rounds=``
-    directive) for maximum Gaia compatibility.
+    Leaves the shell at Gaia's own default — clish (``/etc/cli.sh``) — rather
+    than setting ``/bin/bash``: the tool elevates to ``expert`` itself,
+    on demand, and only ever touches bash directly for file transfer (which
+    briefly toggles the shell itself and restores it — see
+    .claude/memory/gaia-shell-posture.md). Rounds=5000 keeps the classic
+    ``$6$salt$hash`` format (no ``rounds=`` directive) for maximum Gaia
+    compatibility.
     """
     if not _USERNAME_RE.fullmatch(username):
         raise ProvisioningError(
@@ -67,7 +90,7 @@ def render_gaia_user_commands(
         f"add user {username} uid {uid} homedir /home/{username}",
         f"set user {username} password-hash {password_hash}",
         f"add rba user {username} roles {role}",
-        f"set user {username} gid 100 shell /bin/bash",
+        f"set user {username} gid 100",
         "save config",
     ]
 
@@ -129,15 +152,22 @@ def render_bootstrap_script(username: str, password: str) -> str:
     gateway via the Management API's ``run-script`` (services/
     gateway_bootstrap.py) — the same clish commands ``render_gaia_user_commands``
     renders for the Provisioning tab's bootstrap panel, each wrapped
-    ``clish -c "..."`` since ``run-script`` executes as bash, not clish (same
-    idiom as ``GaiaShell.EXPERT`` in cpuse.py)."""
+    ``clish -c "..."`` since ``run-script`` executes as bash, not clish —
+    unrelated to the account's own login shell (see
+    ``GaiaShell.EXPERT`` in transport/ssh.py for the equivalent idiom
+    elsewhere in this tool)."""
     commands = render_gaia_user_commands(username, password)
     return "\n".join(f"clish -c {shlex.quote(cmd)}" for cmd in commands)
 
 
 PROVISIONING_NOTES = [
-    "The user is created with a bash/expert shell to permit SCP transfers; the "
-    "`clish -c` is used for commands as needed.",
+    "The user keeps Gaia's default clish shell — this tool elevates to `expert` "
+    "itself, only for the specific commands that need it, and never leaves a "
+    "standing bash/expert session.",
+    "Also store an expert-mode password for this box in its credential set — "
+    "it's the device's own `expert` password (`set expert-password`), not tied "
+    "to this account, and is required before any CDT, install, or file-transfer "
+    "operation can run.",
     "The password appears only as a salted SHA-512 hash, never in plaintext.",
 ]
 

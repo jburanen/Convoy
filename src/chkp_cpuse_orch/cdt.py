@@ -135,10 +135,10 @@ class CDT:
     # -- read-only ----------------------------------------------------------------
 
     def is_available(self) -> bool:
-        return self._runner.run(f"test -x {self.binary}").ok
+        return self._runner.run_bash(f"test -x {self.binary}").ok
 
     def read_candidates(self) -> CandidatesFile:
-        result = self._runner.run(f"cat {self.candidates_path}")
+        result = self._runner.run_bash(f"cat {self.candidates_path}")
         if not result.ok:
             raise CDTError(
                 f"no candidates file at {self.candidates_path} — run generate first "
@@ -148,12 +148,12 @@ class CDT:
 
     def status(self) -> CDTStatus:
         """Process liveness + brief status text (empty string if none yet)."""
-        running = self._runner.run("pgrep -f CentralDeploymentTool >/dev/null").ok
-        brief = self._runner.run(f"cat {self._dir}/CDT_status_brief.txt 2>/dev/null")
+        running = self._runner.run_bash("pgrep -f CentralDeploymentTool >/dev/null").ok
+        brief = self._runner.run_bash(f"cat {self._dir}/CDT_status_brief.txt 2>/dev/null")
         return CDTStatus(running=running, brief=brief.stdout.strip())
 
     def full_status(self) -> str:
-        result = self._runner.run(f"cat {self._dir}/CDT_status.txt 2>/dev/null")
+        result = self._runner.run_bash(f"cat {self._dir}/CDT_status.txt 2>/dev/null")
         return result.stdout
 
     # -- mutating (caller gates on safety) -----------------------------------------
@@ -174,7 +174,7 @@ class CDT:
         polled via ``status()``. Refuses to start if CDT is already running."""
         if self.status().running:
             raise CDTError("a CentralDeploymentTool process is already running on this server")
-        result = self._runner.run(
+        result = self._runner.run_bash(
             f"nohup {self.binary} -execute {self.candidates_path} "
             f"> {self.execute_log_path} 2>&1 & echo started"
         )
@@ -184,7 +184,7 @@ class CDT:
     def _invoke(self, command: str, action: str) -> None:
         # Generate/preparations run in the foreground with a generous timeout;
         # only execute (fleet-wide, hours) goes through nohup.
-        result = self._runner.run(command, timeout=3600.0)
+        result = self._runner.run_bash(command, timeout=3600.0)
         if not result.ok:
             detail = result.stderr.strip() or result.stdout.strip()
             raise CDTError(f"CDT {action} failed (rc={result.exit_status}): {detail}")

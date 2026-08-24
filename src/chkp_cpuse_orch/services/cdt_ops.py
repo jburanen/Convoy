@@ -122,6 +122,7 @@ class CDTService:
             params={"package": package_filename},
             credentials=credentials,
             triggered_by=triggered_by,
+            require_expert=True,  # `stat`/upload/CDT config write are all bash-native
         )
 
     def submit_generate(
@@ -142,6 +143,7 @@ class CDTService:
             JOB_CDT_GENERATE,
             credentials=credentials,
             triggered_by=triggered_by,
+            require_expert=True,  # CDT itself is bash-native (Expert mode, uid 0)
         )
 
     def submit_prepare(
@@ -164,6 +166,7 @@ class CDTService:
             params={"extended": extended},
             credentials=credentials,
             triggered_by=triggered_by,
+            require_expert=True,  # CDT itself is bash-native (Expert mode, uid 0)
         )
 
     def submit_execute(
@@ -192,6 +195,7 @@ class CDTService:
             JOB_CDT_EXECUTE,
             credentials=credentials,
             triggered_by=triggered_by,
+            require_expert=True,  # CDT itself is bash-native (Expert mode, uid 0)
         )
 
     # -- job handlers ---------------------------------------------------------------
@@ -215,7 +219,7 @@ class CDTService:
         remote_pkg = posixpath.join(self._staging_dir, package)
 
         with self._job_session(ctx.job) as s:
-            existing = s.transport.run(f"stat -c %s {remote_pkg} 2>/dev/null")
+            existing = s.transport.run_bash(f"stat -c %s {remote_pkg} 2>/dev/null")
             if existing.ok and existing.stdout.strip() == str(local_size):
                 ctx.log(f"{package} already staged at {remote_pkg} (size matches) — skip upload")
             else:
@@ -297,7 +301,8 @@ class CDTService:
         one-shot (never stored) for storage-disabled environments."""
         connector = self.registry.get(environment)
         host = connector.mgmt_host(host_name)
-        creds = connector.require_credentials(host, credentials)
+        # Every CDT operation is bash-native (Expert mode, uid 0).
+        creds = connector.require_credentials(host, credentials, require_expert=True)
         return _CDTSession(connector.connect(host, creds))
 
     def _job_session(self, job: JobRecord) -> _CDTSession:

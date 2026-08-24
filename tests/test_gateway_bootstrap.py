@@ -60,7 +60,13 @@ def test_preview_renders_gaia_user_commands_from_assigned_set(
     store: Store, creds: CredentialStore, runner: JobRunner
 ) -> None:
     inv = _inventory(Host(name="fw-01", address="192.0.2.20", role=Role.GATEWAY))
-    creds.put_set("default", "primary", ssh_username="admin", ssh_password="s3cret-pw!")
+    creds.put_set(
+        "default",
+        "primary",
+        ssh_username="admin",
+        ssh_password="s3cret-pw!",
+        expert_password="expert-pw",
+    )
     _assign(store, inv, "fw-01", "primary")
     service = GatewayBootstrapService(registry=_registry(inv, creds), store=store, runner=runner)
 
@@ -74,7 +80,13 @@ def test_preview_rejects_private_key_only_credential_set(
     store: Store, creds: CredentialStore, runner: JobRunner
 ) -> None:
     inv = _inventory(Host(name="fw-01", address="192.0.2.20", role=Role.GATEWAY))
-    creds.put_set("default", "keyset", ssh_username="admin", ssh_private_key="KEYDATA")
+    creds.put_set(
+        "default",
+        "keyset",
+        ssh_username="admin",
+        ssh_private_key="KEYDATA",
+        expert_password="expert-pw",
+    )
     _assign(store, inv, "fw-01", "keyset")
     service = GatewayBootstrapService(registry=_registry(inv, creds), store=store, runner=runner)
 
@@ -118,7 +130,13 @@ def test_preview_rejects_spark_firewall(
     # Spark uses a different clish command family entirely (add administrator,
     # not add user/set user password-hash) — see preview_spark_admin_commands.
     inv = _inventory(Host(name="spark-01", address="192.0.2.30", role=Role.SPARK_FIREWALL))
-    creds.put_set("default", "primary", ssh_username="admin", ssh_password="s3cret-pw!")
+    creds.put_set(
+        "default",
+        "primary",
+        ssh_username="admin",
+        ssh_password="s3cret-pw!",
+        expert_password="expert-pw",
+    )
     _assign(store, inv, "spark-01", "primary")
     service = GatewayBootstrapService(registry=_registry(inv, creds), store=store, runner=runner)
 
@@ -130,7 +148,13 @@ def test_submit_bootstrap_rejects_spark_firewall(
     store: Store, creds: CredentialStore, runner: JobRunner
 ) -> None:
     inv = _inventory(Host(name="spark-01", address="192.0.2.30", role=Role.SPARK_FIREWALL))
-    creds.put_set("default", "primary", ssh_username="admin", ssh_password="s3cret-pw!")
+    creds.put_set(
+        "default",
+        "primary",
+        ssh_username="admin",
+        ssh_password="s3cret-pw!",
+        expert_password="expert-pw",
+    )
     _assign(store, inv, "spark-01", "primary")
     service = GatewayBootstrapService(registry=_registry(inv, creds), store=store, runner=runner)
 
@@ -142,7 +166,13 @@ def test_preview_spark_admin_commands_renders_add_administrator(
     store: Store, creds: CredentialStore, runner: JobRunner
 ) -> None:
     inv = _inventory(Host(name="spark-01", address="192.0.2.30", role=Role.SPARK_FIREWALL))
-    creds.put_set("default", "primary", ssh_username="admin", ssh_password="s3cret-pw!")
+    creds.put_set(
+        "default",
+        "primary",
+        ssh_username="admin",
+        ssh_password="s3cret-pw!",
+        expert_password="expert-pw",
+    )
     _assign(store, inv, "spark-01", "primary")
     service = GatewayBootstrapService(registry=_registry(inv, creds), store=store, runner=runner)
 
@@ -157,7 +187,13 @@ def test_preview_spark_admin_commands_rejects_non_spark_firewall(
     store: Store, creds: CredentialStore, runner: JobRunner
 ) -> None:
     inv = _inventory(Host(name="fw-01", address="192.0.2.20", role=Role.GATEWAY))
-    creds.put_set("default", "primary", ssh_username="admin", ssh_password="s3cret-pw!")
+    creds.put_set(
+        "default",
+        "primary",
+        ssh_username="admin",
+        ssh_password="s3cret-pw!",
+        expert_password="expert-pw",
+    )
     _assign(store, inv, "fw-01", "primary")
     service = GatewayBootstrapService(registry=_registry(inv, creds), store=store, runner=runner)
 
@@ -243,9 +279,21 @@ def _service_for_job(
         Host(name="mgmt-01", address="192.0.2.10", role=Role.PRIMARY_SMS),
         Host(name="fw-01", address="192.0.2.20", role=Role.GATEWAY),
     )
-    creds.put_set("default", "mgmt-creds", ssh_username="admin", ssh_password="mgmtpw123")
+    creds.put_set(
+        "default",
+        "mgmt-creds",
+        ssh_username="admin",
+        ssh_password="mgmtpw123",
+        expert_password="expert-pw",
+    )
     _assign(store, inv, "mgmt-01", "mgmt-creds")
-    creds.put_set("default", "fw-creds", ssh_username="admin", ssh_password="s3cret-pw!")
+    creds.put_set(
+        "default",
+        "fw-creds",
+        ssh_username="admin",
+        ssh_password="s3cret-pw!",
+        expert_password="expert-pw",
+    )
     _assign(store, inv, "fw-01", "fw-creds")
     return GatewayBootstrapService(
         registry=_registry(inv, creds),
@@ -311,9 +359,21 @@ def test_do_bootstrap_rejects_private_key_only_set_before_any_api_call(
         Host(name="mgmt-01", address="192.0.2.10", role=Role.PRIMARY_SMS),
         Host(name="fw-01", address="192.0.2.20", role=Role.GATEWAY),
     )
-    creds.put_set("default", "mgmt-creds", ssh_username="admin", ssh_password="mgmtpw123")
+    creds.put_set(
+        "default",
+        "mgmt-creds",
+        ssh_username="admin",
+        ssh_password="mgmtpw123",
+        expert_password="expert-pw",
+    )
     _assign(store, inv, "mgmt-01", "mgmt-creds")
-    creds.put_set("default", "keyset", ssh_username="admin", ssh_private_key="KEYDATA")
+    creds.put_set(
+        "default",
+        "keyset",
+        ssh_username="admin",
+        ssh_private_key="KEYDATA",
+        expert_password="expert-pw",
+    )
     _assign(store, inv, "fw-01", "keyset")
     calls: list[_FakeMgmtClient] = []
 

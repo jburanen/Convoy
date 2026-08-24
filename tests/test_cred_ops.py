@@ -41,7 +41,7 @@ def test_new_name_submits_as_add(
         ssh_username="admin",
         ssh_password="pw",
         ssh_private_key=None,
-        expert_password=None,
+        expert_password="expert-pw",
         api_key=None,
         default_if_none=False,
     )
@@ -58,7 +58,9 @@ def test_new_name_submits_as_add(
 def test_existing_name_submits_as_edit(
     service: CredentialJobService, credentials: CredentialStore
 ) -> None:
-    credentials.put_set(ENV, "primary", ssh_username="admin", ssh_password="pw")
+    credentials.put_set(
+        ENV, "primary", ssh_username="admin", ssh_password="pw", expert_password="expert-pw"
+    )
     job = service.submit_put(
         ENV,
         name="primary",
@@ -87,7 +89,7 @@ def test_default_if_none_sets_default_once(
         ssh_username="admin",
         ssh_password="pw",
         ssh_private_key=None,
-        expert_password=None,
+        expert_password="expert-pw",
         api_key=None,
         default_if_none=True,
     )
@@ -99,7 +101,7 @@ def test_default_if_none_sets_default_once(
         ssh_username="admin",
         ssh_password="pw2",
         ssh_private_key=None,
-        expert_password=None,
+        expert_password="expert-pw",
         api_key=None,
         default_if_none=True,
     )
@@ -128,13 +130,32 @@ def test_validation_error_surfaces_as_a_failed_job_not_a_raise(
     assert finished.status.value == "failed"
 
 
+def test_missing_expert_password_surfaces_as_a_failed_job(
+    service: CredentialJobService,
+) -> None:
+    job = service.submit_put(
+        ENV,
+        name="noexpert",
+        ssh_username="admin",
+        ssh_password="pw",
+        ssh_private_key=None,
+        expert_password=None,
+        api_key=None,
+        default_if_none=False,
+    )
+    assert job.status.value == "failed"
+    assert "expert-mode password" in (job.error or "")
+
+
 # -- delete -------------------------------------------------------------------------
 
 
 def test_delete_removes_the_set(
     service: CredentialJobService, credentials: CredentialStore
 ) -> None:
-    credentials.put_set(ENV, "primary", ssh_username="admin", ssh_password="pw")
+    credentials.put_set(
+        ENV, "primary", ssh_username="admin", ssh_password="pw", expert_password="expert-pw"
+    )
     job = service.submit_delete(ENV, "primary")
     assert job.kind == JOB_DELETE
     assert job.target == "primary"

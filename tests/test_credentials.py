@@ -33,9 +33,11 @@ def creds(store: Store) -> CredentialStore:
 
 
 def _put(creds: CredentialStore, name: str = "primary", **kw: str) -> None:
-    """Create a set; defaults to an SSH-password set unless overridden."""
+    """Create a set; defaults to an SSH-password + expert-password set unless
+    overridden."""
     kw.setdefault("ssh_username", "admin")
     kw.setdefault("ssh_password", "s3cret!")
+    kw.setdefault("expert_password", "expert-pw")
     creds.put_set("default", name, **kw)
 
 
@@ -78,7 +80,7 @@ def test_secret_never_in_repr(creds: CredentialStore, store: Store) -> None:
 
 def test_wrong_master_key_fails_fast(store: Store) -> None:
     CredentialStore(store, master_key="the right key").put_set(
-        "default", "primary", ssh_password="pw"
+        "default", "primary", ssh_password="pw", expert_password="expert-pw"
     )
     with pytest.raises(CredentialError, match="master key does not match"):
         CredentialStore(store, master_key="not the right key")
@@ -86,7 +88,7 @@ def test_wrong_master_key_fails_fast(store: Store) -> None:
 
 def test_same_key_reopens_fine(store: Store) -> None:
     CredentialStore(store, master_key="the right key").put_set(
-        "default", "primary", ssh_password="abc"
+        "default", "primary", ssh_password="abc", expert_password="expert-pw"
     )
     reopened = CredentialStore(store, master_key="the right key")
     bundle = reopened.get_set_bundle(_set_id(store), "mgmt-01")
@@ -98,9 +100,32 @@ def test_ssh_secret_required(creds: CredentialStore) -> None:
         creds.put_set("default", "noauth", expert_password="only-expert")
 
 
+def test_expert_password_required(creds: CredentialStore) -> None:
+    # Every stored host is a management server or a firewall, either of which
+    # may need to escalate to expert mode — see
+    # .claude/memory/gaia-shell-posture.md.
+    with pytest.raises(CredentialError, match="expert-mode password"):
+        creds.put_set("default", "noexpert", ssh_password="pw")
+
+
+def test_expert_password_kept_across_an_edit_that_omits_it(
+    creds: CredentialStore, store: Store
+) -> None:
+    creds.put_set("default", "primary", ssh_password="pw", expert_password="expert-pw")
+    creds.put_set("default", "primary", ssh_password="new-pw")  # expert password omitted
+    bundle = creds.get_set_bundle(_set_id(store), "mgmt-01")
+    assert bundle[CredentialKind.EXPERT_PASSWORD].reveal() == "expert-pw"
+
+
 def test_update_merges_and_preserves_id(creds: CredentialStore, store: Store) -> None:
-    # Bootstrap entry: SSH password only.
-    creds.put_set("default", "primary", ssh_username="admin", ssh_password="hunter22")
+    # Bootstrap entry: SSH password + expert password.
+    creds.put_set(
+        "default",
+        "primary",
+        ssh_username="admin",
+        ssh_password="hunter22",
+        expert_password="expert-pw",
+    )
     original_id = _set_id(store)
 
     # "Edit" it to add just the API key — no SSH secret re-entered.
@@ -116,7 +141,13 @@ def test_update_merges_and_preserves_id(creds: CredentialStore, store: Store) ->
 
 
 def test_update_can_replace_a_secret(creds: CredentialStore, store: Store) -> None:
-    creds.put_set("default", "primary", ssh_username="admin", ssh_password="old-pw")
+    creds.put_set(
+        "default",
+        "primary",
+        ssh_username="admin",
+        ssh_password="old-pw",
+        expert_password="expert-pw",
+    )
     creds.put_set("default", "primary", ssh_password="new-pw")  # username kept
     bundle = creds.get_set_bundle(_set_id(store), "mgmt-01")
     assert bundle[CredentialKind.SSH_PASSWORD].reveal() == "new-pw"
@@ -153,15 +184,26 @@ def test_password_xor_private_key(creds: CredentialStore) -> None:
 
 
 def test_private_key_set_bundle(creds: CredentialStore, store: Store) -> None:
-    creds.put_set("default", "keyset", ssh_username="admin", ssh_private_key="KEYDATA")
+    creds.put_set(
+        "default",
+        "keyset",
+        ssh_username="admin",
+        ssh_private_key="KEYDATA",
+        expert_password="expert-pw",
+    )
     bundle = creds.get_set_bundle(_set_id(store, "keyset"), "mgmt-01")
-    assert set(bundle) == {CredentialKind.SSH_PRIVATE_KEY}
+    assert set(bundle) == {CredentialKind.SSH_PRIVATE_KEY, CredentialKind.EXPERT_PASSWORD}
     assert bundle[CredentialKind.SSH_PRIVATE_KEY].reveal() == "KEYDATA"
 
 
 def test_list_sets_is_secret_free(creds: CredentialStore) -> None:
     creds.put_set(
-        "default", "primary", ssh_username="admin", ssh_password="classified", api_key="k"
+        "default",
+        "primary",
+        ssh_username="admin",
+        ssh_password="classified",
+        api_key="k",
+        expert_password="expert-pw",
     )
     infos = creds.list_sets("default")
     assert len(infos) == 1
@@ -170,7 +212,7 @@ def test_list_sets_is_secret_free(creds: CredentialStore) -> None:
     assert info.ssh_username == "admin"
     assert info.ssh_auth == "password"
     assert info.has_api is True
-    assert info.has_expert is False
+    assert info.has_expert is True
     assert "classified" not in repr(infos)
 
 

@@ -38,6 +38,16 @@ class ExpertModeError(TransportError):
     rejected" rather than a generic connectivity failure."""
 
 
+class GaiaShellRestoreError(TransportError):
+    """A file transfer temporarily flipped a clish-default account's login
+    shell to ``/bin/bash`` (Gaia's SFTP/SCP needs a genuinely bash-shell
+    session) and failed to flip it back to ``/etc/cli.sh`` afterward. This
+    must never be swallowed as a routine transfer failure: it means a
+    production box was left with a standing bash-shell admin account,
+    defeating the whole clish-login-plus-on-demand-expert posture. Surface it
+    loudly and tell the operator to fix the account's shell by hand."""
+
+
 class TransportTimeoutError(TransportError):
     """An expected pattern never appeared before the deadline, but the SSH
     channel never reported closed — distinct from the channel actually

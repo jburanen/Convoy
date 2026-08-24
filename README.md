@@ -102,7 +102,7 @@ These gates define the major version releases - the milestones may change in the
 ◻️ CDT deployment to Gaia/Force gateways  
 
 ### Roadmap / Punch List
-🪲 Bugfix ⏫ Probably a major change 🤞 Non-blocking nice-to-have ✨ Cosmetic only
+🪲 Bugfix ⏫ Required for next Major Version 🤞 Non-blocking nice-to-have ✨ Cosmetic only
 
 ✨ Add logic to display a warning on mobile devices that the UI of this tool does not scale down well (by design) and you should use it on a larger display.   
 ✨ Revisit ALL descriptive text and rewrite for clarity and brevity  
@@ -110,26 +110,22 @@ These gates define the major version releases - the milestones may change in the
 🤞 RADIUS auth option  
 🤞 Timed/scheduled install actions  
 
-#### Provisioning  
-⏫ Harden service account practices: move away from /bin/bash for Gaia
-
 #### Packages
 🤞 Add a percentage progress display for package upload  
 🤞 If disk space check fails, parse for large folders, suggest things to clean  
 
 #### Manual Patching (CPUSE)
-⏫ Add deployment agent upgrade option  
+🤞 Add deployment agent upgrade option  
 🤞 Some kind of sledgehammer to swing to release config/job lock from management server and firewalls if a job gets stranded/stuck  
-🤞 After removing bash shell for gaia gateway, add detection of shell upon login so you know if you need to use clish -c wrapper  
-🤞 Add columnn filters in firewalls panel for name, address and role and cred set  
-🤞 Are we checking for available disk on /storage for Spark copies - only need to care about room for the file  
+⏫ Add columnn filters in firewalls panel for name, address and role and cred set  
+⏫ Are we checking for available disk on /storage for Spark copies - only need to care about room for the file  
 🤞 Separate firewalls into two panels - Spark and non-Spark  
 🤞 For Spark gateways, warn if you've chosen a firmware package from a different major version  
 🤞 Leverage the gateway family identifier built into Spark filenames to limit choices  
-🤞 Add tags concept to firewalls for sorting/grouping/filtering  
+⏫ Add tags concept to firewalls for sorting/grouping/filtering  
 
 #### Jobs
-⏫ Add syslog output    
+🤞 Add syslog output    
 🤞 Add a download or a copy button for the install log  
 🤞 Allow import jobs to be cancelled during file copy stage - clean up partial file on target  
 ✨ Affirm in a push_to_repo job output that the temp storage was cleaned up  
@@ -137,6 +133,7 @@ These gates define the major version releases - the milestones may change in the
 ✨ Show current percentage when available in the output column so I don't have to expand the full job progress to see it  
 
 #### Squashed Bugs
+v0.60.0 Every non-Spark Gaia host (management servers, CPUSE-patched firewalls, CDT-driven gateways) was provisioned with `/bin/bash` as its service account's login shell - a standing root-equivalent SSH session on every connect, with no elevation step, the opposite of the clish-login-then-`expert`-as-needed posture Spark firewalls already used. Provisioning no longer sets a shell at all (Gaia's own default is clish); a new `GaiaSession` transport detects live per connection whether an account lands in clish or (for an operator's own pre-existing bash-shell account) bash, and only escalates to `expert` the first time a job actually needs a bash-native command (CDT, disk-space checks, sha1 verification, install-log capture, `mgmt_cli`, ...) - clish-only operations like a plain Refresh never elevate at all. File transfer (SFTP/SCP) needs a genuinely bash-shell session, which a clish login can't serve, so it's handled by briefly flipping the account's own shell to `/bin/bash`, reconnecting, transferring, and flipping it back - always, even on failure, since leaving the account on a standing bash shell would defeat the whole point. Every stored credential set now requires an expert-mode password (previously optional except for Spark's own opt-in flag), and a storage-disabled environment's job-time credential prompt now asks for one too, but only for operations that actually escalate  
 v0.59.0 Spark install used to guess at its own outcome from whatever its SSH session happened to observe issuing `upgrade_revert_image.sh` - real-hardware testing showed that observation is unreliable in both directions (see v0.58.2/v0.58.3), so it no longer tries. It now leaves that session alone, waits for the device's scheduled reboot to close it, pings the firewall until it responds again, reconnects over SSH, and compares `fw ver`'s reported build number against the installed package's own filename before declaring success - a confirmed mismatch fails the job, and giving up at the ping/reconnect stage without ever finding out is a distinct "timed out, go check" outcome rather than a false failure. The Jobs tab's Output column also now shows live status text ("installing", "waiting for reboot", "pinging", etc.) while an install runs, instead of staying blank until it finishes  
 v0.58.2 A Spark install could report "succeeded" against a firewall that was never actually reformatted with the new firmware - real hardware confirmed `upgrade_revert_image.sh`'s own `mount_pfrm_inactive_part()` checks the exit status of the `mount` command that runs *after* `mke2fs`, not `mke2fs`'s own status, so `mke2fs` refusing to format an already-mounted inactive partition (likely a stale mount left by an earlier, incomplete attempt) doesn't necessarily abort the script - it can silently extract the new image onto unformatted, stale storage. The install job now scans for `mke2fs`'s own refusal text and fails the job instead of reporting success, telling the operator to reboot the firewall to clear the stale mount first. Also corrected a misleading log message that framed the SSH session returning control as the job "giving up" before a reboot - the script itself returns control on success too, well before the reboot it schedules for ~1 minute later; removed a redundant `bashUser off` at the start of install (that's transfer's job, at the end of `spark.scp`, not install's to repeat)  
 v0.58.1 The Install confirmation dialog for a Spark firewall could say "Skipping `installer verify` — installing directly" - `installFirewallPackage`'s confirm() text was built purely from the (now-hidden, but still present and defaulted) skip-verify checkbox with no regard for host role, and `installer verify` isn't a CPUSE concept Spark has at all (Gaia Embedded has no CPUSE agent). The line is now only added for non-Spark rows  

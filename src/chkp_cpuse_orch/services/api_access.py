@@ -130,7 +130,7 @@ class ApiAccessService:
                 error=f"SSH connection to {primary.name} ({primary.address}) failed: {exc}"
             )
         try:
-            result = client.run("api status")
+            result = client.run_bash("api status")
         except TransportError as exc:
             return ApiAccessDiagnosis(error=f"`api status` failed: {exc}")
         finally:
@@ -176,7 +176,7 @@ class ApiAccessService:
         client = connector.connect(host)
         try:
             ctx.log(f"connected to {host.name} ({host.address}) over SSH")
-            status = require_ok(client.run("api status"))
+            status = require_ok(client.run_bash("api status"))
             _started, restricted = parse_api_status(status.stdout)
             if not restricted:
                 ctx.log(
@@ -187,12 +187,12 @@ class ApiAccessService:
                 "API accessibility is restricted to localhost — widening accepted-api-calls-from "
                 'to "All IP addresses that can be used for GUI clients"'
             )
-            require_ok(client.run(render_mgmt_login_command(is_mds=is_mds)))
-            require_ok(client.run(render_set_api_settings_command(is_mds=is_mds)))
+            require_ok(client.run_bash(render_mgmt_login_command(is_mds=is_mds)))
+            require_ok(client.run_bash(render_set_api_settings_command(is_mds=is_mds)))
             for cmd in render_publish_logout_commands():
-                require_ok(client.run(cmd))
+                require_ok(client.run_bash(cmd))
             ctx.log("published the change and logged out of mgmt_cli")
-            require_ok(client.run("api restart"))
+            require_ok(client.run_bash("api restart"))
             ctx.log("restarted the API server for the new setting to take effect")
         finally:
             client.close()

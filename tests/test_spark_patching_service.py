@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from chkp_cpuse_orch.credentials import CredentialStore, JobCredentialVault
-from chkp_cpuse_orch.errors import InventoryError, JobError, TransportError
+from chkp_cpuse_orch.errors import CredentialError, InventoryError, JobError, TransportError
 from chkp_cpuse_orch.inventory import Host, Inventory, Role, Site
 from chkp_cpuse_orch.jobs import JobRunner
 from chkp_cpuse_orch.packages import PackageStore
@@ -42,7 +42,20 @@ def creds(store: Store) -> CredentialStore:
         ssh_password="gaia-pw",
         expert_password="expert-pw",
     )
-    cs.put_set("default", "no-expert", ssh_username="admin", ssh_password="gaia-pw")
+    # Simulate a legacy set that predates the expert-password requirement —
+    # CredentialStore.put_set itself no longer allows creating one without an
+    # expert password, so this drops it directly via the store, bypassing
+    # that validation, to exercise the "the assigned set has none" path.
+    cs.put_set(
+        "default",
+        "no-expert",
+        ssh_username="admin",
+        ssh_password="gaia-pw",
+        expert_password="temp-pw",
+    )
+    row = store.get_credential_set_by_name("default", "no-expert")
+    assert row is not None
+    store.upsert_credential_set(row.model_copy(update={"expert_password_ct": None}))
     return cs
 
 
@@ -176,11 +189,12 @@ def test_test_credentials_succeeds(
 def test_test_credentials_short_circuits_without_expert_password(
     service: SparkPatchingService, store: Store, transport: FakeTransport
 ) -> None:
-    job = service.submit_test_credentials("default", "spark-02")  # "no-expert" set
-    _run(service)
-    finished = store.get_job(job.id)
-    assert finished.status is JobStatus.FAILED
-    assert finished.error is not None and "no expert-mode password" in finished.error
+    # Storage-enabled environments now gate this at submission time
+    # (HostConnector.require_credentials(require_expert=True)), same as a
+    # missing SSH secret already did — a config problem, not a connectivity
+    # one, so it fails before a job is even queued.
+    with pytest.raises(CredentialError, match="no expert-mode password"):
+        service.submit_test_credentials("default", "spark-02")  # "no-expert" set
     # No SSH attempted at all — the check happens before any connect.
     assert transport.interactive_shells == []
     assert transport.closed is False
@@ -267,11 +281,8 @@ def test_transfer_fails_on_sha1_mismatch(
 def test_transfer_fails_without_expert_password(
     service: SparkPatchingService, store: Store, transport: FakeTransport
 ) -> None:
-    job = service.submit_transfer("default", "spark-02", IMG)
-    _run(service)
-    finished = store.get_job(job.id)
-    assert finished.status is JobStatus.FAILED
-    assert finished.error is not None and "no expert-mode password" in finished.error
+    with pytest.raises(CredentialError, match="no expert-mode password"):
+        service.submit_transfer("default", "spark-02", IMG)
     assert transport.interactive_shells == []
 
 
@@ -587,11 +598,8 @@ def test_install_fails_when_package_filename_has_no_build_number(
 def test_install_fails_without_expert_password(
     service: SparkPatchingService, store: Store, transport: FakeTransport
 ) -> None:
-    job = service.submit_install("default", "spark-02", IMG, confirmed=True)
-    _run(service)
-    finished = store.get_job(job.id)
-    assert finished.status is JobStatus.FAILED
-    assert finished.error is not None and "no expert-mode password" in finished.error
+    with pytest.raises(CredentialError, match="no expert-mode password"):
+        service.submit_install("default", "spark-02", IMG, confirmed=True)
     assert transport.interactive_shells == []
 
 

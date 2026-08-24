@@ -46,7 +46,13 @@ def creds(store: Store) -> CredentialStore:
     # credential_sets.environment FKs to environments; create the env row first.
     store.insert_environment("default", credential_storage_enabled=True)
     cs = CredentialStore(store, master_key="unit test master key")
-    cs.put_set("default", "primary", ssh_username="admin", ssh_password="gaia-pw")
+    cs.put_set(
+        "default",
+        "primary",
+        ssh_username="admin",
+        ssh_password="gaia-pw",
+        expert_password="expert-pw",
+    )
     return cs
 
 
@@ -1164,7 +1170,13 @@ def _ssh_bundle(secret: str = "inline-pw") -> dict:
     return {
         CredentialKind.SSH_PASSWORD: Credential(
             host="mgmt-01", kind=CredentialKind.SSH_PASSWORD, secret=SecretStr(secret)
-        )
+        ),
+        # Several bash-native steps (disk check, sha1 verify, install-log
+        # capture) need this — see require_expert=True on submit_import/
+        # submit_install.
+        CredentialKind.EXPERT_PASSWORD: Credential(
+            host="mgmt-01", kind=CredentialKind.EXPERT_PASSWORD, secret=SecretStr("expert-pw")
+        ),
     }
 
 
@@ -1245,7 +1257,7 @@ def test_set_in_other_environment_does_not_satisfy_unassigned_server(
     # A credential set in another environment must NOT satisfy an unassigned
     # server here — resolution is strictly per-server assignment.
     store.insert_environment("other")
-    creds.put_set("other", "primary", ssh_password="other-env-pw")
+    creds.put_set("other", "primary", ssh_password="other-env-pw", expert_password="expert-pw")
     registry = EnvironmentRegistry()
     registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
     service = PatchingService(

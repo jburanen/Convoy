@@ -617,7 +617,8 @@
     <p class="hint" id="cred-add-hint">
       A named <strong>login set</strong>, stored encrypted at rest; secrets are never
       displayed again after saving. Give it an SSH password <em>or</em> a private key,
-      plus an optional expert password for privileged CPUSE steps.
+      plus an expert-mode password — SSH logs in as a plain clish user and elevates to
+      expert only when a job needs it.
     </p>
     <p class="hint hidden" id="cred-edit-hint"></p>
     <form id="credential-form" class="stacked">
@@ -625,7 +626,7 @@
       <label>SSH username<input type="text" id="cs-ssh-user" placeholder="admin"></label>
       <label>SSH password<input type="password" id="cs-ssh-password" autocomplete="new-password"></label>
       <label>SSH private key (instead of a password)<textarea id="cs-ssh-key" rows="3" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea></label>
-      <label>Expert password (optional)<input type="password" id="cs-expert" autocomplete="new-password"></label>
+      <label>Expert password<input type="password" id="cs-expert" autocomplete="new-password"></label>
       <label>API key (optional)<input type="password" id="cs-api" autocomplete="new-password"></label>
       <div class="cred-modal-actions">
         <button type="submit">Save credential set</button>
