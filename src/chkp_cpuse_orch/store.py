@@ -194,6 +194,12 @@ class FirewallRow(BaseModel):
     # Management API calls scoped to one Domain (e.g. cluster-name re-check)
     # need this to log in correctly on a Multi-Domain server.
     mds_domain: str | None = None
+    # Operator-entered free-text labels (e.g. "prod", "east-region") — plain
+    # UI metadata, no CPUSE/CDT meaning. Ordinary operator-edited field like
+    # notes (not discovery-set like cluster_name/mds_domain above), so it
+    # rides through upsert_firewall's normal INSERT/UPDATE and is never
+    # kind-gated. See store schema v26.
+    tags: list[str] = Field(default_factory=list)
 
 
 class ServerStateRow(BaseModel):
@@ -555,6 +561,14 @@ _MIGRATIONS: tuple[str, ...] = (
     """
     ALTER TABLE jobs ADD COLUMN status_text TEXT;
     """,
+    # v26: operator-entered free-text tags per firewall (e.g. "prod",
+    # "east-region") — JSON-list-with-default-empty, same convention as
+    # server_state.installable (v12). An ordinary operator-edited field, so
+    # (unlike cluster_name/mds_domain) it rides through upsert_firewall's
+    # normal INSERT/UPDATE, not a targeted UPDATE.
+    """
+    ALTER TABLE firewalls ADD COLUMN tags TEXT NOT NULL DEFAULT '[]';
+    """,
 )
 
 
@@ -894,11 +908,11 @@ class Store:
         with self._connect() as conn:
             conn.execute(
                 "INSERT INTO firewalls (id, environment, name, address, role, ssh_port,"
-                " ssh_user, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                " ssh_user, notes, tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (environment, name) DO UPDATE SET"
                 " address = excluded.address, role = excluded.role,"
                 " ssh_port = excluded.ssh_port, ssh_user = excluded.ssh_user,"
-                " notes = excluded.notes",
+                " notes = excluded.notes, tags = excluded.tags",
                 (
                     rec.id,
                     rec.environment,
@@ -908,6 +922,7 @@ class Store:
                     rec.ssh_port,
                     rec.ssh_user,
                     rec.notes,
+                    json.dumps(rec.tags),
                 ),
             )
 
@@ -1434,6 +1449,7 @@ def _firewall_from_row(row: sqlite3.Row) -> FirewallRow:
         credential_set_id=row["credential_set_id"],
         cluster_name=row["cluster_name"],
         mds_domain=row["mds_domain"],
+        tags=json.loads(row["tags"]),
     )
 
 

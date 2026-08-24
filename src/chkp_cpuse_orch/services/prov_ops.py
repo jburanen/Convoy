@@ -138,6 +138,7 @@ class ProvisioningJobService:
         credential_set: str | None | _Unset = UNSET,
         cluster_name: str | None = None,
         mds_domain: str | None = None,
+        tags: list[str] | None = None,
         triggered_by: str | None = None,
     ) -> JobRecord:
         kind = JOB_ADD if self._store.get_firewall(environment, name) is None else JOB_EDIT
@@ -149,6 +150,10 @@ class ProvisioningJobService:
         # previously-detected cluster name (or MDS domain) back to None.
         params["cluster_name"] = cluster_name
         params["mds_domain"] = mds_domain
+        # Unlike cluster_name/mds_domain, tags are plain operator-edited data
+        # (like notes) — applied on every add AND edit in _do_put, never
+        # kind-gated.
+        params["tags"] = tags or []
         job = self._start(
             kind, target=name, environment=environment, params=params, triggered_by=triggered_by
         )
@@ -206,6 +211,7 @@ class ProvisioningJobService:
                 ssh_user=p["ssh_user"],
                 ssh_port=p["ssh_port"],
                 notes=p.get("notes"),
+                tags=p.get("tags"),
             )
             if credential_set is not UNSET:
                 self._firewall_manager.assign_credential(environment, name, credential_set)

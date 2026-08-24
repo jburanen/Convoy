@@ -401,6 +401,9 @@
           </div>
         </div>
 
+        <input type="text" id="fw-filter" class="fw-filter-input"
+          placeholder="Filter by name, address (IP or CIDR), role, credential set, or tag — space-separated, all must match"
+          autocomplete="off">
         <table id="firewalls-table">
           <thead>
             <tr>
@@ -992,6 +995,18 @@
         <select id="fm-cred-select"><option value="">none — assign later</option></select>
       </label>
       <label>SSH port<input type="number" id="fm-port" value="22" min="1" max="65535"></label>
+      <!-- Free-text labels — type a tag and press Enter/Add, or pick one already
+           used elsewhere in this environment from the datalist suggestions.
+           currentFirewallTags (app.js) is the working list; this input only
+           ever adds to it, never submits directly. -->
+      <label>Tags
+        <div class="tags-input-row">
+          <input type="text" id="fm-tag-input" list="fw-tags-datalist" placeholder="type a tag…" autocomplete="off">
+          <button type="button" id="fm-tag-add" class="small secondary">Add</button>
+        </div>
+      </label>
+      <datalist id="fw-tags-datalist"></datalist>
+      <div id="fm-tags-list" class="tags-chip-list"></div>
       <!-- Edit mode only (hidden when adding — see openAddFirewallModal). Real
            cluster object name: resolved via the Management API at discovery
            time, or by clicking Re-check (Management API only — Check Point

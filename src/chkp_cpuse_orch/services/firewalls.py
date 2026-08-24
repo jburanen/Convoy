@@ -44,6 +44,7 @@ class FirewallManager:
         ssh_user: str,
         ssh_port: int = 22,
         notes: str | None = None,
+        tags: list[str] | None = None,
     ) -> None:
         """Add or update a firewall. Validates via the Host model. A newly
         added firewall inherits the environment's default credential set (if
@@ -71,6 +72,7 @@ class FirewallManager:
                 ssh_port=host.ssh_port,
                 ssh_user=host.ssh_user,
                 notes=notes,
+                tags=_clean_tags(tags),
             )
         )
         if is_new:
@@ -128,6 +130,22 @@ class FirewallManager:
     def _require_env(self, environment: str) -> None:
         if not self._store.environment_exists(environment):
             raise InventoryError(f"unknown environment: {environment!r}")
+
+
+def _clean_tags(tags: list[str] | None) -> list[str]:
+    """Trim whitespace, drop empties, and dedupe (exact-string; the UI
+    already prevents case-insensitive duplicates at entry time) while
+    preserving order — defense in depth against a direct API call, since the
+    UI's own tag-chip widget is the only place that normally builds this
+    list."""
+    if not tags:
+        return []
+    seen: dict[str, None] = {}
+    for tag in tags:
+        cleaned = tag.strip()
+        if cleaned:
+            seen.setdefault(cleaned, None)
+    return list(seen)
 
 
 def _parse_firewall_role(role: str) -> Role:

@@ -531,9 +531,6 @@ button.link-btn:disabled { opacity: 0.5; text-decoration: none; }
 .badge.ok { color: var(--ok); }
 .badge.warn { color: var(--warn); }
 .badge.err { color: var(--danger); }
-/* Agent-build status that isn't "up to date" — surfaced in orange (the --warn
-   amber) so an out-of-date/abnormal Deployment Agent stands out at a glance. */
-.agent-build-attention { color: var(--warn); font-weight: 600; }
 /* ClusterXL role prefix on a firewall's status line — Active in green (--ok),
    Standby in orange (--warn), matching the badge/agent-build conventions
    above; any other live state (DOWN, READY, ...) stays unstyled/muted. */
@@ -718,6 +715,42 @@ button.link-btn.fw-name-link {
   margin: 0.5rem 0;
 }
 #bulk-import-cloud-id, #fw-bulk-import-cloud-id { min-width: 22rem; }
+
+/* ---- firewalls-table free-text filter ---- */
+.fw-filter-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 0.5rem;
+}
+
+/* ---- firewall tags: chip-list input (Add/Edit modal) + display badges ---- */
+.tags-input-row { display: flex; gap: 0.4rem; align-items: center; }
+.tags-input-row input { flex: 1; }
+.tags-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin: 0.3rem 0 0.6rem;
+}
+.tags-chip-list:empty { margin: 0; } /* no gap reserved when there's nothing to show */
+.tag-chip-remove {
+  border: none;
+  background: none;
+  cursor: pointer;
+  margin-left: 0.3rem;
+  padding: 0;
+  font-weight: 700;
+  line-height: 1;
+  color: inherit;
+}
+/* Same spot the cluster-membership line occupies in the firewalls-table state
+   row (.srv-summary) — its own line, wrapped, small gap between badges. */
+.fw-tags-line {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
 
 /* ---- CDT (gateway deployment) controls ---- */
 .cdt-controls {

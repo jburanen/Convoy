@@ -580,6 +580,28 @@ def test_discover_firewalls_import_carries_mds_domain(client: TestClient) -> Non
     assert firewalls["fw-x"]["mds_domain"] == "CustomerA"
 
 
+def test_firewall_tags_roundtrip_on_both_list_endpoints(client: TestClient) -> None:
+    """Tags need to show up on both the editor list (GET .../environments/
+    {env}/firewalls, what the edit modal reads) and the cached-state list
+    (GET .../env/{env}/firewalls, what the table row renders from) — unlike
+    cluster_name/mds_domain, an ordinary edit (tags omitted) also updates
+    them, since tags are plain operator data like notes, not JOB_ADD-gated."""
+    job = _add_firewall(
+        client, name="fw-x", address="192.0.2.70", role="gateway", tags=["prod", "east-region"]
+    )
+    assert job["status"] == "succeeded", job["error"]
+
+    editable = {f["name"]: f for f in client.get("/api/environments/default/firewalls").json()}
+    assert editable["fw-x"]["tags"] == ["prod", "east-region"]
+    cached = {f["name"]: f for f in client.get("/api/env/default/firewalls").json()}
+    assert cached["fw-x"]["tags"] == ["prod", "east-region"]
+
+    # An ordinary edit replaces the full tag list, same as notes.
+    _add_firewall(client, name="fw-x", address="192.0.2.70", role="gateway", tags=["prod"])
+    cached = {f["name"]: f for f in client.get("/api/env/default/firewalls").json()}
+    assert cached["fw-x"]["tags"] == ["prod"]
+
+
 def test_firewall_set_mds_domain_manually(client: TestClient) -> None:
     _add_firewall(client, name="fw-x", address="192.0.2.70", role="gateway")
     resp = client.post(

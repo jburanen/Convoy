@@ -195,6 +195,52 @@ def test_editing_a_firewall_never_clobbers_a_previously_set_cluster_name(store: 
     assert store.get_firewall("corp", "fw-1").cluster_name == "prod-cluster"  # type: ignore[union-attr]
 
 
+def test_add_firewall_stores_and_updates_tags(store: Store) -> None:
+    registry = EnvironmentRegistry()
+    env_mgr, fw_mgr = _managers(store, registry)
+    env_mgr.create_environment("corp")
+    fw_mgr.add_firewall(
+        "corp",
+        name="fw-1",
+        address="10.0.0.1",
+        role="gateway",
+        ssh_user="admin",
+        tags=["prod", "east-region"],
+    )
+    assert store.get_firewall("corp", "fw-1").tags == ["prod", "east-region"]  # type: ignore[union-attr]
+
+    # Unlike cluster_name/mds_domain, tags are a plain operator-edited field
+    # (like notes) — an ordinary edit replaces the full list, including
+    # clearing it back to empty if the caller omits tags entirely.
+    fw_mgr.add_firewall(
+        "corp",
+        name="fw-1",
+        address="10.0.0.1",
+        role="gateway",
+        ssh_user="admin",
+        tags=["prod"],
+    )
+    assert store.get_firewall("corp", "fw-1").tags == ["prod"]  # type: ignore[union-attr]
+
+    fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.1", role="gateway", ssh_user="admin")
+    assert store.get_firewall("corp", "fw-1").tags == []  # type: ignore[union-attr]
+
+
+def test_firewall_tags_are_trimmed_and_deduped(store: Store) -> None:
+    registry = EnvironmentRegistry()
+    env_mgr, fw_mgr = _managers(store, registry)
+    env_mgr.create_environment("corp")
+    fw_mgr.add_firewall(
+        "corp",
+        name="fw-1",
+        address="10.0.0.1",
+        role="gateway",
+        ssh_user="admin",
+        tags=["  prod  ", "prod", "", "   ", "east-region"],
+    )
+    assert store.get_firewall("corp", "fw-1").tags == ["prod", "east-region"]  # type: ignore[union-attr]
+
+
 def test_set_domain(store: Store) -> None:
     registry = EnvironmentRegistry()
     env_mgr, fw_mgr = _managers(store, registry)

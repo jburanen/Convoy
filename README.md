@@ -87,12 +87,10 @@ These gates define the major version releases - the milestones may change in the
 ✅ Basic auth  
 ✅ Native TLS support  
 ✅ Test functionality behind Nginx/NPM  
-◻️ Test firewall discovery in SMS/Smart Center environment  
+✅ Test firewall discovery in SMS/Smart Center environment  
 ✅ Test firewall discovery in MDS/Multi-Domain environment  
-◻️ Test firewall cluster name discovery in SMS  
-✅ Test firewall cluster name discovery in MDS  
 ✅ Test Gaia/Force Gateway patching via CPUSE  
-◻️ Test Spark (Gaia Embedded) firmware patching via upgrade_revert_image.sh  
+✅ Test Spark (Gaia Embedded) firmware patching via upgrade_revert_image.sh  
 ◻️ Test Spark major version patching - ie 80.20.X > 81.10.X  
 ◻️ Packaged deployment release that doesn't require git clone and --build  
 ◻️ Independent agentic code security review  
@@ -102,13 +100,16 @@ These gates define the major version releases - the milestones may change in the
 ◻️ CDT deployment to Gaia/Force gateways  
 
 ### Roadmap / Punch List
-🪲 Bugfix ⏫ Required for next Major Version 🤞 Non-blocking nice-to-have ✨ Cosmetic only
+🪲 Bugfix ⏫ Required for next release 🤞 Non-blocking nice-to-have ✨ Cosmetic only
 
 ✨ Add logic to display a warning on mobile devices that the UI of this tool does not scale down well (by design) and you should use it on a larger display.   
 ✨ Revisit ALL descriptive text and rewrite for clarity and brevity  
 🤞 Built-in help docs with ? button on each page/panel with long-form descriptive text  
 🤞 RADIUS auth option  
 🤞 Timed/scheduled install actions  
+
+#### Provisioning
+⏫ Smart-1 Cloud support: API-only management concept, firewall discovery only  
 
 #### Packages
 🤞 Add a percentage progress display for package upload  
@@ -117,12 +118,11 @@ These gates define the major version releases - the milestones may change in the
 #### Manual Patching (CPUSE)
 🤞 Add deployment agent upgrade option  
 🤞 Some kind of sledgehammer to swing to release config/job lock from management server and firewalls if a job gets stranded/stuck  
-⏫ Add columnn filters in firewalls panel for name, address and role and cred set  
 ⏫ Are we checking for available disk on /storage for Spark copies - only need to care about room for the file  
 🤞 Separate firewalls into two panels - Spark and non-Spark  
 🤞 For Spark gateways, warn if you've chosen a firmware package from a different major version  
 🤞 Leverage the gateway family identifier built into Spark filenames to limit choices  
-⏫ Add tags concept to firewalls for sorting/grouping/filtering  
+🤞 Sort/group the firewalls table by tag (tags themselves - storage, tagging UI, display, and filtering - shipped in v0.62.0)  
 
 #### Jobs
 🤞 Add syslog output    
@@ -133,6 +133,8 @@ These gates define the major version releases - the milestones may change in the
 ✨ Show current percentage when available in the output column so I don't have to expand the full job progress to see it  
 
 #### Squashed Bugs
+v0.62.0 Firewalls had no way to attach operator-defined labels (e.g. "prod", "east-region") - added a `tags` property (JSON list, new `firewalls.tags` column) alongside the existing notes-style fields, edited via a chip-list widget in the Add/Edit Firewall modal (type a tag and press Enter/Add, or pick one already used elsewhere in the environment from the datalist suggestions - free text either way, nothing enforced). Unlike cluster_name/mds_domain, tags are ordinary operator data like notes - every add or edit replaces the full list, never kind-gated to creation only. Displayed on the firewalls table's detected-state row in the same spot cluster membership already occupies, as small badges, and shown even before a firewall's first Refresh (cluster membership itself still needs one, since it's genuinely live-refreshed data - tags aren't). Also wired into last version's free-text table filter, so a tag is now one more thing a typed word can match  
+v0.61.0 The Firewalls panel had no way to narrow a long table down to a specific host, subnet, role, or credential set - added a single free-text filter box spanning the table width, above the header row. Space-separated words are ANDed together (each one narrows further), matched case-insensitively against name/role/credential-set as substrings; a word shaped like a full IPv4 address or a CIDR block (e.g. `192.0.2.10` or `192.0.2.0/24`) is instead matched against the address column with real IP semantics - exact equality or subnet containment - rather than as a substring, since naive substring matching on an IP (e.g. "10" hitting any address with a "10" in any octet) would be actively misleading; a partially-typed address that isn't a complete valid IPv4 just falls through to substring matching like everything else. Client-side only (no API round trip), re-applied after every table refresh/add/edit and cleared on environment switch  
 v0.60.0 Every non-Spark Gaia host (management servers, CPUSE-patched firewalls, CDT-driven gateways) was provisioned with `/bin/bash` as its service account's login shell - a standing root-equivalent SSH session on every connect, with no elevation step, the opposite of the clish-login-then-`expert`-as-needed posture Spark firewalls already used. Provisioning no longer sets a shell at all (Gaia's own default is clish); a new `GaiaSession` transport detects live per connection whether an account lands in clish or (for an operator's own pre-existing bash-shell account) bash, and only escalates to `expert` the first time a job actually needs a bash-native command (CDT, disk-space checks, sha1 verification, install-log capture, `mgmt_cli`, ...) - clish-only operations like a plain Refresh never elevate at all. File transfer (SFTP/SCP) needs a genuinely bash-shell session, which a clish login can't serve, so it's handled by briefly flipping the account's own shell to `/bin/bash`, reconnecting, transferring, and flipping it back - always, even on failure, since leaving the account on a standing bash shell would defeat the whole point. Every stored credential set now requires an expert-mode password (previously optional except for Spark's own opt-in flag), and a storage-disabled environment's job-time credential prompt now asks for one too, but only for operations that actually escalate  
 v0.59.0 Spark install used to guess at its own outcome from whatever its SSH session happened to observe issuing `upgrade_revert_image.sh` - real-hardware testing showed that observation is unreliable in both directions (see v0.58.2/v0.58.3), so it no longer tries. It now leaves that session alone, waits for the device's scheduled reboot to close it, pings the firewall until it responds again, reconnects over SSH, and compares `fw ver`'s reported build number against the installed package's own filename before declaring success - a confirmed mismatch fails the job, and giving up at the ping/reconnect stage without ever finding out is a distinct "timed out, go check" outcome rather than a false failure. The Jobs tab's Output column also now shows live status text ("installing", "waiting for reboot", "pinging", etc.) while an install runs, instead of staying blank until it finishes  
 v0.58.2 A Spark install could report "succeeded" against a firewall that was never actually reformatted with the new firmware - real hardware confirmed `upgrade_revert_image.sh`'s own `mount_pfrm_inactive_part()` checks the exit status of the `mount` command that runs *after* `mke2fs`, not `mke2fs`'s own status, so `mke2fs` refusing to format an already-mounted inactive partition (likely a stale mount left by an earlier, incomplete attempt) doesn't necessarily abort the script - it can silently extract the new image onto unformatted, stale storage. The install job now scans for `mke2fs`'s own refusal text and fails the job instead of reporting success, telling the operator to reboot the firewall to clear the stale mount first. Also corrected a misleading log message that framed the SSH session returning control as the job "giving up" before a reboot - the script itself returns control on success too, well before the reboot it schedules for ~1 minute later; removed a redundant `bashUser off` at the start of install (that's transfer's job, at the end of `spark.scp`, not install's to repeat)  
