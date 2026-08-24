@@ -331,6 +331,34 @@ document.getElementById("cred-cache-forget").addEventListener("click", () => {
   toast("Session credentials cleared from this tab.");
 });
 
+// Narrows #env-picker to fit only the currently selected environment's name.
+// A plain <select> with no explicit width sizes its closed box to the
+// WIDEST option among all of them, not the selected one — this measures the
+// selected option's text with a scratch <canvas> (cheap, no layout
+// reflow) and sets an inline width instead. The opened dropdown's own item
+// widths are untouched by this — that's native <select> popup rendering,
+// independent of the closed control's width.
+let _measureCanvas = null;
+function _measureTextWidth(text, font) {
+  if (!_measureCanvas) _measureCanvas = document.createElement("canvas");
+  const ctx = _measureCanvas.getContext("2d");
+  ctx.font = font;
+  return ctx.measureText(text).width;
+}
+// Extra px beyond the measured text for the select's own border/padding and
+// the browser-drawn dropdown arrow (not measurable — none of those are part
+// of the text itself). A little generous on purpose: better to leave a few
+// spare px than clip the name.
+const ENV_PICKER_CHROME_PX = 44;
+function resizeEnvPicker() {
+  const picker = document.getElementById("env-picker");
+  const selected = picker.options[picker.selectedIndex];
+  const text = selected ? selected.textContent : "";
+  const style = getComputedStyle(picker);
+  const font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+  picker.style.width = `${Math.ceil(_measureTextWidth(text, font)) + ENV_PICKER_CHROME_PX}px`;
+}
+
 async function loadEnvironments() {
   const picker = document.getElementById("env-picker");
   const envs = await api("/api/environments");
@@ -359,6 +387,7 @@ async function loadEnvironments() {
     currentEnv = envs.length ? envs[0].name : null;
   }
   picker.value = currentEnv ?? "";
+  resizeEnvPicker();
   // Picker is always shown now (it hosts the manage entry even with one env).
   document.getElementById("env-row").classList.remove("hidden");
   return envs;
@@ -368,6 +397,7 @@ async function selectEnvironment(name) {
   currentEnv = name;
   localStorage.setItem("currentEnv", currentEnv);
   document.getElementById("env-picker").value = name;
+  resizeEnvPicker();
   // Reload everything env-scoped; clear CDT state and the firewalls-table
   // filter (both are per-environment context) from the previous env.
   cdtCandidates = null;
