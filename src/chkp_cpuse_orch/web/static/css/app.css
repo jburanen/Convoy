@@ -487,6 +487,15 @@ button.link-btn:disabled { opacity: 0.5; text-decoration: none; }
 .badge.ok { color: var(--ok); }
 .badge.warn { color: var(--warn); }
 .badge.err { color: var(--danger); }
+/* Firewalls-table tag chips: clickable to filter the table down to that tag
+   (see addTagToFirewallFilter in app.js) — a visible affordance beyond the
+   plain, unclickable badges elsewhere (job status, etc.). */
+.fw-tag-badge { cursor: pointer; }
+.fw-tag-badge:hover, .fw-tag-badge:focus-visible {
+  background: var(--accent);
+  color: var(--accent-text);
+  outline: none;
+}
 /* ClusterXL role prefix on a firewall's status line — Active in green (--ok),
    Standby in orange (--warn), matching the badge/agent-build conventions
    above; any other live state (DOWN, READY, ...) stays unstyled/muted. */

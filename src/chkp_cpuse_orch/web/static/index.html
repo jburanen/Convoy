@@ -348,7 +348,7 @@
         </div>
 
         <input type="text" id="fw-filter" class="fw-filter-input"
-          placeholder="Filter by name, address (IP or CIDR), role, credential set, or tag — space-separated, all must match"
+          placeholder="Filter by name, address (IP or CIDR), role, credential set, version/build, or tag — space-separated, all must match"
           autocomplete="off">
         <table id="firewalls-table">
           <thead>
@@ -643,6 +643,26 @@
       <button type="button" id="prov-overwrite-new">Save as new entry</button>
       <button type="button" id="prov-overwrite-overwrite" class="danger">Overwrite existing set</button>
       <button type="button" id="prov-overwrite-skip" class="secondary">Don't save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ Spark major-version mismatch confirm (Firewalls Install) ===== -->
+<!-- Shown before the usual reboot confirm() when the picked .img's major
+     version (first two dot/underscore-separated numeric groups) differs
+     from the firewall's currently detected one — see installFirewallPackage/
+     sparkMajorVersion in app.js. Resolves a Promise<boolean>, same pattern
+     as #prov-overwrite-modal above. -->
+<div id="spark-major-version-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="spark-major-version-title">
+  <div class="modal-card narrow">
+    <div class="modal-head">
+      <h2 id="spark-major-version-title">Different major version</h2>
+      <button id="spark-major-version-close" class="small" title="Close">✕</button>
+    </div>
+    <p class="hint warn" id="spark-major-version-hint"></p>
+    <div class="cred-modal-actions">
+      <button type="button" id="spark-major-version-confirm" class="danger">Install anyway</button>
+      <button type="button" id="spark-major-version-cancel" class="secondary">Cancel</button>
     </div>
   </div>
 </div>
