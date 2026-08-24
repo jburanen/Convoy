@@ -189,7 +189,11 @@ class CredentialSetIn(BaseModel):
     private key) is expected; an expert-mode password is required too — every
     stored host is a management server or a firewall, either of which may
     need to escalate to expert mode (see .claude/memory/gaia-shell-posture.md)
-    — enforced in ``CredentialStore.put_set``. API key stays optional."""
+    — enforced in ``CredentialStore.put_set``. API key stays optional.
+
+    An API-only environment (``HostConnector.api_only``) relaxes all of the
+    above: its sets need only an API key, since there's no SSH service
+    account to reach at all — see ``put_set``'s ``api_only`` parameter."""
 
     name: str = Field(min_length=1)
     ssh_username: str | None = None
@@ -331,6 +335,10 @@ class EnvironmentIn(BaseModel):
 
 class EnvironmentKindIn(BaseModel):
     is_mds: bool
+
+
+class EnvironmentAccessIn(BaseModel):
+    api_only: bool
 
 
 class SkipVerifyDefaultIn(BaseModel):
@@ -875,6 +883,7 @@ def _register_routes(app: FastAPI) -> None:
                 .get(env)
                 .credential_storage_enabled,
                 "is_mds": _registry(request).get(env).is_mds,
+                "api_only": _registry(request).get(env).api_only,
                 "skip_verify_by_default": skip_verify_by_default.get(env, False),
             }
             for env in _registry(request).names()
@@ -933,6 +942,19 @@ def _register_routes(app: FastAPI) -> None:
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
         return {"is_mds": body.is_mds}
+
+    @app.post("/api/environments/{env}/access")
+    def set_environment_access(
+        env: str, body: EnvironmentAccessIn, request: Request
+    ) -> dict[str, Any]:
+        """Declare an environment SSH-reachable or API-only — decides whether
+        SSH to its management servers is allowed at all (see
+        HostConnector.api_only). Orthogonal to is_mds."""
+        try:
+            _envmgr(request).set_environment_access(env, body.api_only)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        return {"api_only": body.api_only}
 
     @app.post("/api/environments/{env}/skip-verify-default")
     def set_skip_verify_default(
@@ -1884,6 +1906,7 @@ def _register_routes(app: FastAPI) -> None:
                 expert_password=_reveal(body.expert_password),
                 api_key=_reveal(body.api_key),
                 default_if_none=body.default_if_none,
+                api_only=_registry(request).get(env).api_only,
                 triggered_by=_current_user(request),
             )
         except OrchestratorError as exc:

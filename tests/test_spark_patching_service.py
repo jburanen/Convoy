@@ -286,6 +286,43 @@ def test_transfer_fails_without_expert_password(
     assert transport.interactive_shells == []
 
 
+def _low_df(mount: str) -> str:
+    return (
+        "Filesystem     1024-blocks     Used  Available Capacity Mounted on\n"
+        f"/dev/sda1               10        9          0       99% {mount}"
+    )
+
+
+def test_transfer_fails_when_storage_has_insufficient_space(
+    service: SparkPatchingService, store: Store, transport: FakeTransport
+) -> None:
+    # Checked before ever touching device state — no bashUser, no transfer.
+    transport.responses["df -Pk /storage"] = _low_df("/storage")
+    job = service.submit_transfer("default", "spark-01", IMG)
+    _run(service)
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.FAILED
+    assert finished.error is not None
+    assert "not enough free space on /storage" in finished.error
+    assert transport.interactive_shells == []
+    assert transport.puts == []
+    cached = store.get_server_state("default", "spark-01")
+    assert cached is None or IMG not in cached.installable
+
+
+def test_transfer_job_logs_storage_space_ok_when_sufficient(
+    service: SparkPatchingService, store: Store, transport: FakeTransport
+) -> None:
+    # No override needed — FakeTransport's own `df -Pk` fallback reports
+    # plenty of free space (see tests/fakes.py).
+    job = service.submit_transfer("default", "spark-01", IMG)
+    _run(service)
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.SUCCEEDED, finished.error
+    events = [e.message for e in store.events(job.id)]
+    assert any("disk space OK on /storage" in e for e in events)
+
+
 # -- install job --------------------------------------------------------------------
 
 

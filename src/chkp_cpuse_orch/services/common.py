@@ -8,6 +8,7 @@ and open a transport via a swappable factory (tests inject fakes).
 
 from __future__ import annotations
 
+import shlex
 from collections.abc import Callable
 from typing import Any, Protocol
 
@@ -115,6 +116,7 @@ class HostConnector:
         *,
         credential_storage_enabled: bool = True,
         is_mds: bool = False,
+        api_only: bool = False,
     ) -> None:
         self.inventory = inventory
         self.environment = environment
@@ -124,6 +126,12 @@ class HostConnector:
         # Command selection (e.g. discovery) reads this instead of guessing from
         # whichever host happens to be the primary.
         self.is_mds = is_mds
+        # Declared once per environment, orthogonal to is_mds — this estate's
+        # management server(s) are reachable ONLY via the Management API, never
+        # SSH (e.g. a cloud/third-party-managed SMS the operator only has an
+        # API key for). Enforced in require_ssh_credential()/connect() below;
+        # never blocks firewalls, which are unrelated to mgmt reachability.
+        self.api_only = api_only
         self._credentials = credentials
         self._client_factory = client_factory or default_client_factory
 
@@ -199,6 +207,23 @@ class HostConnector:
             return None
         return self._credentials.set_name(host.credential_set_id)
 
+    def _check_ssh_reachable(self, host: Host) -> None:
+        """Refuse SSH to a management-plane host in an API-only environment —
+        there is no SSH service account there to reach at all. Never applies
+        to firewalls (patching them is unrelated to how the management server
+        itself is reached). Called from both require_credentials()
+        (submit-time rejection for every job-submitting service, storage
+        enabled or not) and connect() (execution-time backstop for the direct
+        callers that don't go through submit_host_job — connect_primary,
+        api_access, pkg_repo_ops, and discovery's MDS-SSH peer scan, which
+        already treats a CredentialError here as a soft warning rather than a
+        hard failure)."""
+        if self.api_only and host.role in _MGMT_ROLES:
+            raise CredentialError(
+                f"environment {self.environment!r} is API-only management access — "
+                f"{host.name!r} has no SSH service account to connect to"
+            )
+
     def require_ssh_credential(self, host: Host, *, require_expert: bool = False) -> None:
         creds = self.host_credentials(host)  # raises if unassigned / store locked
         if CredentialKind.SSH_PASSWORD not in creds and CredentialKind.SSH_PRIVATE_KEY not in creds:
@@ -230,6 +255,7 @@ class HostConnector:
         pre-connect check that catches it with a clear error either way,
         rather than failing mid-job when ``GaiaSession`` actually tries to
         elevate."""
+        self._check_ssh_reachable(host)
         if self.credential_storage_enabled:
             self.require_ssh_credential(host, require_expert=require_expert)
             return None
@@ -257,6 +283,7 @@ class HostConnector:
     def connect(self, host: Host, creds: CredentialBundle | None = None) -> Transport:
         """Open a transport. ``creds`` supplies explicit credentials (storage-
         disabled path); when omitted they are resolved from the store."""
+        self._check_ssh_reachable(host)
         if creds is None:
             if not self.credential_storage_enabled:
                 raise CredentialError(
@@ -354,6 +381,38 @@ class ProgressReporter:
         if decile > self._last_decile:
             self._last_decile = decile
             self._ctx.log(f"upload progress: {min(decile * 10, 100)}%")
+
+
+def format_bytes(n: int) -> str:
+    """Human-readable byte count for pre-check error/log messages. Shared by
+    PatchingService's CPUSE import disk-space check and SparkPatchingService's
+    /storage check."""
+    size = float(n)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024:
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} TB"
+
+
+def remote_free_bytes(client: Transport, path: str) -> int:
+    """Available space on ``path``, via `df -Pk` (POSIX output format — one
+    line per filesystem, immune to the line-wrapping long device names can
+    cause in `df`'s default format). Shared by PatchingService's CPUSE import
+    disk-space check and SparkPatchingService's /storage check."""
+    result = client.run_bash(f"df -Pk {shlex.quote(path)}")
+    if not result.ok:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise TransportError(f"could not check disk space on {path}: {detail}")
+    lines = [line for line in result.stdout.splitlines() if line.strip()]
+    fields = lines[-1].split() if lines else []
+    if len(fields) < 4:
+        raise TransportError(f"unexpected `df` output for {path}: {result.stdout!r}")
+    try:
+        available_kb = int(fields[3])
+    except ValueError as exc:
+        raise TransportError(f"unexpected `df` output for {path}: {result.stdout!r}") from exc
+    return available_kb * 1024
 
 
 def remote_sha1(client: Transport, remote_path: str) -> str:

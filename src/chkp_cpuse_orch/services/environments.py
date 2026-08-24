@@ -133,6 +133,7 @@ class EnvironmentManager:
                 environment=env.name,
                 credential_storage_enabled=env.credential_storage_enabled and self._auth_enabled,
                 is_mds=env.is_mds,
+                api_only=env.api_only,
             )
         self._registry.rebuild(connectors)
 
@@ -158,6 +159,14 @@ class EnvironmentManager:
         command variants (discovery, and future MDS-vs-SMS-specific tasks) apply
         to every server in it."""
         if not self._store.set_environment_kind(name, is_mds):
+            raise InventoryError(f"unknown environment: {name!r}")
+        self.rebuild()
+
+    def set_environment_access(self, name: str, api_only: bool) -> None:
+        """Declare an environment SSH-reachable or API-only — decides whether
+        HostConnector allows SSH to its management-plane hosts at all (see
+        HostConnector.api_only). Orthogonal to is_mds."""
+        if not self._store.set_environment_access(name, api_only):
             raise InventoryError(f"unknown environment: {name!r}")
         self.rebuild()
 
