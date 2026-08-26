@@ -17,15 +17,19 @@ scripted `expert`-mode escalation, which exec_command() can't do (see
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import io
 import os
 import posixpath
 import re
 import shlex
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from types import TracebackType
 from typing import Protocol
 
@@ -35,10 +39,14 @@ from ..errors import (
     CredentialError,
     ExpertModeError,
     GaiaShellRestoreError,
+    HostKeyChangedError,
     TransportError,
     TransportTimeoutError,
 )
 from ..inventory import Host
+from ..reporting import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -128,6 +136,122 @@ def _read_scp_ack(stdout: object, host_name: str) -> None:
         raise TransportError(f"SCP upload to {host_name}: unexpected ack byte {ack!r}")
 
 
+# -- host-key pinning -------------------------------------------------------------
+#
+# Every connection this tool makes carries a root-equivalent Gaia password (and,
+# for patch work, the expert password) to the far end, so "trust whatever key is
+# presented, every time" hands those straight to anything on-path. The known_hosts
+# file lives beside the DB on the bind-mounted data volume, so pins survive
+# container restarts; the path is set once at startup (web/app.py) rather than
+# threaded through every service that builds a client.
+#
+# Policy: TOFU on first contact (pin and persist), hard failure on any later
+# mismatch. Re-accepting a legitimately rebuilt host is an explicit operator
+# action — see forget_host_key() and the accept-host-key route.
+
+_known_hosts_lock = threading.Lock()
+_known_hosts_path: Path | None = None
+
+
+def set_known_hosts_path(path: str | os.PathLike[str] | None) -> None:
+    """Point host-key pinning at ``path``. Called once at startup. ``None``
+    disables pinning entirely (the CLI and unit tests, which never talk to
+    real gear)."""
+    global _known_hosts_path
+    with _known_hosts_lock:
+        _known_hosts_path = Path(path) if path is not None else None
+
+
+def known_hosts_path() -> Path | None:
+    with _known_hosts_lock:
+        return _known_hosts_path
+
+
+def _host_key_id(host: Host) -> str:
+    """Paramiko's known_hosts entry name: the bare address on port 22, the
+    ``[address]:port`` form otherwise."""
+    if host.ssh_port == 22:
+        return host.address
+    return f"[{host.address}]:{host.ssh_port}"
+
+
+def forget_host_key(host: Host) -> bool:
+    """Drop ``host``'s pinned key so the next connection re-pins by TOFU.
+
+    This is the operator's "yes, I rebuilt that box" action. Returns True if an
+    entry was actually removed. Deliberately narrow: it forgets one host, never
+    clears the file."""
+    path = known_hosts_path()
+    if path is None or not path.is_file():
+        return False
+    entry = _host_key_id(host)
+    with _known_hosts_lock:
+        keys = paramiko.HostKeys()
+        try:
+            keys.load(str(path))
+        except OSError as exc:
+            raise TransportError(f"could not read known_hosts at {path}: {exc}") from exc
+        if entry not in keys:
+            return False
+        del keys[entry]
+        try:
+            keys.save(str(path))
+        except OSError as exc:
+            raise TransportError(f"could not write known_hosts at {path}: {exc}") from exc
+    return True
+
+
+def _fingerprint(key: paramiko.PKey | None) -> str:
+    """OpenSSH-style ``SHA256:...`` fingerprint, for operator-facing messages."""
+    if key is None:
+        return "unknown"
+    digest = hashlib.sha256(key.asbytes()).digest()
+    return f"{key.get_name()} SHA256:{base64.b64encode(digest).decode('ascii').rstrip('=')}"
+
+
+class _PinningPolicy(paramiko.MissingHostKeyPolicy):
+    """TOFU that actually persists.
+
+    paramiko's own AutoAddPolicy writes the whole in-memory HostKeys back to
+    disk, so two connections pinning different hosts at the same time can lose
+    one of the two pins — and a lost pin silently re-TOFUs on the next connect,
+    which is the exact guarantee we're trying to make. Re-read, add, and write
+    under the module lock instead, so concurrent first-contacts merge rather
+    than overwrite."""
+
+    def missing_host_key(
+        self, client: paramiko.SSHClient, hostname: str, key: paramiko.PKey
+    ) -> None:
+        client.get_host_keys().add(hostname, key.get_name(), key)
+        path = known_hosts_path()
+        if path is None:
+            return
+        with _known_hosts_lock:
+            keys = paramiko.HostKeys()
+            try:
+                # Don't assume _load_known_hosts already made the directory —
+                # a pin that silently fails to persist re-TOFUs on the next
+                # connect, which is exactly what this is meant to prevent.
+                path.parent.mkdir(parents=True, exist_ok=True)
+                if path.is_file():
+                    keys.load(str(path))
+                keys.add(hostname, key.get_name(), key)
+                keys.save(str(path))
+            except OSError as exc:
+                logger.warning(
+                    "could not persist host key; it will be re-trusted on next connect",
+                    host=hostname,
+                    path=str(path),
+                    error=str(exc),
+                )
+                return
+        logger.info(
+            "pinned new SSH host key on first contact",
+            host=hostname,
+            fingerprint=_fingerprint(key),
+        )
+
+
 class SSHClient:
     """Paramiko-backed Gaia SSH client.
 
@@ -155,10 +279,33 @@ class SSHClient:
         self._private_key = private_key
         self._key_passphrase = key_passphrase
         self._connect_timeout = connect_timeout
-        # TOFU by default: Gaia boxes rarely have distributable host keys. Set
-        # False to require the host key to already be in known_hosts.
+        # TOFU: unknown hosts are pinned on first contact and persisted to the
+        # configured known_hosts file (see set_known_hosts_path); a host whose
+        # key later CHANGES is refused outright, whatever this flag says. Set
+        # False to also refuse hosts that aren't pinned yet.
         self._auto_add_host_key = auto_add_host_key
         self._client: paramiko.SSHClient | None = None
+
+    def _load_known_hosts(self, client: paramiko.SSHClient) -> None:
+        """Register the pin file with ``client`` so known keys are checked and
+        newly-seen ones are written back by AutoAddPolicy."""
+        path = known_hosts_path()
+        if path is None:
+            return
+        try:
+            with _known_hosts_lock:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.touch(exist_ok=True)
+                client.load_host_keys(str(path))
+        except OSError as exc:
+            # Refusing to connect is the wrong trade here — an unwritable data
+            # volume shouldn't take patching offline — but silently dropping to
+            # trust-everything must be loud.
+            logger.warning(
+                "host-key pinning unavailable; connecting without it",
+                path=str(path),
+                error=str(exc),
+            )
 
     def connect(self) -> None:
         pkey = None
@@ -166,8 +313,10 @@ class SSHClient:
             pkey = load_private_key(self._private_key, self._key_passphrase)
         client = paramiko.SSHClient()
         client.load_system_host_keys()
-        policy = paramiko.AutoAddPolicy if self._auto_add_host_key else paramiko.RejectPolicy
-        client.set_missing_host_key_policy(policy)
+        self._load_known_hosts(client)
+        client.set_missing_host_key_policy(
+            _PinningPolicy() if self._auto_add_host_key else paramiko.RejectPolicy()
+        )
         try:
             client.connect(
                 self.host.address,
@@ -180,6 +329,18 @@ class SSHClient:
                 allow_agent=False,
                 look_for_keys=False,
             )
+        except paramiko.BadHostKeyException as exc:
+            # Paramiko raises this before authenticating, so no credential has
+            # been sent to the far end yet. Keep it that way.
+            client.close()
+            raise HostKeyChangedError(
+                f"the SSH host key for {self.host.name} ({self.host.address}) has "
+                f"changed since it was first trusted. Expected "
+                f"{_fingerprint(exc.expected_key)}, got {_fingerprint(exc.key)}. "
+                "No credentials were sent. If this host was genuinely rebuilt or "
+                "upgraded, re-accept its key to pin the new one; otherwise treat "
+                "this as a possible interception and investigate before retrying."
+            ) from exc
         except (OSError, paramiko.SSHException) as exc:
             client.close()
             raise TransportError(

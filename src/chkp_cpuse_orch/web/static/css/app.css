@@ -549,6 +549,11 @@ button.link-btn {
 }
 button.link-btn:hover { filter: none; opacity: 0.8; }
 button.link-btn:disabled { opacity: 0.5; text-decoration: none; }
+/* A link-btn for a security-relevant action (e.g. "Accept New Host Key"),
+   so it doesn't read as an ordinary Refresh-style convenience link.
+   element+class specificity (0,1,1) matches button.link-btn's own rule --
+   a bare .danger-link would lose to it regardless of source order. */
+button.link-btn.danger-link { color: var(--danger); font-weight: 600; }
 
 /* ---- badges & state ---- */
 .badge {

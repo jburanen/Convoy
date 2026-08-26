@@ -6,13 +6,27 @@ Real inventory files name production infrastructure and are git-ignored; only
 
 from __future__ import annotations
 
+import ipaddress
+import re
 from enum import StrEnum
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .errors import InventoryError
+
+# One DNS label: alphanumeric, inner hyphens allowed, no leading/trailing hyphen.
+_HOSTNAME_LABEL_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\Z")
+
+
+def _valid_hostname(value: str) -> bool:
+    """True if ``value`` is a syntactically valid hostname/FQDN (RFC 1123),
+    optionally fully qualified with a trailing dot."""
+    candidate = value[:-1] if value.endswith(".") else value
+    if not candidate or len(candidate) > 253:
+        return False
+    return all(_HOSTNAME_LABEL_RE.match(label) for label in candidate.split("."))
 
 
 class Role(StrEnum):
@@ -71,10 +85,10 @@ FIREWALL_ROLES: tuple[Role, ...] = (
 class Host(BaseModel):
     """A single Gaia host reachable over SSH / Gaia API."""
 
-    name: str
-    address: str  # hostname or IP; resolved at connect time
+    name: str = Field(min_length=1, max_length=128)
+    address: str = Field(min_length=1, max_length=253)  # hostname or IP; resolved at connect time
     role: Role
-    ssh_port: int = 22
+    ssh_port: int = Field(default=22, ge=1, le=65535)
     ssh_user: str = "admin"
     # Credentials are never stored in inventory — they live in the encrypted
     # CredentialStore as named "login sets". A management server references the set
@@ -82,6 +96,36 @@ class Host(BaseModel):
     # DB (env_hosts) at registry build time, not from inventory YAML.
     credential_set_id: str | None = None
     notes: str | None = None
+
+    @field_validator("name", "ssh_user", mode="before")
+    @classmethod
+    def _strip_text(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("address", mode="before")
+    @classmethod
+    def _check_address(cls, value: object) -> object:
+        """``address`` is the only field tying an inventory row to a specific
+        real device — every SSH connection, every stored-credential handoff,
+        and (via services/gateway_bootstrap.py) the confirmation that a
+        Management API target is the box we think it is, all rest on it. An
+        unvalidated free-form string here means a row can be pointed at an
+        arbitrary host, so require a syntactically real IP or hostname and
+        reject URL-shaped, whitespace-bearing, or empty values outright."""
+        if not isinstance(value, str):
+            return value
+        address = value.strip()
+        if not address:
+            raise ValueError("address must not be empty")
+        try:
+            ipaddress.ip_address(address)
+        except ValueError:
+            if not _valid_hostname(address):
+                raise ValueError(
+                    f"{address!r} is not a valid IP address or hostname — an address must "
+                    "be a bare host (no scheme, port, path, credentials, or whitespace)"
+                ) from None
+        return address
 
 
 class Cluster(BaseModel):

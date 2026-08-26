@@ -1958,6 +1958,13 @@ async function loadServers() {
     stateRow
       .querySelector(".srv-refresh-link")
       .addEventListener("click", () => refreshState(srv.name, row, stateRow));
+    stateRow
+      .querySelector(".srv-accept-hostkey-link")
+      .addEventListener("click", async () => {
+        if (await acceptHostKey(srv.name)) {
+          await refreshState(srv.name, row, stateRow);
+        }
+      });
     row.querySelector(".btn-install").addEventListener("click", () => installPackage(srv.name, row));
     row.querySelector(".btn-uninstall").addEventListener("click", () => openUninstallModal("server", srv.name, row));
     // The name itself is a second Edit trigger, mirroring the Firewalls
@@ -2219,12 +2226,43 @@ function syncActionButtons(row) {
   uninstallBtn.disabled = select.disabled || !hasSelection || !isUninstall;
 }
 
+// A pinned SSH host key that no longer matches fails the connection BEFORE any
+// credential is sent (see transport/ssh.py). That's a legitimate rebuild/upgrade
+// about as often as it's an interception, so the recovery is an explicit,
+// confirmed operator action rather than anything automatic.
+const HOST_KEY_CHANGED_RE = /host key .* has changed|host key changed/i;
+
+async function acceptHostKey(name) {
+  const sure = confirm(
+    `Accept a NEW SSH host key for "${name}"?
+
+Only do this if you know the host was rebuilt, reimaged, or upgraded.
+
+If it wasn't, a changed host key can mean the connection is being intercepted — and accepting it will send this host's stored SSH and expert-mode passwords to whatever is answering.`
+  );
+  if (!sure) return false;
+  try {
+    await api(`/api/environments/${encodeURIComponent(currentEnv)}/hosts/${encodeURIComponent(name)}/accept-host-key`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirmed: true }),
+    });
+    toast(`Cleared the pinned host key for ${name} — the next connection will pin the new one.`);
+    return true;
+  } catch (e) {
+    toast("Could not clear the host key: " + e.message);
+    return false;
+  }
+}
+
 async function refreshState(name, row, stateRow) {
   const link = stateRow.querySelector(".srv-refresh-link");
+  const hostKeyLink = stateRow.querySelector(".srv-accept-hostkey-link");
   const summary = stateRow.querySelector(".srv-summary");
   const extra = await operationCredentials(name, "query live state");
   if (extra === null) return; // credential prompt cancelled
   link.disabled = true;
+  hostKeyLink.classList.add("hidden"); // re-evaluated fresh on every attempt
   summary.textContent = "querying…";
   stateRow.querySelector(".srv-checked").textContent = "";
   try {
@@ -2238,6 +2276,9 @@ async function refreshState(name, row, stateRow) {
   } catch (e) {
     cacheEvictCreds(name); // a cached wrong/stale password re-prompts next time
     summary.textContent = "detect failed: " + e.message;
+    if (HOST_KEY_CHANGED_RE.test(e.message)) {
+      hostKeyLink.classList.remove("hidden");
+    }
   } finally {
     link.disabled = false;
   }
@@ -2759,6 +2800,13 @@ async function loadFirewalls() {
     stateRow
       .querySelector(".srv-spark-bootstrap-link")
       .addEventListener("click", () => openSparkBootstrapModal(fw.name));
+    stateRow
+      .querySelector(".srv-accept-hostkey-link")
+      .addEventListener("click", async () => {
+        if (await acceptHostKey(fw.name)) {
+          await refreshFirewallState(fw.name, row, stateRow);
+        }
+      });
     const sparkTestCredsLink = stateRow.querySelector(".srv-spark-test-creds-link");
     // Shown proactively for every Spark row (not just reactively after an
     // auth failure like the bootstrap link above) — it's useful any time.
@@ -2793,6 +2841,7 @@ async function refreshFirewallState(name, row, stateRow) {
   const link = stateRow.querySelector(".srv-refresh-link");
   const bootstrapLink = stateRow.querySelector(".srv-bootstrap-creds-link");
   const sparkBootstrapLink = stateRow.querySelector(".srv-spark-bootstrap-link");
+  const hostKeyLink = stateRow.querySelector(".srv-accept-hostkey-link");
   const isSpark = row.dataset.role === "spark_firewall";
   const summary = stateRow.querySelector(".srv-summary");
   const extra = await operationCredentials(name, "query live state");
@@ -2800,6 +2849,7 @@ async function refreshFirewallState(name, row, stateRow) {
   link.disabled = true;
   bootstrapLink.classList.add("hidden"); // re-evaluated fresh on every attempt
   sparkBootstrapLink.classList.add("hidden");
+  hostKeyLink.classList.add("hidden");
   summary.textContent = "querying…";
   stateRow.querySelector(".srv-checked").textContent = "";
   try {
@@ -2821,7 +2871,13 @@ async function refreshFirewallState(name, row, stateRow) {
     // full-Gaia auto-push one — its clish speaks `add administrator`, not
     // `add user`/`set user password-hash`, and there's no automated push for
     // it (see services/gateway_bootstrap.py's module docstring).
-    if (/auth/i.test(e.message)) {
+    // Checked first: a changed host key fails before authentication is even
+    // attempted, so the fix is the host key, not the credentials — offering
+    // "Bootstrap Credentials" here would send the operator down the wrong path
+    // (and paramiko's message mentions "key", which /auth/ can also catch).
+    if (HOST_KEY_CHANGED_RE.test(e.message)) {
+      hostKeyLink.classList.remove("hidden");
+    } else if (/auth/i.test(e.message)) {
       (isSpark ? sparkBootstrapLink : bootstrapLink).classList.remove("hidden");
     }
   } finally {

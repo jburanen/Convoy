@@ -213,8 +213,21 @@ def _b64(text: str) -> str:
 
 
 class _FakeMgmtClient:
-    def __init__(self, *, task_sequence: list[dict[str, Any]], **kwargs: object) -> None:
+    def __init__(
+        self,
+        *,
+        task_sequence: list[dict[str, Any]],
+        objects: list[dict[str, Any]] | None = None,
+        **kwargs: object,
+    ) -> None:
         self._tasks = list(task_sequence)
+        # What the management database reports for show-gateways-and-servers.
+        # Defaults to fw-01 at the address the test inventories use, so the
+        # target-identity check (see _confirm_target_identity) passes; tests
+        # that exercise a mismatch pass their own list.
+        self._objects = (
+            objects if objects is not None else [{"name": "fw-01", "ipv4-address": "192.0.2.20"}]
+        )
         self.kwargs = kwargs
         self.run_script_calls: list[tuple[str, list[str], str]] = []
 
@@ -223,6 +236,9 @@ class _FakeMgmtClient:
 
     def __exit__(self, *exc: object) -> None:
         return None
+
+    def show_gateways_and_servers(self, *, details_level: str = "full") -> list[dict[str, Any]]:
+        return self._objects
 
     def run_script(
         self, script: str, targets: list[str], *, script_name: str = "chkp-cpuse-orch-run"
@@ -273,7 +289,12 @@ def _failed_task(error: str = "clish: command not found") -> dict[str, Any]:
 
 
 def _service_for_job(
-    store: Store, creds: CredentialStore, runner: JobRunner, *, task_sequence: list[dict[str, Any]]
+    store: Store,
+    creds: CredentialStore,
+    runner: JobRunner,
+    *,
+    task_sequence: list[dict[str, Any]],
+    objects: list[dict[str, Any]] | None = None,
 ) -> GatewayBootstrapService:
     inv = _inventory(
         Host(name="mgmt-01", address="192.0.2.10", role=Role.PRIMARY_SMS),
@@ -299,7 +320,9 @@ def _service_for_job(
         registry=_registry(inv, creds),
         store=store,
         runner=runner,
-        mgmt_client_factory=lambda host, **kw: _FakeMgmtClient(task_sequence=task_sequence, **kw),
+        mgmt_client_factory=lambda host, **kw: _FakeMgmtClient(
+            task_sequence=task_sequence, objects=objects, **kw
+        ),
         poll_interval=0,
     )
 
@@ -405,3 +428,101 @@ def test_decode_task_output_handles_unexpected_shape() -> None:
     ok, message = _decode_task_output({"status": "succeeded", "task-details": []})
     assert ok is False
     assert "task-details" in message
+
+
+# -- target-identity confirmation (security: run-script resolves by NAME) ----------
+#
+# run-script hands a bare name to the management server, which resolves it
+# against its own object database over SIC. The local row's address is the only
+# thing binding that name to a real device, so _do_bootstrap must confirm the
+# two agree before pushing a uid-0 adminRole account. See _confirm_target_identity.
+
+
+def test_bootstrap_refuses_when_mgmt_resolves_name_to_a_different_address(
+    store: Store, creds: CredentialStore, runner: JobRunner
+) -> None:
+    """The attack this blocks: name a local row after a real SIC-trusted
+    gateway, point its address anywhere, and the bootstrap lands on the real
+    gateway instead of the configured one."""
+    service = _service_for_job(
+        store,
+        creds,
+        runner,
+        task_sequence=[_succeeded_task()],
+        objects=[{"name": "fw-01", "ipv4-address": "198.51.100.99"}],
+    )
+
+    job = service.submit_bootstrap("default", "fw-01")
+    _run(runner)
+
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.FAILED
+    error = finished.error or ""
+    assert "192.0.2.20" in error and "198.51.100.99" in error
+    assert "different device" in error
+
+
+def test_bootstrap_refuses_when_mgmt_does_not_know_the_name(
+    store: Store, creds: CredentialStore, runner: JobRunner
+) -> None:
+    service = _service_for_job(store, creds, runner, task_sequence=[_succeeded_task()], objects=[])
+
+    job = service.submit_bootstrap("default", "fw-01")
+    _run(runner)
+
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.FAILED
+    assert "no gateway/server object named" in (finished.error or "")
+
+
+def test_bootstrap_refuses_when_resolved_object_has_no_address(
+    store: Store, creds: CredentialStore, runner: JobRunner
+) -> None:
+    """Fail closed: an object we can't pin to an address is not a confirmation."""
+    service = _service_for_job(
+        store, creds, runner, task_sequence=[_succeeded_task()], objects=[{"name": "fw-01"}]
+    )
+
+    job = service.submit_bootstrap("default", "fw-01")
+    _run(runner)
+
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.FAILED
+    assert "reports no IP address" in (finished.error or "")
+
+
+def test_bootstrap_refuses_an_ambiguous_name(
+    store: Store, creds: CredentialStore, runner: JobRunner
+) -> None:
+    service = _service_for_job(
+        store,
+        creds,
+        runner,
+        task_sequence=[_succeeded_task()],
+        objects=[
+            {"name": "fw-01", "ipv4-address": "192.0.2.20"},
+            {"name": "fw-01", "ipv4-address": "192.0.2.21"},
+        ],
+    )
+
+    job = service.submit_bootstrap("default", "fw-01")
+    _run(runner)
+
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.FAILED
+    assert "ambiguous target" in (finished.error or "")
+
+
+def test_bootstrap_logs_the_resolved_management_side_address(
+    store: Store, creds: CredentialStore, runner: JobRunner
+) -> None:
+    """The audit trail has to record which device was actually touched, not
+    just the caller-supplied name."""
+    service = _service_for_job(store, creds, runner, task_sequence=[_succeeded_task()])
+
+    job = service.submit_bootstrap("default", "fw-01")
+    _run(runner)
+
+    assert store.get_job(job.id).status is JobStatus.SUCCEEDED
+    messages = [e.message for e in store.events(job.id)]
+    assert any("resolves to 192.0.2.20" in m for m in messages)

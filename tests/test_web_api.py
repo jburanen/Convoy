@@ -1774,3 +1774,51 @@ def test_two_environments_are_isolated(
         job = c.post("/api/env/corp/servers/mgmt-01/import", json={"package": "jhf.tgz"})
         assert job.status_code == 202
         assert job.json()["environment"] == "corp"
+
+
+# -- accept-host-key (H1) ----------------------------------------------------------
+#
+# Recovery path for a legitimately rebuilt Gaia host, whose changed SSH key
+# otherwise fails every job closed. Confirm-gated because the same symptom is
+# what an intercepted connection looks like. See transport/ssh.py.
+
+
+def test_accept_host_key_requires_confirmation(client: TestClient) -> None:
+    resp = client.post(
+        "/api/environments/default/hosts/mgmt-01/accept-host-key", json={"confirmed": False}
+    )
+    assert resp.status_code == 400
+    assert "explicit confirmation" in resp.json()["detail"]
+
+
+def test_accept_host_key_defaults_to_unconfirmed(client: TestClient) -> None:
+    """An empty body must not be treated as consent."""
+    resp = client.post("/api/environments/default/hosts/mgmt-01/accept-host-key", json={})
+    assert resp.status_code == 400
+
+
+def test_accept_host_key_succeeds_when_confirmed(client: TestClient) -> None:
+    resp = client.post(
+        "/api/environments/default/hosts/mgmt-01/accept-host-key", json={"confirmed": True}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["host"] == "mgmt-01"
+    assert body["address"] == "192.0.2.10"
+    # Nothing was pinned in this test run, so there was no entry to clear —
+    # still a success, so the operator isn't left with a confusing error.
+    assert body["cleared"] is False
+
+
+def test_accept_host_key_404s_for_an_unknown_host(client: TestClient) -> None:
+    resp = client.post(
+        "/api/environments/default/hosts/nope/accept-host-key", json={"confirmed": True}
+    )
+    assert resp.status_code == 404
+
+
+def test_accept_host_key_404s_for_an_unknown_environment(client: TestClient) -> None:
+    resp = client.post(
+        "/api/environments/nosuchenv/hosts/mgmt-01/accept-host-key", json={"confirmed": True}
+    )
+    assert resp.status_code == 404

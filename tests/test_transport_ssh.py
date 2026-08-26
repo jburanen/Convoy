@@ -11,8 +11,14 @@ from chkp_cpuse_orch.inventory import Host, Role
 from chkp_cpuse_orch.transport.ssh import (
     CommandResult,
     SSHClient,
+    _fingerprint,
+    _host_key_id,
+    _PinningPolicy,
+    forget_host_key,
+    known_hosts_path,
     load_private_key,
     require_ok,
+    set_known_hosts_path,
 )
 
 
@@ -207,3 +213,111 @@ def test_put_scp_raises_on_nonzero_exit_status(
     client.connect()
     with pytest.raises(TransportError, match="scp exited 1"):
         client.put_scp(str(local), "/storage/spark_firmware.img")
+
+
+# -- SSH host-key pinning (H1) -----------------------------------------------------
+#
+# Every connection carries a root-equivalent Gaia password (and, for patch work,
+# the expert password) to the far end. Before this, keys were auto-accepted on
+# EVERY connection with nothing persisted, so an on-path attacker presenting any
+# key collected both. See transport/ssh.py.
+
+
+@pytest.fixture
+def known_hosts(tmp_path: Path):
+    """Point pinning at a temp file for the duration of one test."""
+    path = tmp_path / "state" / "known_hosts"
+    set_known_hosts_path(path)
+    yield path
+    set_known_hosts_path(None)
+
+
+def _load(path: Path) -> paramiko.HostKeys:
+    keys = paramiko.HostKeys()
+    if path.is_file():
+        keys.load(str(path))
+    return keys
+
+
+def _pin(path: Path, hostname: str, key: paramiko.PKey) -> None:
+    client = paramiko.SSHClient()
+    if path.is_file():
+        client.load_host_keys(str(path))
+    _PinningPolicy().missing_host_key(client, hostname, key)
+
+
+def test_pinning_can_be_disabled(known_hosts: Path) -> None:
+    """None disables pinning entirely — the CLI and unit tests, which never
+    talk to real gear. (Deliberately not asserting the *initial* global value:
+    create_app sets it process-wide, so any test that built an app first would
+    make that order-dependent.)"""
+    assert known_hosts_path() == known_hosts
+    set_known_hosts_path(None)
+    assert known_hosts_path() is None
+    # and with pinning off, the policy is a no-op rather than an error
+    _PinningPolicy().missing_host_key(
+        paramiko.SSHClient(), "192.0.2.10", paramiko.RSAKey.generate(2048)
+    )
+
+
+def test_first_contact_pins_and_persists(known_hosts: Path) -> None:
+    key = paramiko.RSAKey.generate(2048)
+    _pin(known_hosts, "192.0.2.10", key)
+
+    assert known_hosts.is_file()  # parent dirs created too
+    assert "192.0.2.10" in _load(known_hosts)
+
+
+def test_concurrent_first_contacts_do_not_lose_a_pin(known_hosts: Path) -> None:
+    """paramiko's own AutoAddPolicy rewrites the whole file from its in-memory
+    copy, so two hosts pinning at once can drop one — and a dropped pin silently
+    re-TOFUs, which is the exact guarantee being made here."""
+    a, b = paramiko.RSAKey.generate(2048), paramiko.RSAKey.generate(2048)
+
+    stale = paramiko.SSHClient()  # loaded BEFORE the other pin lands
+    _pin(known_hosts, "192.0.2.10", a)
+    _PinningPolicy().missing_host_key(stale, "192.0.2.11", b)
+
+    keys = _load(known_hosts)
+    assert "192.0.2.10" in keys and "192.0.2.11" in keys
+
+
+def test_forget_host_key_drops_exactly_one_host(known_hosts: Path) -> None:
+    a, b = paramiko.RSAKey.generate(2048), paramiko.RSAKey.generate(2048)
+    _pin(known_hosts, "192.0.2.10", a)
+    _pin(known_hosts, "192.0.2.11", b)
+
+    host = Host(name="mgmt-01", address="192.0.2.10", role=Role.MANAGEMENT)
+    assert forget_host_key(host) is True
+
+    keys = _load(known_hosts)
+    assert "192.0.2.10" not in keys
+    assert "192.0.2.11" in keys  # never clears the whole file
+
+
+def test_forget_host_key_is_idempotent(known_hosts: Path) -> None:
+    host = Host(name="mgmt-01", address="192.0.2.10", role=Role.MANAGEMENT)
+    assert forget_host_key(host) is False  # nothing pinned yet
+    _pin(known_hosts, "192.0.2.10", paramiko.RSAKey.generate(2048))
+    assert forget_host_key(host) is True
+    assert forget_host_key(host) is False
+
+
+def test_forget_host_key_is_a_no_op_when_pinning_is_disabled() -> None:
+    host = Host(name="mgmt-01", address="192.0.2.10", role=Role.MANAGEMENT)
+    assert forget_host_key(host) is False
+
+
+def test_non_default_port_uses_bracketed_known_hosts_entry() -> None:
+    """OpenSSH/paramiko name non-22 entries [address]:port — getting this wrong
+    would silently pin under a key nothing ever looks up again."""
+    host = Host(name="fw", address="192.0.2.12", role=Role.GATEWAY, ssh_port=2222)
+    assert _host_key_id(host) == "[192.0.2.12]:2222"
+    assert _host_key_id(Host(name="fw", address="192.0.2.12", role=Role.GATEWAY)) == "192.0.2.12"
+
+
+def test_fingerprint_is_openssh_shaped() -> None:
+    fp = _fingerprint(paramiko.RSAKey.generate(2048))
+    assert fp.startswith("ssh-rsa SHA256:")
+    assert not fp.endswith("=")  # unpadded, like ssh-keygen prints it
+    assert _fingerprint(None) == "unknown"

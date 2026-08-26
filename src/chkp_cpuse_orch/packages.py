@@ -211,10 +211,23 @@ def _chunks(fh: BinaryIO) -> Iterator[bytes]:
         yield chunk
 
 
-def _check_filename(filename: str) -> str:
+def check_filename(filename: str) -> str:
+    """Assert a package filename is safe to interpolate into a remote shell
+    command or filesystem path, and return it unchanged.
+
+    Public because presence in the store and *safety* of the name are two
+    different properties, and some callers need only the second: Spark's
+    install job runs against a ``.img`` already staged on the device, which
+    may legitimately have aged out of the local store since it was
+    transferred (see services/spark_patching.py). Those callers still must
+    not skip this check — the filename reaches an expert-mode root shell."""
     if not _SAFE_FILENAME_RE.fullmatch(filename):
         raise PackageError(
             f"unsafe package filename: {filename!r} — letters, digits, dot, "
             "dash and underscore only (no paths)"
         )
     return filename
+
+
+# Back-compat alias for the in-module call sites below.
+_check_filename = check_filename

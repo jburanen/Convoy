@@ -64,6 +64,7 @@ import asyncio
 import contextlib
 import posixpath
 import re
+import shlex
 import socket
 import time
 from collections.abc import Callable
@@ -80,7 +81,7 @@ from ..errors import (
 )
 from ..inventory import Host
 from ..jobs import JobContext, JobRunner, JobTimedOut
-from ..packages import PackageStore, package_kind
+from ..packages import PackageStore, check_filename, package_kind
 from ..store import JobRecord, ServerStateRow, Store, utcnow
 from ..transport.ssh import GaiaExpertSession, InteractiveShell, require_ok
 from .common import (
@@ -432,6 +433,15 @@ class SparkPatchingService:
         connector = self.registry.get(environment)
         host = connector.spark_firewall_host(host_name)
         ensure_host_free(self._store, environment, host_name)
+        # The .img test above is a *kind* check, not a safety check. Without
+        # this the filename reaches _run_upgrade's expert-mode (root) shell
+        # command as-is, and neither the .img suffix nor the build-number
+        # regex excludes shell metacharacters. Deliberately the name check
+        # rather than path_for(): install runs against a file already staged
+        # on the device by a prior transfer, which may have since aged out of
+        # the local store — presence here is not required, safety is.
+        # _run_upgrade quotes at the sink as well.
+        check_filename(package_filename)
         return submit_host_job(
             self.runner,
             self._vault,
@@ -785,7 +795,7 @@ class SparkPatchingService:
             # bashUser off is _do_transfer's job (its last step, before this
             # one is ever triggered) — not this job's; re-running it here was
             # leftover from when transfer+install were one combined job.
-            upgrade_cmd = f"upgrade_revert_image.sh {remote_path} upgrade safe"
+            upgrade_cmd = f"upgrade_revert_image.sh {shlex.quote(remote_path)} upgrade safe"
             ctx.set_status("installing")
             ctx.log(
                 f"starting upgrade: {upgrade_cmd} — leaving this session open and "

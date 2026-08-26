@@ -62,9 +62,13 @@ the UI. On an empty inventory the UI opens on the **Provisioning** tab.
 This tool has the capability to alter or negatively impact your management servers and firewalls, therefore there are project guidelines designed to limit your risk. These concepts are applied by both human and AI developers:  
 
 - **Confirmation-gates** — installs (which can reboot) and CDT fleet execute require an explicit operator confirmation. Delete actions require explicit operator confirmation.
-- **Cluster-aware ordering** — the CDT candidates order *is* the rollout order; standby-first sequencing and blast-radius control live there.
+- **Cluster-aware ordering is operator-supplied, not tool-enforced** — the CDT candidates order *is* the rollout order, and standby-first sequencing is whatever you put in that list. The tool does **not** currently detect that two candidates are members of the same cluster, and does not stagger or health-gate between them. Order the list yourself.
 - **Detected state, not assumed** — the UI reflects live `show installer packages`, uploads are checksum-verified, and free space is checked before import.
+- **Host-key pinning** — a Gaia host's SSH key is pinned on first connect and stored on the data volume. If it later changes, jobs for that host fail closed before any credential is sent; re-accepting is an explicit operator action. Rebuild or upgrade a box and you will need to re-accept it.
+- **No snapshots, no maintenance windows** — the tool does not take rollback snapshots and does not gate runs to an approved window. Earlier example configs implied otherwise; see `examples/config.example.yaml`.
 - **Auditable** — tool actions and job results are tracked on the Jobs tab.
+
+> **Authorization model:** every authenticated user has full destructive authority over every environment — there are no roles or per-environment permissions. Under LDAP, that means **every member of `CHKP_CPUSE_LDAP_REQUIRED_GROUP`** can patch, reboot, bootstrap admin accounts onto gateways, and delete environments. Scope that group accordingly. Per-environment RBAC is a v2 item.
 
 > Prior to the v1 initial release a policy will be implemented to require code security review by an independent agentic analyst prior to release publication.
 
@@ -92,8 +96,9 @@ These gates define the major version releases - the milestones may change in the
 ✅ Test Gaia/Force Gateway patching via CPUSE  
 ✅ Test Spark (Gaia Embedded) firmware patching via upgrade_revert_image.sh  
 ◻️ Test Spark major version patching - ie 80.20.X > 81.10.X  
+✅ Independent agentic code security review  
+◻️ Re-test of functionality  
 ◻️ Packaged deployment release that doesn't require git clone and --build  
-◻️ Independent agentic code security review  
 
 ### Milestones to reach v2
 

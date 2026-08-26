@@ -4,7 +4,7 @@ import pytest
 
 from chkp_cpuse_orch.config import Config
 from chkp_cpuse_orch.inventory import Cluster, Host, Inventory, Role, Site
-from chkp_cpuse_orch.web.auth import BASIC_AUTH_DISABLE_ENV
+from chkp_cpuse_orch.web.auth import ALLOW_NO_AUTH_ENV, BASIC_AUTH_DISABLE_ENV
 
 
 @pytest.fixture(autouse=True)
@@ -12,8 +12,13 @@ def _no_basic_auth_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     """Basic auth is on by default in production (see web/auth.py), but most tests
     predate it and assume `create_app(config)` with no authenticator runs open.
     Disable it here so that holds; tests exercising basic auth itself override with
-    monkeypatch.delenv/setenv (same monkeypatch fixture, so it composes cleanly)."""
+    monkeypatch.delenv/setenv (same monkeypatch fixture, so it composes cleanly).
+
+    Both vars are needed: running with no auth is a deliberate two-key action in
+    production (see ALLOW_NO_AUTH_ENV), and the test suite opting into it is
+    exactly the kind of deliberate choice that gate is meant to require."""
     monkeypatch.setenv(BASIC_AUTH_DISABLE_ENV, "true")
+    monkeypatch.setenv(ALLOW_NO_AUTH_ENV, "1")
 
 
 @pytest.fixture

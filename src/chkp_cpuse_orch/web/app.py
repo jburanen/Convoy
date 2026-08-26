@@ -79,8 +79,12 @@ from ..services.provisioning import (
     render_mgmt_api_commands,
 )
 from ..services.spark_patching import SparkPatchingService
-from ..store import JobEvent, JobRecord, JobStatus, PackageRecord, Store
+from ..store import JobEvent, JobRecord, JobStatus, PackageRecord, Store, utcnow
+from ..transport.ssh import forget_host_key, set_known_hosts_path
 from .auth import (
+    ALLOW_NO_AUTH_ENV,
+    BASIC_AUTH_DISABLE_ENV,
+    LOGIN_ATTEMPT_TTL,
     SESSION_COOKIE_NAME,
     Authenticator,
     AuthManager,
@@ -88,6 +92,7 @@ from .auth import (
     BasicAuthenticator,
     BasicAuthSettings,
     LDAPAuthenticator,
+    LoginThrottle,
     load_active_auth_settings,
 )
 
@@ -164,6 +169,12 @@ async def _reap_idle_sessions(
             removed = await asyncio.to_thread(auth.purge_idle)
             if removed:
                 logger.info("purged idle sessions", count=removed)
+            # Same sweep keeps login_attempts from accumulating one row per
+            # source address ever seen. Records this old are already past any
+            # backoff window (see LOGIN_ATTEMPT_TTL).
+            stale = await asyncio.to_thread(auth.purge_login_attempts, utcnow() - LOGIN_ATTEMPT_TTL)
+            if stale:
+                logger.info("purged stale login-throttle records", count=stale)
         except Exception as exc:
             logger.warning("session reaper sweep failed", error=str(exc))
 
@@ -350,12 +361,22 @@ class EnvServerIn(BaseModel):
     credential_set: str | None = None
 
 
+class AcceptHostKeyRequest(BaseModel):
+    """Operator acknowledgement that a host's SSH key legitimately changed."""
+
+    confirmed: bool = False
+
+
 class ConnectPrimaryIn(OperationCredentials):
     name: str
     address: str
     role: str = "primary_sms"  # primary_sms or primary_mds only
     ssh_user: str = "admin"
     ssh_port: int = 22
+    # Acknowledges repointing an EXISTING server to a different address, which
+    # redirects its stored credentials and every future job to the new host.
+    # Ignored when adding a new server or reconnecting to the same address.
+    confirm_address_change: bool = False
     # Name of a stored credential set (storage-enabled environments only) —
     # its ssh_username also becomes the Management API administrator's name.
     # None for storage-disabled environments, which instead supply
@@ -468,6 +489,21 @@ def create_app(
             auth = AuthManager(store, active_auth, settings)
         app.state.auth = auth
 
+        # H3: a tool that can reboot production firewalls should not sit on the
+        # shipped default password quietly. Warned on EVERY startup while it is
+        # still live, not once — an operator who never reads the first boot log
+        # is exactly the one who needs telling.
+        if isinstance(active_auth, BasicAuthenticator) and active_auth.uses_default_password:
+            logger.warning(
+                "SECURITY: still using the built-in default password "
+                "(admin/admin) — anyone who can reach this service has full "
+                "control of every managed firewall",
+                hint=(
+                    "change it in the UI's User Settings modal, or set "
+                    "BASIC_AUTH_PASSWORD, or configure LDAP"
+                ),
+            )
+
         # Independent management environments — DB-backed and UI-editable. Seeded
         # once from config/inventory files, then the DB is authoritative (see
         # services/environments.py and .claude/memory/patching-web-design.md).
@@ -487,6 +523,20 @@ def create_app(
         # storage is genuinely unusable here — just a heads-up that the
         # operator's stored preference isn't taking effect yet.
         if auth is None:
+            # H5: running open exposes EVERY destructive route — enumerate the
+            # estate, delete environments, cancel jobs, bootstrap gateway admin
+            # accounts. Only credential *storage* was ever gated on auth. Warn
+            # unconditionally, not just when a storage-enabled environment
+            # happens to exist.
+            logger.warning(
+                "SECURITY: authentication is DISABLED — every API route, including "
+                "credential bootstrap, CDT execute, and environment deletion, is "
+                "reachable by anyone who can connect to this service",
+                hint=(
+                    f"unset {BASIC_AUTH_DISABLE_ENV}/{ALLOW_NO_AUTH_ENV} to restore "
+                    "the login gate, or configure LDAP (CHKP_CPUSE_LDAP_*)"
+                ),
+            )
             open_envs = [e.name for e in store.list_environments() if e.credential_storage_enabled]
             if open_envs:
                 logger.warning(
@@ -549,6 +599,13 @@ def create_app(
             # protocols just mean "a callable that builds a ManagementAPIClient".
             mgmt_client_factory=cast("RepoClientFactory | None", mgmt_client_factory),
         )
+
+        # Pin SSH host keys beside the DB on the data volume, so pins survive
+        # container restarts. Set here rather than threaded through every
+        # service that builds a client — see transport/ssh.py.
+        known_hosts = cfg.paths.state_dir / "known_hosts"
+        set_known_hosts_path(known_hosts)
+        logger.info("ssh host-key pinning enabled", known_hosts=str(known_hosts))
 
         app.state.store = store
         app.state.job_archive_path = str(cfg.paths.job_archive_path)
@@ -803,14 +860,37 @@ def _register_routes(app: FastAPI) -> None:
         auth = _auth(request)
         if auth is None:
             raise HTTPException(status_code=400, detail="authentication is not configured")
+        # Throttled per-username AND per-source-IP; the stricter governs. Without
+        # this there is nothing at all between an attacker and unlimited guessing
+        # against a tool that can reboot production firewalls. See LoginThrottle.
+        throttle = LoginThrottle(request.app.state.store)
+        source_ip = request.client.host if request.client else None
+        scopes = LoginThrottle.scopes(body.username, source_ip)
+        wait = await run_in_threadpool(throttle.retry_after, scopes)
+        if wait > 0:
+            logger.warning(
+                "login throttled",
+                username=body.username,
+                source_ip=source_ip,
+                retry_after=round(wait),
+            )
+            raise HTTPException(
+                status_code=429,
+                detail=f"too many failed login attempts — try again in {round(wait)}s",
+                headers={"Retry-After": str(max(1, round(wait)))},
+            )
         try:
             token, user = await run_in_threadpool(auth.login, body.username, body.password)
         except AuthError as exc:
+            await run_in_threadpool(throttle.record_failure, scopes)
             # Deliberately generic — don't disclose which check failed.
-            logger.info("login failed", username=body.username, reason=str(exc))
+            logger.warning(
+                "login failed", username=body.username, source_ip=source_ip, reason=str(exc)
+            )
             raise HTTPException(
                 status_code=401, detail="invalid credentials or insufficient group membership"
             ) from exc
+        await run_in_threadpool(throttle.record_success, scopes)
         response.set_cookie(
             SESSION_COOKIE_NAME,
             token,
@@ -831,10 +911,18 @@ def _register_routes(app: FastAPI) -> None:
         return {"ok": True}
 
     @app.post("/api/auth/password")
-    async def auth_change_password(body: ChangePasswordIn, request: Request) -> dict[str, bool]:
+    async def auth_change_password(
+        body: ChangePasswordIn, request: Request, response: Response
+    ) -> dict[str, bool]:
         """Change the basic-auth password (User Settings modal). Requires the
         current password; 400 when auth is off or the backend is LDAP (directory-
-        managed, not ours to change)."""
+        managed, not ours to change).
+
+        A successful change revokes every existing session for the user — the
+        reason to change a password is usually that someone else may have the
+        old one, and a session token otherwise outlives it. The caller gets a
+        fresh session cookie here so the tab they changed it in stays usable;
+        every other session has to log in again."""
         auth = _auth(request)
         if auth is None:
             raise HTTPException(status_code=400, detail="authentication is not configured")
@@ -844,8 +932,18 @@ def _register_routes(app: FastAPI) -> None:
             await run_in_threadpool(
                 auth.change_password, username, body.current_password, body.new_password
             )
+            token, _user = await run_in_threadpool(auth.login, username, body.new_password)
         except AuthError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        response.set_cookie(
+            SESSION_COOKIE_NAME,
+            token,
+            httponly=True,
+            samesite="strict",
+            secure=auth.settings.cookie_secure,
+            path="/",
+        )
+        logger.info("basic-auth password changed; other sessions revoked", user=username)
         return {"ok": True}
 
     # -- environments (create/edit; DB-backed, UI-managed) ----------------------
@@ -1182,6 +1280,7 @@ def _register_routes(app: FastAPI) -> None:
                 ssh_port=body.ssh_port,
                 credential_set=body.credential_set,
                 is_mds=is_mds,
+                confirm_address_change=body.confirm_address_change,
                 credentials=_build_credentials(body.credentials, body.name, env),
                 triggered_by=_current_user(request),
             )
@@ -1528,6 +1627,44 @@ def _register_routes(app: FastAPI) -> None:
                 raise _map_error(exc) from exc
             return {"cluster_name": cluster_name, "resolved": True}
         return {"cluster_name": fw_row.cluster_name if fw_row else None, "resolved": False}
+
+    @app.post("/api/environments/{env}/hosts/{name}/accept-host-key")
+    def accept_host_key(
+        env: str, name: str, body: AcceptHostKeyRequest, request: Request
+    ) -> dict[str, Any]:
+        """Drop a host's pinned SSH key so the next connection re-pins whatever
+        it presents (see transport/ssh.py).
+
+        This is the recovery path for a legitimate rebuild/upgrade, which
+        changes a Gaia host's key and makes every job for it fail closed with
+        a "host key changed" error. It is deliberately confirm-gated and
+        deliberately narrow — one host, and the operator has to say so — since
+        the same symptom is what an on-path interception looks like. Works for
+        management servers and firewalls alike; the host only has to exist in
+        this environment's inventory."""
+        _require_env(request, env)
+        if not body.confirmed:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "accepting a changed host key requires explicit confirmation — a "
+                    "changed key is also what an intercepted connection looks like"
+                ),
+            )
+        try:
+            host = _registry(request).get(env).inventory.host(name)
+            removed = forget_host_key(host)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        logger.warning(
+            "operator cleared a pinned SSH host key",
+            environment=env,
+            host=name,
+            address=host.address,
+            had_pin=removed,
+            user=_current_user(request),
+        )
+        return {"host": name, "address": host.address, "cleared": removed}
 
     @app.get("/api/env/{env}/firewalls/{name}/bootstrap-credentials/preview")
     def firewall_bootstrap_credentials_preview(

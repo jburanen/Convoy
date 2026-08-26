@@ -27,8 +27,9 @@ import asyncio
 import threading
 
 from ..credentials import CredentialBundle, CredentialStore, JobCredentialVault
-from ..errors import OrchestratorError, StoreError
+from ..errors import JobError, OrchestratorError, StoreError
 from ..jobs import JobContext, JobRunner
+from ..reporting import get_logger
 from ..store import JobRecord, Store
 from ..transport.ssh import require_ok
 from .common import EnvironmentRegistry, job_run_credentials, submit_host_job
@@ -41,6 +42,8 @@ from .provisioning import (
     render_publish_logout_commands,
     render_show_administrator_command,
 )
+
+logger = get_logger(__name__)
 
 JOB_CONNECT_PRIMARY = "prov.connect_primary"
 
@@ -102,9 +105,31 @@ class PrimaryConnectService:
         ssh_port: int,
         credential_set: str | None,
         is_mds: bool,
+        confirm_address_change: bool = False,
         credentials: CredentialBundle | None = None,
         triggered_by: str | None = None,
     ) -> JobRecord:
+        # add_server is an upsert, so posting an existing server's name with a
+        # different address silently repoints that row — and every later
+        # discovery/patch/diagnose job for this environment along with it. That
+        # is a security-relevant binding (the row's stored credential set gets
+        # handed to whatever now answers at the new address), so it takes an
+        # explicit acknowledgement rather than riding along with an ordinary
+        # connect. Adding a new server, or reconnecting to the same address, is
+        # unaffected.
+        existing = self._store.get_env_host(environment, name)
+        if (
+            existing is not None
+            and existing.address.strip() != address.strip()
+            and not confirm_address_change
+        ):
+            raise JobError(
+                f"{name!r} already exists in environment {environment!r} at "
+                f"{existing.address!r}. Connecting at {address!r} would repoint that "
+                "server — and every future job for it, along with its stored "
+                "credentials — to the new address. Confirm the address change "
+                "explicitly if that is what you intend."
+            )
         self._env_manager.add_server(
             environment,
             name=name,
@@ -119,6 +144,15 @@ class PrimaryConnectService:
         # registry, so any connector/Host fetched beforehand would be stale.
         connector = self._registry.get(environment)
         host = connector.mgmt_host(name)
+        if existing is not None and existing.address.strip() != address.strip():
+            logger.warning(
+                "connect-primary repointed an existing server to a new address",
+                environment=environment,
+                server=name,
+                previous_address=existing.address,
+                new_address=address,
+                triggered_by=triggered_by,
+            )
         return submit_host_job(
             self.runner,
             self._vault,

@@ -32,9 +32,12 @@ class DeploymentDefaults(BaseModel):
     max_concurrent_gateways: int = Field(default=2, ge=1)
     """Blast-radius cap: how many gateways CDT may target at once."""
 
-    reboot_after_install: bool = True
-    stop_on_first_failure: bool = True
-    snapshot_before_install: bool = True
+    # NOTE: reboot_after_install / stop_on_first_failure / snapshot_before_install
+    # used to be declared here and shipped in config.example.yaml. Nothing ever
+    # read them, so operators could reasonably believe a rollback snapshot was
+    # being taken when none was — a shipped-but-inert safety setting is worse
+    # than an absent one. Removed rather than commented; re-add them together
+    # with the code that honours them.
 
 
 class Paths(BaseModel):
@@ -83,8 +86,10 @@ class Config(BaseModel):
     # environment backed by paths.inventory_path (backward compatible).
     environments: list[EnvironmentDef] = Field(default_factory=list)
 
-    # Name of the maintenance window policy to enforce (looked up elsewhere).
-    maintenance_window: str | None = None
+    # NOTE: maintenance_window was declared here and shipped in the example
+    # config, but no code ever consulted it — no run was ever gated on a window.
+    # Removed for the same reason as the defaults above; re-add it with the
+    # enforcement, not before.
 
     def resolved_environments(self) -> list[EnvironmentDef]:
         if self.environments:

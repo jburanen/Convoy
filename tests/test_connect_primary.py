@@ -12,6 +12,7 @@ from chkp_cpuse_orch.credentials import (
     CredentialStore,
     JobCredentialVault,
 )
+from chkp_cpuse_orch.errors import JobError
 from chkp_cpuse_orch.jobs import JobRunner
 from chkp_cpuse_orch.services.common import EnvironmentRegistry
 from chkp_cpuse_orch.services.connect_primary import JOB_CONNECT_PRIMARY, PrimaryConnectService
@@ -99,16 +100,23 @@ def _run(service: PrimaryConnectService) -> None:
     asyncio.run(service.runner.run_until_idle())
 
 
-def _submit(service: PrimaryConnectService, *, credential_set: str | None = "primary"):
+def _submit(
+    service: PrimaryConnectService,
+    *,
+    credential_set: str | None = "primary",
+    address: str = "192.0.2.10",
+    confirm_address_change: bool = False,
+):
     return service.submit_connect_primary(
         ENV,
         name="mgmt-01",
-        address="192.0.2.10",
+        address=address,
         role="primary_sms",
         ssh_user="svc-patch",
         ssh_port=22,
         credential_set=credential_set,
         is_mds=False,
+        confirm_address_change=confirm_address_change,
     )
 
 
@@ -251,3 +259,54 @@ def test_storage_disabled_environment_still_reveals_key(
     _run(service)
     assert disabled_store.get_job(job.id).status.value == "succeeded"
     assert service.reveal_api_key(job.id) == SECRET_MARKER
+
+
+# -- address repointing (security) ------------------------------------------------
+#
+# add_server is an upsert, so posting an existing server's name with a new
+# address silently repoints that row — handing its stored SSH/expert
+# credentials to whatever answers at the new address, and redirecting every
+# later job for the environment. That takes an explicit acknowledgement.
+
+
+def test_repointing_an_existing_server_requires_confirmation(
+    service: PrimaryConnectService, env_manager: EnvironmentManager
+) -> None:
+    _submit(service)
+    _run(service)
+
+    with pytest.raises(JobError, match="would repoint that server"):
+        _submit(service, address="198.51.100.99")
+
+    # the original row is untouched
+    assert [s.address for s in env_manager.list_servers(ENV)] == ["192.0.2.10"]
+
+
+def test_repointing_succeeds_when_confirmed(
+    service: PrimaryConnectService, env_manager: EnvironmentManager
+) -> None:
+    _submit(service)
+    _run(service)
+
+    _submit(service, address="198.51.100.99", confirm_address_change=True)
+
+    assert [s.address for s in env_manager.list_servers(ENV)] == ["198.51.100.99"]
+
+
+def test_reconnecting_to_the_same_address_needs_no_confirmation(
+    service: PrimaryConnectService, env_manager: EnvironmentManager
+) -> None:
+    """Only a *change* is gated — an ordinary reconnect must stay friction-free."""
+    _submit(service)
+    _run(service)
+
+    _submit(service)  # same address, no confirmation flag
+
+    assert [s.address for s in env_manager.list_servers(ENV)] == ["192.0.2.10"]
+
+
+def test_adding_a_brand_new_server_needs_no_confirmation(
+    service: PrimaryConnectService, env_manager: EnvironmentManager
+) -> None:
+    _submit(service)
+    assert [s.name for s in env_manager.list_servers(ENV)] == ["mgmt-01"]
