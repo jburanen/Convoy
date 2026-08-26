@@ -380,7 +380,12 @@ class ProgressReporter:
         decile = (transferred * 10) // self._total
         if decile > self._last_decile:
             self._last_decile = decile
-            self._ctx.log(f"upload progress: {min(decile * 10, 100)}%")
+            pct = min(decile * 10, 100)
+            self._ctx.log(f"upload progress: {pct}%")
+            # Also surfaces live in the Jobs tab's Output column (status_text —
+            # see JobContext.set_status()) without opening the row's log, same
+            # mechanism Spark install's "waiting for reboot"/"pinging" already uses.
+            self._ctx.set_status(f"uploading: {pct}%")
 
 
 def format_bytes(n: int) -> str:

@@ -32,6 +32,35 @@ async function api(path, options = {}) {
   return resp.status === 204 ? null : resp.json();
 }
 
+// Same contract as api() (401 -> session expiry, non-2xx -> Error from the
+// response's `.detail`, JSON body otherwise) but via XMLHttpRequest instead
+// of fetch() — only XHR exposes upload-progress events (xhr.upload's
+// `progress`), which fetch() has no equivalent for. Used solely by package
+// upload, the one request here large/slow enough for that to matter; every
+// other call goes through the plain api() helper above.
+function apiUpload(path, formData, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", path);
+    xhr.upload.addEventListener("progress", (ev) => {
+      if (ev.lengthComputable) onProgress(Math.round((ev.loaded / ev.total) * 100));
+    });
+    xhr.addEventListener("load", () => {
+      if (xhr.status === 401) {
+        handleSessionExpired();
+        reject(new Error("session expired"));
+        return;
+      }
+      let body = null;
+      try { body = xhr.responseText ? JSON.parse(xhr.responseText) : null; } catch { /* not json */ }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(xhr.status === 204 ? null : body);
+      else reject(new Error(body?.detail ?? xhr.statusText ?? `HTTP ${xhr.status}`));
+    });
+    xhr.addEventListener("error", () => reject(new Error("network error")));
+    xhr.send(formData);
+  });
+}
+
 function el(tplId) {
   // Clone the first element of a <template> from index.html.
   return document.getElementById(tplId).content.firstElementChild.cloneNode(true);
@@ -47,6 +76,16 @@ function fmtBytes(n) {
   if (n >= 1e6) return (n / 1e6).toFixed(0) + " MB";
   if (n >= 1e3) return (n / 1e3).toFixed(0) + " kB";
   return n + " B";
+}
+
+// Fills a "pick a stored package" <select> (the bulk-import pickers on the
+// CPUSE/Firewalls panels, and the CDT tab's own). Called both by each of
+// those panels' own load functions AND by loadPackages() itself, so a
+// package uploaded/deleted on the Packages tab is reflected everywhere
+// immediately instead of only after that other panel's next full reload.
+function populatePackageSelect(select, packages) {
+  select.replaceChildren(new Option("— package —", ""));
+  for (const pkg of packages) select.appendChild(new Option(pkg.filename, pkg.filename));
 }
 
 function fmtTime(iso) {
@@ -1852,9 +1891,7 @@ async function loadServers() {
   const stateByName = new Map(servers.map((s) => [s.name, s]));
   const credSetByName = new Map(sets.map((s) => [s.name, s]));
 
-  const bulkPackageSelect = document.getElementById("bulk-import-package");
-  bulkPackageSelect.replaceChildren(new Option("— package —", ""));
-  for (const pkg of packages) bulkPackageSelect.appendChild(new Option(pkg.filename, pkg.filename));
+  populatePackageSelect(document.getElementById("bulk-import-package"), packages);
 
   for (const srv of sortByRole(editable)) {
     // Provisioning tab: inventory row with a Remove action (env management —
@@ -2679,9 +2716,7 @@ async function loadFirewalls() {
   const stateByName = new Map(firewalls.map((f) => [f.name, f]));
   populateFirewallTagsDatalist(editable);
 
-  const bulkPackageSelect = document.getElementById("fw-bulk-import-package");
-  bulkPackageSelect.replaceChildren(new Option("— package —", ""));
-  for (const pkg of packages) bulkPackageSelect.appendChild(new Option(pkg.filename, pkg.filename));
+  populatePackageSelect(document.getElementById("fw-bulk-import-package"), packages);
 
   for (const fw of sortByRole(editable)) {
     const state = stateByName.get(fw.name);
@@ -3794,8 +3829,7 @@ async function populateCdtSelectors() {
   const [servers, packages] = await Promise.all([api(envUrl("/servers")), api("/api/packages")]);
   serverSel.replaceChildren(new Option("— management server —", ""));
   for (const s of servers) serverSel.appendChild(new Option(s.name, s.name));
-  pkgSel.replaceChildren(new Option("— package —", ""));
-  for (const p of packages) pkgSel.appendChild(new Option(p.filename, p.filename));
+  populatePackageSelect(pkgSel, packages);
 }
 
 async function cdtRefreshStatus() {
@@ -4107,6 +4141,12 @@ async function loadPackages() {
     if (noteRow) tbody.appendChild(noteRow);
   }
   await populateCdtSelectors(); // keep the CDT dropdowns in sync with packages/servers
+  // Also keep the CPUSE/Firewalls panels' own bulk-import pickers in sync —
+  // otherwise a package uploaded/deleted here only shows up there after
+  // that panel's own next full reload (e.g. a browser refresh), since
+  // switching tabs alone doesn't re-fetch anything (see selectTab()).
+  populatePackageSelect(document.getElementById("bulk-import-package"), packages);
+  populatePackageSelect(document.getElementById("fw-bulk-import-package"), packages);
 }
 
 // Collapsed detail row for the package's compatibility/prerequisite note
@@ -4137,9 +4177,14 @@ async function uploadPackageFile(file) {
   form.append("file", file);
   field.classList.add("uploading"); // blocks re-trigger — see the .uploading rule in app.css
   input.disabled = true;
-  text.textContent = `uploading ${file.name}… (large packages take a while)`;
+  text.textContent = `uploading ${file.name}… 0%`;
   try {
-    const job = await api("/api/packages", { method: "POST", body: form });
+    const job = await apiUpload("/api/packages", form, (pct) => {
+      // Reaching 100% here just means the browser finished sending the file —
+      // the server still has to write/hash it and respond, which can itself
+      // take a few seconds for a large package.
+      text.textContent = pct < 100 ? `uploading ${file.name}… ${pct}%` : `processing ${file.name}…`;
+    });
     lastJobStatus.set(job.id, job.status);
     if (job.status === "succeeded") {
       text.textContent = `${file.name}: stored`;
