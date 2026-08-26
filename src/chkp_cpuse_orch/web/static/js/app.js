@@ -71,13 +71,6 @@ function toast(message) {
   alert(message);
 }
 
-function fmtBytes(n) {
-  if (n >= 1e9) return (n / 1e9).toFixed(0) + " GB";
-  if (n >= 1e6) return (n / 1e6).toFixed(0) + " MB";
-  if (n >= 1e3) return (n / 1e3).toFixed(0) + " kB";
-  return n + " B";
-}
-
 // Fills a "pick a stored package" <select> (the bulk-import pickers on the
 // CPUSE/Firewalls panels, and the CDT tab's own). Called both by each of
 // those panels' own load functions AND by loadPackages() itself, so a
@@ -2230,6 +2223,11 @@ function syncActionButtons(row) {
 // credential is sent (see transport/ssh.py). That's a legitimate rebuild/upgrade
 // about as often as it's an interception, so the recovery is an explicit,
 // confirmed operator action rather than anything automatic.
+// Mirrors LOW_SPACE_OVERRIDABLE in services/patching.py -- keep the two in
+// step. Marks an import failure the operator is allowed to override, i.e. the
+// host was short on space but still had at least 1.5x the package size free.
+const LOW_SPACE_OVERRIDABLE_RE = /can be overridden if you choose to proceed anyway/;
+
 const HOST_KEY_CHANGED_RE = /host key .* has changed|host key changed/i;
 
 async function acceptHostKey(name) {
@@ -2433,23 +2431,38 @@ async function bulkImport(btn, getTargets, perServer) {
     return;
   }
   btn.disabled = true;
+  // An import job's FIRST step is the disk-space check, which needs SSH plus an
+  // expert-mode escalation and so takes a noticeable moment. Send the operator
+  // to the Jobs tab so that wait is visible work on a real job rather than a
+  // silent pause (operator-directed, 2026-08-26). Expanding the log only for a
+  // single target is deliberate: every open log is re-fetched on each poll, so
+  // auto-expanding a ten-host bulk run would multiply the polling cost for
+  // output nobody is reading yet.
+  const submitted = [];
   try {
     for (const name of targets) {
       try {
-        await perServer(name);
+        const job = await perServer(name);
+        if (job && job.id) submitted.push(job.id);
       } catch (e) {
         cacheEvictCreds(name);
         toast(`Import to ${name} failed to start: ${e.message}`);
       }
     }
+    if (submitted.length === 1) openJobLogs.add(submitted[0]);
+    if (submitted.length) selectTab("jobs");
     await loadJobs();
   } finally {
     btn.disabled = false;
   }
 }
 
-// Human-readable byte count, matching the backend's _fmt_bytes style — used
-// in the disk-space precheck's confirm()/toast messages.
+// Human-readable byte count in KB/MB/GB (binary units), matching the backend's
+// _fmt_bytes style. This used to be one of TWO fmtBytes() definitions — an
+// earlier decimal-units one (kB/MB/GB) sat near the top of the file and was
+// silently shadowed by this one, so callers already got these units whatever
+// the other claimed. Collapsed to this single definition (operator-directed,
+// 2026-08-26): KB/MB/GB everywhere.
 function fmtBytes(n) {
   let size = n;
   for (const unit of ["B", "KB", "MB", "GB"]) {
@@ -2459,52 +2472,13 @@ function fmtBytes(n) {
   return `${size.toFixed(1)} TB`;
 }
 
-// Runs the server-side disk-space precheck (PatchingService.
-// check_import_disk_space) before an import job is submitted, and — when
-// the shortfall is eligible (still >=1.5x the package's own size) — offers
-// the operator a confirm() to proceed anyway. Below that floor there is no
-// override; the check_import_disk_space docstring in patching.py is the
-// source of truth for why. Returns { proceed, force }: proceed=false means
-// don't submit the import at all; force=true must be sent back as
-// force_low_space so the job's own re-check lets it through.
-async function checkDiskSpaceBeforeImport(kind, name, pkg, extra) {
-  let checks;
-  try {
-    checks = await api(envUrl(`/${kind}/${encodeURIComponent(name)}/import/disk-space`), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ package: pkg, ...extra }),
-    });
-  } catch (e) {
-    toast(`Disk space check for ${name} failed: ${e.message}`);
-    return { proceed: false, force: false };
-  }
-  const short = checks.filter((c) => !c.ok);
-  if (!short.length) return { proceed: true, force: false };
-  const lines = short.map(
-    (c) =>
-      `${c.path}: ${fmtBytes(c.available)} available, ${fmtBytes(c.required)} required ` +
-      `(${c.multiplier}x the package size)`
-  );
-  if (short.some((c) => !c.override_eligible)) {
-    toast(
-      `Not enough disk space on ${name} to import — below 1.5x the package size, cannot ` +
-      `override:\n${lines.join("\n")}`
-    );
-    return { proceed: false, force: false };
-  }
-  const sure = confirm(
-    `${name} is short on disk space for this import, but still has at least 1.5x the ` +
-    `package size free:\n\n${lines.join("\n")}\n\nProceed with the import anyway?`
-  );
-  // A declined override must not fail silently — in a multi-select bulk import
-  // this confirm() fires once per short-on-space host in turn, and a operator
-  // clicking through a run of them can easily decline one without meaning to
-  // skip it outright (operator-reported, 2026-07-25: a second selected server
-  // appeared to get no job at all, with no indication why).
-  if (!sure) toast(`Skipped ${name}: disk space override declined.`);
-  return { proceed: sure, force: sure };
-}
+// The disk-space check is part of the import job now (operator-directed,
+// 2026-08-26), not a pre-submit probe: it needs SSH plus an expert-mode
+// escalation, which is slow enough that doing it before the job existed left
+// the operator on a spinner with nothing on the Jobs tab, and surfaced a
+// shortfall as a browser alert rather than a job they could inspect. A
+// shortfall now fails the import job itself, and an override-eligible one
+// offers "Retry with override" on the job row -- see LOW_SPACE_OVERRIDABLE_RE.
 
 document.getElementById("bulk-import-btn").addEventListener("click", () => {
   const btn = document.getElementById("bulk-import-btn");
@@ -2513,14 +2487,13 @@ document.getElementById("bulk-import-btn").addEventListener("click", () => {
   bulkImport(btn, selectedServerNames, async (name) => {
     const extra = await operationCredentials(name, "import a package", currentEnv, true);
     if (extra === null) { toast(`Skipped ${name}: credentials not provided.`); return; }
-    const { proceed, force } = await checkDiskSpaceBeforeImport("servers", name, pkg, extra);
-    if (!proceed) return;
     const job = await api(envUrl(`/servers/${encodeURIComponent(name)}/import`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ package: pkg, force_low_space: force, ...extra }),
+      body: JSON.stringify({ package: pkg, force_low_space: false, ...extra }),
     });
     lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if it finishes fast
+    return job;
   });
 });
 
@@ -2537,6 +2510,7 @@ document.getElementById("bulk-import-cloud-btn").addEventListener("click", () =>
       body: JSON.stringify({ package_id: packageId, ...extra }),
     });
     lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if it finishes fast
+    return job;
   });
 });
 
@@ -3255,20 +3229,20 @@ document.getElementById("fw-bulk-import-btn").addEventListener("click", () => {
         body: JSON.stringify({ package: pkg, ...extra }),
       });
       lastJobStatus.set(job.id, job.status);
+      return job;
     });
     return;
   }
   bulkImport(btn, selectedFirewallNames, async (name) => {
     const extra = await operationCredentials(name, "import a package", currentEnv, true);
     if (extra === null) { toast(`Skipped ${name}: credentials not provided.`); return; }
-    const { proceed, force } = await checkDiskSpaceBeforeImport("firewalls", name, pkg, extra);
-    if (!proceed) return;
     const job = await api(envUrl(`/firewalls/${encodeURIComponent(name)}/import`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ package: pkg, force_low_space: force, ...extra }),
+      body: JSON.stringify({ package: pkg, force_low_space: false, ...extra }),
     });
     lastJobStatus.set(job.id, job.status);
+    return job;
   });
 });
 
@@ -3285,6 +3259,7 @@ document.getElementById("fw-bulk-import-cloud-btn").addEventListener("click", ()
       body: JSON.stringify({ package_id: packageId, ...extra }),
     });
     lastJobStatus.set(job.id, job.status);
+    return job;
   });
 });
 
@@ -4632,6 +4607,18 @@ function renderJobRow(row, job) {
   row.querySelector(".btn-recheck-import").classList.toggle(
     "hidden", !(job.status === "timed_out" && job.kind === "cpuse.import"),
   );
+  // Only an import that failed the disk-space gate WITH an eligible shortfall
+  // gets an override link. A shortfall below the hard floor has no override at
+  // all, and the backend refuses the call anyway -- this just keeps the link
+  // off rows where it would do nothing.
+  row.querySelector(".btn-retry-low-space").classList.toggle(
+    "hidden",
+    !(
+      job.status === "failed" &&
+      job.kind === "cpuse.import" &&
+      LOW_SPACE_OVERRIDABLE_RE.test(job.error ?? "")
+    ),
+  );
 }
 
 // A copy of CPUSE's own install log file content, once an install job has
@@ -4680,6 +4667,40 @@ function wireJobRow(row, jobId) {
     try { await api(`/api/jobs/${jobId}/cancel`, { method: "POST" }); }
     catch (e) { toast("Cancel failed: " + e.message); }
     await loadJobs();
+  });
+  row.querySelector(".btn-retry-low-space").addEventListener("click", async (ev) => {
+    ev.stopPropagation(); // don't also toggle the log row
+    const btn = ev.currentTarget;
+    const host = row.querySelector(".job-target").textContent;
+    const env = row.querySelector(".job-env").textContent;
+    const sure = confirm(
+      `${host} did not have the recommended free space for this import, but still has at ` +
+      `least 1.5x the package size available.` +
+      `
+
+Retry the import anyway?
+
+The original failure stays on the Jobs tab as the ` +
+      `record of why this was overridden.`
+    );
+    if (!sure) return;
+    const extra = await operationCredentials(host, "retry the import", env, true);
+    if (extra === null) return; // credential prompt cancelled
+    btn.disabled = true;
+    try {
+      const job = await api(`/api/jobs/${jobId}/retry-import-with-override`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(extra),
+      });
+      lastJobStatus.set(job.id, job.status);
+      toast(`Retrying the import on ${host} with the disk-space override.`);
+      await loadJobs();
+    } catch (e) {
+      toast("Retry failed: " + e.message);
+    } finally {
+      btn.disabled = false;
+    }
   });
   row.querySelector(".btn-recheck-import").addEventListener("click", async (ev) => {
     ev.stopPropagation(); // don't also toggle the log row

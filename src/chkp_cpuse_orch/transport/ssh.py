@@ -467,10 +467,16 @@ class SSHClient:
 
 
 def require_ok(result: CommandResult) -> CommandResult:
-    """Raise TransportError unless the command succeeded. Fail closed."""
+    """Raise TransportError unless the command succeeded. Fail closed.
+
+    Reports stdout when stderr is empty: **clish writes its errors to stdout**,
+    so reporting stderr alone reduced every clish failure to a bare "rc=1" with
+    no reason attached. That cost real debugging time on a config-lock failure
+    whose cause (CLINFR0771) was sitting in the discarded stdout all along."""
     if not result.ok:
+        detail = result.stderr.strip() or result.stdout.strip()
         raise TransportError(
-            f"command failed (rc={result.exit_status}): {result.command}\n{result.stderr.strip()}"
+            f"command failed (rc={result.exit_status}): {result.command}" + chr(10) + detail
         )
     return result
 
@@ -679,12 +685,45 @@ class GaiaExpertSession:
         self._shell.expect(self._LOGIN_PROMPT, timeout=timeout)
 
 
+# Gaia refuses a clish config change while the config database is locked, and
+# reports it on STDOUT as CLINFR0771 / CLINFR0519. Elevating to expert (which
+# every run_bash() on a clish-login host does) takes that lock, so the very
+# next clish `set` in the same session is refused -- which is what broke the
+# transfer shell-toggle on a real gateway, 2026-08-26.
+_CONFIG_LOCK_RE = re.compile(r"CLINFR0771|CLINFR0519|[Cc]onfig(?:uration)? lock")
+
+
+def _run_clish_breaking_lock(client: SSHClient | GaiaSession, command: str) -> CommandResult:
+    """Run a mutating clish command, taking the config lock only if we are
+    actually blocked by it.
+
+    Deliberately NOT a pre-emptive `lock database override` on every call:
+    that forcibly evicts whoever legitimately holds the lock (an admin mid-
+    change in SmartConsole or clish) and is exactly the pattern the security
+    review flagged in cpuse.py. Override only on an observed conflict, on a
+    mutating path we are already committed to, and log who held it."""
+    result = client.run(command)
+    if result.ok or not _CONFIG_LOCK_RE.search(result.stdout + result.stderr):
+        return result
+    logger.warning(
+        "clish config lock held; overriding to continue",
+        command=command,
+        detail=(result.stdout.strip() or result.stderr.strip())[:200],
+    )
+    client.run("lock database override")
+    return client.run(command)
+
+
 def _restore_clish_shell(client: SSHClient, username: str) -> None:
     """Flip an account's shell back to clish from a session that is
     currently bash — used only by ``GaiaSession``'s transfer maneuver below,
     after a login-shell toggle to bash has already happened. Wrapped as
     ``clish -c`` since the connection this runs on is bash right now."""
-    require_ok(client.run(f"clish -c {shlex.quote(f'set user {username} shell /etc/cli.sh')}"))
+    require_ok(
+        _run_clish_breaking_lock(
+            client, f"clish -c {shlex.quote(f'set user {username} shell /etc/cli.sh')}"
+        )
+    )
     require_ok(client.run(f"clish -c {shlex.quote('save config')}"))
 
 
@@ -821,8 +860,14 @@ class GaiaSession:
                 "toggle the account's own shell for the transfer"
             )
         username = self._username
-        require_ok(self.run(f"set user {shlex.quote(username)} shell /bin/bash"))
-        require_ok(self.run("save config"))
+        # Both of these are clish config writes, and this session has almost
+        # certainly just taken the config lock by elevating to expert for an
+        # earlier step (a disk check, a sha1) -- so they must be able to break
+        # that lock or the transfer can never start.
+        require_ok(
+            _run_clish_breaking_lock(self, f"set user {shlex.quote(username)} shell /bin/bash")
+        )
+        require_ok(_run_clish_breaking_lock(self, "save config"))
         # A previously-elevated interactive pty lives on the transport we're
         # about to close — drop it so a later run_bash() re-elevates fresh on
         # the reconnected session below, instead of using a dead channel.

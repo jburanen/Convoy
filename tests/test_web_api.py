@@ -1012,10 +1012,13 @@ def test_bulk_import_starts_a_job_for_every_selected_server(
     client: TestClient, transport: FakeTransport
 ) -> None:
     """Reproduces the app.js bulk-import flow (select multiple rows -> Upload
-    and import) for two management servers: disk-space precheck then import,
-    one host at a time, exactly as bulkImport()'s sequential loop does.
-    Regression guard for an operator report that only the first selected
-    server's job was ever queued."""
+    and import) for two management servers, one host at a time, exactly as
+    bulkImport()'s sequential loop does. Regression guard for an operator
+    report that only the first selected server's job was ever queued.
+
+    No precheck step: the disk-space check moved inside the import job
+    (operator-directed, 2026-08-26), so bulk import now submits every job
+    straight away instead of blocking on a per-host SSH round trip."""
     _add_ssh_credential(client, "mgmt-01")
     job = _add_server(client, "default", name="mgmt-02", address="192.0.2.11", role="management")
     assert job["status"] == "succeeded", job["error"]
@@ -1024,12 +1027,6 @@ def test_bulk_import_starts_a_job_for_every_selected_server(
 
     job_ids = []
     for host in ("mgmt-01", "mgmt-02"):
-        precheck = client.post(
-            f"/api/env/default/servers/{host}/import/disk-space", json={"package": "jhf.tgz"}
-        )
-        assert precheck.status_code == 200, precheck.text
-        assert all(c["ok"] for c in precheck.json())
-
         resp = client.post(
             f"/api/env/default/servers/{host}/import",
             json={"package": "jhf.tgz", "force_low_space": False},
@@ -1822,3 +1819,40 @@ def test_accept_host_key_404s_for_an_unknown_environment(client: TestClient) -> 
         "/api/environments/nosuchenv/hosts/mgmt-01/accept-host-key", json={"confirmed": True}
     )
     assert resp.status_code == 404
+
+
+# -- retry with override (disk-space check now lives inside the import job) --------
+
+
+def test_retry_with_override_route_rejects_a_job_that_did_not_fail_that_way(
+    client: TestClient, transport: FakeTransport
+) -> None:
+    """The Jobs-tab link must not become a way to blanket-force any import."""
+    _add_ssh_credential(client, "mgmt-01")
+    _upload_package(client)
+    transport.put_size = lambda local: 1  # fail on size mismatch, not disk space
+    resp = client.post(
+        "/api/env/default/servers/mgmt-01/import",
+        json={"package": "jhf.tgz", "force_low_space": False},
+    )
+    assert resp.status_code == 202, resp.text
+    job_id = resp.json()["id"]
+    finished = _wait_for_job(client, job_id)
+    assert finished["status"] == "failed"
+    assert "size mismatch" in (finished["error"] or "")
+
+    retry = client.post(f"/api/jobs/{job_id}/retry-import-with-override", json={})
+    assert retry.status_code == 400
+    assert "overridable disk-space shortfall" in retry.json()["detail"]
+
+
+def test_disk_space_precheck_routes_are_gone(client: TestClient) -> None:
+    """The check moved into the import job (operator-directed, 2026-08-26);
+    the synchronous probes it replaced must not linger as a second path."""
+    for kind in ("servers", "firewalls"):
+        resp = client.post(
+            f"/api/env/default/{kind}/mgmt-01/import/disk-space", json={"package": "jhf.tgz"}
+        )
+        # 405: the path no longer matches an API route and falls through to
+        # the static mount, which serves GET only. Either way it is gone.
+        assert resp.status_code in (404, 405), f"{kind}: {resp.status_code}"

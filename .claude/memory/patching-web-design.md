@@ -18,6 +18,26 @@ UI is the primary interface (see [[architecture]]); the CLI is secondary.
   → verify). Code: `cpuse.py`. This is the manual flow the web UI exposes as
   per-server buttons that reflect *detected* state (`show installer packages` is the
   source of truth), each button idempotent.
+  - **The disk-space check is part of the import job** (operator-directed,
+    2026-08-26). It used to ALSO run as a synchronous pre-submit probe
+    (`check_import_disk_space` + two `/import/disk-space` routes, now removed)
+    so the UI could show the shortfall and `confirm()` an override before
+    queuing. That probe needed SSH plus an expert-mode escalation, so the
+    operator sat on a spinner with nothing on the Jobs tab, and a failure
+    arrived as a browser `alert()` rather than a job they could inspect.
+    Now: submitting an import creates the job immediately, `bulkImport()`
+    switches to the Jobs tab (expanding the log only for a single target --
+    every open log is re-fetched on each poll), and the check runs as the
+    job's first step with `ctx.set_status("checking disk space")`. A shortfall
+    fails the job. An **override-eligible** shortfall (still >=1.5x the
+    package size) additionally offers **"Retry with override"** on the job
+    row, which submits a NEW import with `force_low_space` via
+    `retry_import_with_override`; the failed job stays as the record of why.
+    The link is gated on the error carrying `LOW_SPACE_OVERRIDABLE`
+    (`services/patching.py`, mirrored as `LOW_SPACE_OVERRIDABLE_RE` in
+    app.js -- keep the two in step), and the service re-checks that same
+    marker so the link can't be repurposed to force an unrelated failure.
+    Below 1.5x there is still no override, ever.
   - **Pre-import disk space check** (operator-specified, 2026-07-23):
     `PatchingService._check_disk_space` runs `df -Pk` on `/var/log` and `/`
     (raw shell command, same as `sha1sum` below) before anything else in the

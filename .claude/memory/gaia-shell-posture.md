@@ -170,7 +170,8 @@ FAILED" for this case were rewritten to expect a synchronous raise instead
 `timed out waiting for '(?:\[Expert@...\]#\s*$)|(?:[Pp]assword\s*:\s*$)' on
 <host>; output so far: ''`. Surfaced first as "Disk space check for <host>
 failed" from the synchronous pre-import check
-(`PatchingService.check_import_disk_space`).
+(`PatchingService.check_import_disk_space`, since removed -- the check moved
+inside the import job in v0.71.0, see [[patching-web-design]]).
 
 **Cause:** the `expert` password reader on that Gaia build does **not** act on
 the newline `send_secret()` already sent. The password sits buffered and unread
@@ -195,3 +196,39 @@ in a single write both hang exactly like the original bug. Two separate writes
 is the only sequence that works safely — `tests/test_ssh_expert.py` guards
 this, including a test asserting the password is never concatenated with extra
 terminators.
+
+## The config lock blocks the transfer shell-toggle (live gear, 2026-08-26)
+
+Found immediately after the expert-escalation fix above, on the same import.
+
+**Symptom:** `TransportError: command failed (rc=1): set user <svc> shell /bin/bash`
+with no reason attached, right after the disk-space check passed.
+
+**Cause:** elevating to expert — which every `run_bash()` on a clish-login host
+does — takes Gaia's **config-database lock**. The transfer's shell-toggle is a
+clish *config write* on that same session, so Gaia refuses it:
+
+```
+CLINFR0771  Config lock is owned by admin. Use the command 'lock database override'...
+CLINFR0519  Configuration lock present. Can not execute this command.
+```
+
+("owned by admin" is misleading — several accounts here share **uid 0**, and
+Gaia names the lock owner by uid, so this is usually *our own* session.)
+
+**Why it looked like nothing:** clish writes those errors to **stdout**, and
+`require_ok` only reported `stderr` — so every clish failure collapsed to a bare
+`rc=1`. `require_ok` now falls back to stdout when stderr is empty. Fix that
+first in any future clish debugging; the reason is usually right there.
+
+**Fix:** `_run_clish_breaking_lock()` — run the command, and *only if* it comes
+back with a lock error, issue `lock database override` and retry once, logging
+who held it. Used by the shell-toggle, `save config`, and the clish restore.
+
+**Deliberately not pre-emptive.** Overriding on every call forcibly evicts
+whoever legitimately holds the lock (an admin mid-change in SmartConsole or
+clish) — exactly what the security review flagged as **M9** against `cpuse.py`,
+which *does* override before every call including read-only status polls. When
+M9 is fixed, make cpuse.py adopt this same observe-then-override shape rather
+than inventing a second one. `tests/test_gaia_session.py` asserts both the
+retry ordering and that no override fires when nothing is blocking.

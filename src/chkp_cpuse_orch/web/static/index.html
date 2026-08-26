@@ -1349,6 +1349,11 @@
     <td class="job-error">
       <span class="job-error-text"></span>
       <button type="button" class="link-btn btn-recheck-import hidden">Check status</button>
+      <!-- Shown only on an import job that failed because the host was short
+           on disk space but still had at least 1.5x the package size free.
+           Resubmits the same import with the override set -- see
+           PatchingService.retry_import_with_override. -->
+      <button type="button" class="link-btn btn-retry-low-space hidden danger-link">Retry with override</button>
     </td>
     <td><button class="btn-cancel small hidden">Cancel</button></td>
   </tr>
