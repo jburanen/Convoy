@@ -13,11 +13,15 @@ from chkp_cpuse_orch.errors import AuthError, ConfigError
 from chkp_cpuse_orch.store import Store, utcnow
 from chkp_cpuse_orch.web.app import create_app
 from chkp_cpuse_orch.web.auth import (
+    ALLOW_NO_AUTH_ENV,
     BASIC_AUTH_DISABLE_ENV,
     BASIC_AUTH_PASSWORD_ENV,
     BASIC_AUTH_USER_ENV,
     LDAP_REQUIRED_GROUP_ENV,
     LDAP_URL_ENV,
+    LOGIN_BACKOFF_BASE_SECONDS,
+    LOGIN_BACKOFF_MAX_SECONDS,
+    LOGIN_FREE_ATTEMPTS,
     NATIVE_TLS_CERTFILE_ENV,
     NATIVE_TLS_KEYFILE_ENV,
     SESSION_COOKIE_NAME,
@@ -25,10 +29,12 @@ from chkp_cpuse_orch.web.auth import (
     AuthSettings,
     BasicAuthenticator,
     LDAPAuthenticator,
+    LoginThrottle,
     hash_token,
     load_active_auth_settings,
     load_auth_settings,
     load_basic_auth_settings,
+    login_backoff_seconds,
     new_session_token,
 )
 
@@ -324,8 +330,25 @@ def test_basic_auth_is_on_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_basic_auth_disable_env_turns_it_off() -> None:
-    assert load_basic_auth_settings({BASIC_AUTH_DISABLE_ENV: "true"}) is None
-    assert load_active_auth_settings({BASIC_AUTH_DISABLE_ENV: "true"}) is None
+    """Running open takes BOTH keys — see ALLOW_NO_AUTH_ENV."""
+    env = {BASIC_AUTH_DISABLE_ENV: "true", ALLOW_NO_AUTH_ENV: "1"}
+    assert load_basic_auth_settings(env) is None
+    assert load_active_auth_settings(env) is None
+
+
+def test_basic_auth_disable_alone_keeps_the_login_gate_up() -> None:
+    """Fail closed: BASIC_AUTH_DISABLE is easy to set while thinking it only
+    relaxes a login prompt, so on its own it must not expose every destructive
+    route. The second, explicitly-named acknowledgement is required."""
+    env = {BASIC_AUTH_DISABLE_ENV: "true"}
+    settings = load_basic_auth_settings(env)
+    assert settings is not None
+    assert settings.username == "admin"
+    assert load_active_auth_settings(env) is not None
+
+
+def test_allow_no_auth_alone_does_nothing() -> None:
+    assert load_basic_auth_settings({ALLOW_NO_AUTH_ENV: "1"}) is not None
 
 
 def test_ldap_takes_priority_over_basic_auth_when_both_configured() -> None:
@@ -406,9 +429,10 @@ def test_default_basic_auth_login_and_credential_storage(
     monkeypatch.delenv(BASIC_AUTH_DISABLE_ENV, raising=False)
     with TestClient(_app_basic(tmp_path, monkeypatch)) as c:
         assert c.get("/api/status").status_code == 401  # on by default, no login yet
-        assert c.post(
-            "/api/auth/login", json={"username": "admin", "password": "admin"}
-        ).status_code == 200
+        assert (
+            c.post("/api/auth/login", json={"username": "admin", "password": "admin"}).status_code
+            == 200
+        )
         me = c.get("/api/auth/me").json()
         assert me == {
             "auth_enabled": True,
@@ -430,9 +454,7 @@ def test_basic_auth_custom_credentials(tmp_path: Path, monkeypatch: pytest.Monke
     monkeypatch.setenv(BASIC_AUTH_PASSWORD_ENV, "s3cret-enough")
     with TestClient(_app_basic(tmp_path, monkeypatch)) as c:
         assert (
-            c.post(
-                "/api/auth/login", json={"username": "admin", "password": "admin"}
-            ).status_code
+            c.post("/api/auth/login", json={"username": "admin", "password": "admin"}).status_code
             == 401
         )
         assert (
@@ -444,9 +466,7 @@ def test_basic_auth_custom_credentials(tmp_path: Path, monkeypatch: pytest.Monke
         )
 
 
-def test_basic_auth_disable_env_runs_open(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_basic_auth_disable_env_runs_open(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # conftest's autouse fixture already sets this — asserted explicitly here.
     with TestClient(_app_basic(tmp_path, monkeypatch)) as c:
         status = c.get("/api/status").json()
@@ -466,9 +486,7 @@ def test_change_password_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         )
         c.post("/api/auth/logout")
         assert (
-            c.post(
-                "/api/auth/login", json={"username": "admin", "password": "admin"}
-            ).status_code
+            c.post("/api/auth/login", json={"username": "admin", "password": "admin"}).status_code
             == 401
         )
         assert (
@@ -505,3 +523,139 @@ def test_change_password_rejected_under_ldap(tmp_path: Path) -> None:
             ).status_code
             == 400
         )
+
+
+# -- login throttling (H4) ---------------------------------------------------------
+#
+# Nothing else slows password guessing against a tool that can reboot production
+# firewalls, and the shipped default is admin/admin. See LoginThrottle.
+
+
+def test_login_backoff_curve_is_free_then_exponential_then_capped() -> None:
+    assert login_backoff_seconds(1) == 0.0
+    # all LOGIN_FREE_ATTEMPTS attempts are genuinely free; the next one waits
+    assert login_backoff_seconds(LOGIN_FREE_ATTEMPTS - 1) == 0.0
+    assert login_backoff_seconds(LOGIN_FREE_ATTEMPTS) == LOGIN_BACKOFF_BASE_SECONDS
+    assert login_backoff_seconds(LOGIN_FREE_ATTEMPTS + 1) == LOGIN_BACKOFF_BASE_SECONDS * 2
+    # capped, so a lockout can't become a permanent denial of service
+    assert login_backoff_seconds(999) == LOGIN_BACKOFF_MAX_SECONDS
+
+
+def test_throttle_blocks_after_free_attempts_and_clears_on_success(tmp_path: Path) -> None:
+    store = Store(tmp_path / "throttle.db")
+    throttle = LoginThrottle(store)
+    scopes = LoginThrottle.scopes("admin", "192.0.2.5")
+
+    for _ in range(LOGIN_FREE_ATTEMPTS):
+        assert throttle.retry_after(scopes) == 0.0
+        throttle.record_failure(scopes)
+    assert throttle.retry_after(scopes) > 0.0
+
+    throttle.record_success(scopes)
+    assert throttle.retry_after(scopes) == 0.0
+
+
+def test_throttle_survives_a_restart(tmp_path: Path) -> None:
+    """Persisted, not in-memory — otherwise restarting the container is a
+    lockout bypass."""
+    db = tmp_path / "throttle.db"
+    scopes = LoginThrottle.scopes("admin", "192.0.2.5")
+    first = LoginThrottle(Store(db))
+    for _ in range(LOGIN_FREE_ATTEMPTS + 1):
+        first.record_failure(scopes)
+
+    assert LoginThrottle(Store(db)).retry_after(scopes) > 0.0
+
+
+def test_throttle_scopes_username_and_ip_independently(tmp_path: Path) -> None:
+    """Neither rotating usernames from one host nor spraying one username from
+    many hosts should slip through."""
+    store = Store(tmp_path / "throttle.db")
+    throttle = LoginThrottle(store)
+    for _ in range(LOGIN_FREE_ATTEMPTS + 1):
+        throttle.record_failure(LoginThrottle.scopes("admin", "192.0.2.5"))
+
+    # same IP, brand-new username -> still throttled by the ip: scope
+    assert throttle.retry_after(LoginThrottle.scopes("someone-else", "192.0.2.5")) > 0.0
+    # same username, brand-new IP -> still throttled by the user: scope
+    assert throttle.retry_after(LoginThrottle.scopes("admin", "198.51.100.9")) > 0.0
+    # unrelated on both axes -> free
+    assert throttle.retry_after(LoginThrottle.scopes("someone-else", "198.51.100.9")) == 0.0
+
+
+def test_login_route_returns_429_once_throttled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(BASIC_AUTH_DISABLE_ENV, raising=False)
+    with TestClient(_app_basic(tmp_path, monkeypatch)) as c:
+        for _ in range(LOGIN_FREE_ATTEMPTS):
+            assert (
+                c.post("/api/auth/login", json={"username": "admin", "password": "wrong"})
+            ).status_code == 401
+        blocked = c.post("/api/auth/login", json={"username": "admin", "password": "wrong"})
+        assert blocked.status_code == 429
+        assert "Retry-After" in blocked.headers
+        # and the CORRECT password is refused too while throttled — otherwise
+        # the throttle would only slow down the guesses that were going to fail
+        assert (
+            c.post("/api/auth/login", json={"username": "admin", "password": "admin"})
+        ).status_code == 429
+
+
+# -- default-password warning (H3) -------------------------------------------------
+
+
+def test_uses_default_password_is_true_out_of_the_box(tmp_path: Path) -> None:
+    store = Store(tmp_path / "auth.db")
+    settings = load_basic_auth_settings({})
+    assert settings is not None
+    assert BasicAuthenticator(store, settings).uses_default_password is True
+
+
+def test_uses_default_password_is_false_when_env_sets_one(tmp_path: Path) -> None:
+    store = Store(tmp_path / "auth.db")
+    settings = load_basic_auth_settings({BASIC_AUTH_PASSWORD_ENV: "something-else"})
+    assert settings is not None
+    assert BasicAuthenticator(store, settings).uses_default_password is False
+
+
+def test_uses_default_password_is_false_after_a_runtime_change(tmp_path: Path) -> None:
+    """A UI password change persists its own hash, so the warning must stop
+    even though the env var is still unset."""
+    store = Store(tmp_path / "auth.db")
+    settings = load_basic_auth_settings({})
+    assert settings is not None
+    auth = BasicAuthenticator(store, settings)
+    auth.change_password("admin", "a much better password")
+    assert auth.uses_default_password is False
+    # and it stays false across a restart, since the hash is in the DB
+    assert BasicAuthenticator(store, settings).uses_default_password is False
+
+
+# -- password change revokes other sessions (M13) ----------------------------------
+
+
+def test_password_change_revokes_other_sessions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Changing a password is how an operator revokes access someone else may
+    already have — a session token must not outlive it."""
+    monkeypatch.delenv(BASIC_AUTH_DISABLE_ENV, raising=False)
+    app = _app_basic(tmp_path, monkeypatch)
+    with TestClient(app) as attacker, TestClient(app) as operator:
+        for client in (attacker, operator):
+            assert (
+                client.post("/api/auth/login", json={"username": "admin", "password": "admin"})
+            ).status_code == 200
+        assert attacker.get("/api/status").status_code == 200
+
+        changed = operator.post(
+            "/api/auth/password",
+            json={"current_password": "admin", "new_password": "a much better password"},
+        )
+        assert changed.status_code == 200
+
+        # the other session is dead...
+        assert attacker.get("/api/status").status_code == 401
+        # ...but the tab that made the change keeps working
+        assert operator.get("/api/status").status_code == 200

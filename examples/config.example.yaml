@@ -3,10 +3,7 @@
 
 defaults:
   dry_run: true                 # mutating ops preview by default
-  max_concurrent_gateways: 2    # blast-radius cap
-  reboot_after_install: true
-  stop_on_first_failure: true
-  snapshot_before_install: true
+  max_concurrent_gateways: 2    # blast-radius cap (CLI planner only, see below)
 
 paths:
   # Relative paths here resolve against THIS FILE's own directory, not
@@ -32,5 +29,11 @@ paths:
 #   - name: dmz
 #     inventory: /data/inventories/dmz.yaml
 
-# Name of the approved maintenance window to enforce (looked up at runtime).
-maintenance_window: null
+# NOTE on safety settings: this file deliberately does NOT offer
+# `snapshot_before_install`, `stop_on_first_failure`, `reboot_after_install`, or
+# `maintenance_window`. Earlier versions shipped them here and no code read any
+# of them, which invited the assumption that a rollback snapshot was being taken
+# or a maintenance window enforced. They will come back alongside the code that
+# actually honours them. Today, rollout ordering and blast radius for CDT are
+# whatever the operator puts in the candidates list — see the README's Safety
+# model section.

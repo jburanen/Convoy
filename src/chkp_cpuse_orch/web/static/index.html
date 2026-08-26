@@ -1187,6 +1187,11 @@
       <span class="srv-summary"></span>
       <span class="srv-checked"></span>
       <button type="button" class="link-btn srv-refresh-link">Refresh</button>
+      <!-- Shown only when a refresh failed because the host's SSH key no longer
+           matches the pinned one. Re-accepting is deliberately an explicit
+           action: the same symptom is what an intercepted connection looks
+           like. See transport/ssh.py. -->
+      <button type="button" class="link-btn srv-accept-hostkey-link hidden danger-link">Accept New Host Key</button>
     </td>
   </tr>
 </template>
@@ -1230,6 +1235,11 @@
            auth failure): SSH login + expert-mode escalation, on demand. See
            services/spark_patching.py. -->
       <button type="button" class="link-btn srv-spark-test-creds-link hidden">Test Credentials</button>
+      <!-- Shown only when a refresh failed because the host's SSH key no longer
+           matches the pinned one. Re-accepting is deliberately an explicit
+           action: the same symptom is what an intercepted connection looks
+           like. See transport/ssh.py. -->
+      <button type="button" class="link-btn srv-accept-hostkey-link hidden danger-link">Accept New Host Key</button>
     </td>
   </tr>
 </template>

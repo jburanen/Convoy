@@ -183,10 +183,7 @@ def test_extract_hf_config_falls_back_to_a_nested_file_if_no_root_one_exists(
 def test_extract_package_metadata_reads_the_sibling_conditions_set_note(
     tmp_path: Path,
 ) -> None:
-    conditions = (
-        '{"set_description": "This hotfix is supported only for R82.10 '
-        '(jess_main).\\n"}'
-    )
+    conditions = '{"set_description": "This hotfix is supported only for R82.10 (jess_main).\\n"}'
     package_path = tmp_path / "pkg.tar"
     package_path.write_bytes(
         _make_tar(

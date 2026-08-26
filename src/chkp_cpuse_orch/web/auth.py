@@ -28,7 +28,7 @@ import hashlib
 import os
 import secrets
 import ssl
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any, Protocol
 
 from argon2 import PasswordHasher
@@ -66,6 +66,13 @@ NATIVE_TLS_KEYFILE_ENV = "CHKP_CPUSE_SSL_KEYFILE"
 BASIC_AUTH_USER_ENV = "BASIC_AUTH_USER"
 BASIC_AUTH_PASSWORD_ENV = "BASIC_AUTH_PASSWORD"
 BASIC_AUTH_DISABLE_ENV = "BASIC_AUTH_DISABLE"
+# Running with NO authentication exposes every destructive route — credential
+# bootstrap onto gateways, CDT execute, environment deletion — to anyone who can
+# reach the port. BASIC_AUTH_DISABLE alone is too easy to set while thinking it
+# only relaxes a login prompt, so it must be paired with this second, explicitly
+# named acknowledgement. Set only one and the login gate stays up (fail closed),
+# with a warning explaining what to do.
+ALLOW_NO_AUTH_ENV = "CHKP_CPUSE_ALLOW_NO_AUTH"
 DEFAULT_BASIC_AUTH_USER = "admin"
 DEFAULT_BASIC_AUTH_PASSWORD = "admin"
 # meta table key (store.py) for a password changed at runtime via the UI; overrides
@@ -172,19 +179,34 @@ class BasicAuthSettings(BaseModel):
     password_hash: str
     idle_minutes: int = Field(default=DEFAULT_IDLE_MINUTES, ge=1)
     cookie_secure: bool = True
+    # True when BASIC_AUTH_PASSWORD was unset (or set to the shipped default),
+    # so startup can warn about it. Only meaningful together with the absence
+    # of a DB-persisted password change — see BasicAuthenticator.uses_default_password.
+    is_default_password: bool = False
 
 
 def load_basic_auth_settings(
     environ: os._Environ[str] | dict[str, str] | None = None,
 ) -> BasicAuthSettings | None:
     """Build local basic-auth settings from the environment, or ``None`` when
-    ``BASIC_AUTH_DISABLE`` is set. Unset ``BASIC_AUTH_USER``/``BASIC_AUTH_PASSWORD``
+    ``BASIC_AUTH_DISABLE`` **and** ``CHKP_CPUSE_ALLOW_NO_AUTH`` are both set
+    (see ALLOW_NO_AUTH_ENV — one alone keeps the login gate up).
+    Unset ``BASIC_AUTH_USER``/``BASIC_AUTH_PASSWORD``
     default to ``admin``/``admin`` — this backend is **on by default** so a fresh
     deployment isn't left wide open; operators are expected to change the password
     (or configure LDAP, or set ``BASIC_AUTH_DISABLE``) promptly."""
     env = dict(os.environ if environ is None else environ)
     if _env_bool(env, BASIC_AUTH_DISABLE_ENV, False):
-        return None
+        if _env_bool(env, ALLOW_NO_AUTH_ENV, False):
+            return None
+        logger.warning(
+            f"{BASIC_AUTH_DISABLE_ENV} is set but {ALLOW_NO_AUTH_ENV} is not — "
+            "keeping the login gate up rather than running this service open",
+            hint=(
+                f"running with no authentication exposes every destructive route; "
+                f"set {ALLOW_NO_AUTH_ENV}=1 as well if that is genuinely intended"
+            ),
+        )
     username = (env.get(BASIC_AUTH_USER_ENV) or DEFAULT_BASIC_AUTH_USER).strip()
     password = env.get(BASIC_AUTH_PASSWORD_ENV) or DEFAULT_BASIC_AUTH_PASSWORD
     return BasicAuthSettings(
@@ -192,6 +214,7 @@ def load_basic_auth_settings(
         password_hash=PasswordHasher().hash(password),
         idle_minutes=_load_idle_minutes(env),
         cookie_secure=_env_bool(env, SESSION_COOKIE_SECURE_ENV, _default_cookie_secure(env)),
+        is_default_password=password == DEFAULT_BASIC_AUTH_PASSWORD,
     )
 
 
@@ -282,6 +305,77 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+# -- login throttling --------------------------------------------------------------
+#
+# There is otherwise nothing at all slowing down password guessing against this
+# tool, and the shipped default is admin/admin. Two independent scopes are
+# tracked per attempt — the username being guessed and the source address doing
+# the guessing — and the stricter of the two governs, so neither rotating
+# usernames from one host nor spraying one username from many hosts slips
+# through. State lives in SQLite (store.login_attempts) so restarting the
+# container isn't a lockout bypass.
+
+# Free attempts before any delay applies; then the backoff doubles per failure.
+LOGIN_FREE_ATTEMPTS = 5
+LOGIN_BACKOFF_BASE_SECONDS = 2.0
+LOGIN_BACKOFF_MAX_SECONDS = 900.0  # 15 min ceiling — locking out forever is a DoS
+# Untouched throttle records are swept after this long (also the point at which
+# a quiet attacker's counter effectively resets).
+LOGIN_ATTEMPT_TTL = timedelta(hours=24)
+
+
+def login_backoff_seconds(failures: int) -> float:
+    """Delay required after ``failures`` consecutive failures.
+
+    Zero until LOGIN_FREE_ATTEMPTS have actually been spent, so ordinary typos
+    cost nothing: with the default of 5, attempts 1-5 are free and the 6th is
+    the first to be made to wait."""
+    excess = failures - LOGIN_FREE_ATTEMPTS + 1
+    if excess <= 0:
+        return 0.0
+    delay: float = LOGIN_BACKOFF_BASE_SECONDS * float(2 ** (excess - 1))
+    return min(delay, LOGIN_BACKOFF_MAX_SECONDS)
+
+
+class LoginThrottle:
+    """Persistent failed-login backoff, keyed by arbitrary scope strings."""
+
+    def __init__(self, store: Store) -> None:
+        self._store = store
+
+    @staticmethod
+    def scopes(username: str, source_ip: str | None) -> list[str]:
+        scopes = [f"user:{username.strip().lower()}"]
+        if source_ip:
+            scopes.append(f"ip:{source_ip}")
+        return scopes
+
+    def retry_after(self, scopes: list[str], now: datetime | None = None) -> float:
+        """Seconds the caller must still wait, or 0.0 if it may proceed. The
+        strictest scope wins."""
+        moment = now or utcnow()
+        worst = 0.0
+        for scope in scopes:
+            record = self._store.get_login_attempts(scope)
+            if record is None:
+                continue
+            failures, last_failed = record
+            if moment - last_failed > LOGIN_ATTEMPT_TTL:
+                continue
+            required = login_backoff_seconds(failures)
+            elapsed = (moment - last_failed).total_seconds()
+            worst = max(worst, required - elapsed)
+        return max(worst, 0.0)
+
+    def record_failure(self, scopes: list[str]) -> None:
+        for scope in scopes:
+            self._store.record_login_failure(scope)
+
+    def record_success(self, scopes: list[str]) -> None:
+        for scope in scopes:
+            self._store.clear_login_attempts(scope)
+
+
 class AuthManager:
     """Bundles an ``Authenticator`` with server-side session storage and the auth
     settings that drive cookie/idle behaviour. The single object the web layer
@@ -347,6 +441,10 @@ class AuthManager:
 
     def purge_idle(self) -> int:
         return self._store.purge_idle_sessions(utcnow() - self.idle)
+
+    def purge_login_attempts(self, cutoff: datetime) -> int:
+        """Sweep stale failed-login throttle records — see LoginThrottle."""
+        return self._store.purge_login_attempts(cutoff)
 
 
 # -- LDAP backend ------------------------------------------------------------------
@@ -519,6 +617,16 @@ class BasicAuthenticator:
         self._hasher = PasswordHasher()
         stored_hash = store.get_meta(BASIC_AUTH_PASSWORD_HASH_META_KEY)
         self._password_hash = stored_hash or settings.password_hash
+        # A runtime password change persists its own hash and overrides the
+        # env-var default, so "still on admin/admin" needs both halves.
+        self._uses_default_password = settings.is_default_password and stored_hash is None
+
+    @property
+    def uses_default_password(self) -> bool:
+        """True while this deployment still accepts the built-in default
+        password. Drives the startup warning in web/app.py — a tool that can
+        reboot production firewalls should not sit on admin/admin quietly."""
+        return self._uses_default_password
 
     def authenticate(self, username: str, password: str) -> AuthenticatedUser:
         if not password:
@@ -541,3 +649,9 @@ class BasicAuthenticator:
         new_hash = self._hasher.hash(new_password)
         self._store.set_meta(BASIC_AUTH_PASSWORD_HASH_META_KEY, new_hash)
         self._password_hash = new_hash
+        self._uses_default_password = False
+        # Changing the password is how an operator responds to "someone else may
+        # have my credentials" — so it has to end any session that credential
+        # already established, not just stop new logins. The caller re-issues a
+        # session for the user who made the change.
+        self._store.delete_sessions_for_user(self.settings.username)

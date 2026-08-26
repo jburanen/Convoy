@@ -48,6 +48,19 @@ class GaiaShellRestoreError(TransportError):
     loudly and tell the operator to fix the account's shell by hand."""
 
 
+class HostKeyChangedError(TransportError):
+    """The SSH host key presented by a Gaia host no longer matches the one
+    pinned for it in this tool's known_hosts file.
+
+    This tool authenticates to every Gaia host with a stored password and, for
+    anything patch-related, the expert-mode password — both root-equivalent.
+    A changed host key means either the host was legitimately rebuilt/upgraded
+    or something is impersonating it, and there is no way to tell the two
+    apart from here. Fail closed and make the operator re-accept the new key
+    explicitly rather than handing root credentials to whatever answered.
+    See transport/ssh.py and the accept-host-key route in web/app.py."""
+
+
 class TransportTimeoutError(TransportError):
     """An expected pattern never appeared before the deadline, but the SSH
     channel never reported closed — distinct from the channel actually

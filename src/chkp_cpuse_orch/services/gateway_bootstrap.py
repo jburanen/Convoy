@@ -84,6 +84,7 @@ class MgmtClientContext(Protocol):
     ) -> None: ...
     def run_script(self, script: str, targets: list[str], *, script_name: str = ...) -> str: ...
     def show_task(self, task_id: str) -> dict[str, Any]: ...
+    def show_gateways_and_servers(self, *, details_level: str = ...) -> list[dict[str, Any]]: ...
 
 
 MgmtClientFactory = Callable[..., MgmtClientContext]
@@ -106,6 +107,60 @@ def _bootstrap_credential(host: Host, bundle: dict[CredentialKind, Any]) -> tupl
             "(edit it on the Provisioning tab)"
         )
     return pw_cred.username, pw_cred.reveal()
+
+
+def _object_address(obj: dict[str, Any]) -> str:
+    """The address a management-database object reports, using the same field
+    precedence services/discovery.py already applies to these objects."""
+    return str(obj.get("ipv4-address") or obj.get("ipv6-address") or "").strip()
+
+
+def _confirm_target_identity(client: MgmtClientContext, host: Host) -> str:
+    """Assert that the management server's object named ``host.name`` really is
+    the box at ``host.address``, and return the address it reported.
+
+    ``run-script`` resolves its targets by **name**, against the management
+    server's own object database — not against anything this tool configured.
+    Without this check, a local inventory row is only a name plus a credential
+    set: point one at any address (or none), name it after a real SIC-trusted
+    gateway, and the bootstrap script's uid-0 ``adminRole`` account lands on
+    that real gateway instead. The local ``address`` is the only field that
+    ties a row to a specific device, so it has to be the thing we verify
+    against before borrowing the management server's SIC trust.
+
+    Fails closed: an unknown name, an object with no usable address, or any
+    mismatch raises rather than proceeding."""
+    matches = [
+        obj
+        for obj in client.show_gateways_and_servers()
+        if str(obj.get("name") or "").strip() == host.name
+    ]
+    if not matches:
+        raise InventoryError(
+            f"the management server has no gateway/server object named {host.name!r} — "
+            "refusing to push credentials to a target it can't resolve"
+        )
+    if len(matches) > 1:
+        raise InventoryError(
+            f"the management server reports {len(matches)} objects named {host.name!r} — "
+            "refusing to push credentials to an ambiguous target"
+        )
+    resolved = _object_address(matches[0])
+    if not resolved:
+        raise InventoryError(
+            f"the management server's object {host.name!r} reports no IP address — "
+            "can't confirm it is the host configured at "
+            f"{host.address!r}, refusing to push credentials"
+        )
+    if resolved != host.address.strip():
+        raise InventoryError(
+            f"refusing to bootstrap {host.name!r}: this environment's inventory has it at "
+            f"{host.address!r}, but the management server resolves that name to "
+            f"{resolved!r}. run-script targets by name, so pushing now would create an "
+            "admin account on a different device than the one configured here. Fix the "
+            "address (or the name) so the two agree."
+        )
+    return resolved
 
 
 def _decode_task_output(task: dict[str, Any]) -> tuple[bool, str]:
@@ -231,8 +286,16 @@ class GatewayBootstrapService:
                 auth = {**auth, "domain": domain}
 
         script = render_bootstrap_script(username, password)
-        ctx.log(f"pushing credentials for {username!r} to {name!r} via the Management API")
         with self._mgmt_client_factory(primary, read_only=False, **auth) as client:
+            resolved = _confirm_target_identity(client, host)
+            # Log what the management server actually resolved, not just the
+            # locally-chosen name — the audit trail has to record which device
+            # was touched, and the name alone is caller-controlled.
+            ctx.log(
+                f"confirmed target {name!r} resolves to {resolved} on the management "
+                f"server, matching this environment's inventory"
+            )
+            ctx.log(f"pushing credentials for {username!r} to {name!r} via the Management API")
             task_id = client.run_script(
                 script, [name], script_name="chkp-cpuse-orch-bootstrap-credentials"
             )

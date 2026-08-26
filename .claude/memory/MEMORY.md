@@ -38,3 +38,4 @@ Load this at the start of each session; read a linked file when its hook looks r
 - [CPUSE package ID shell safety](cpuse-package-id-shell-safety.md) — _check_id blocklists shell metachars, not an allowlisted charset; real CPUSE display names have spaces
 - [Test host deploy](test-host-deploy.md) — LOCAL-ONLY (gitignored, not in this public repo): SSH key/user/checkout path for deploying to the dev/test host. Read this BEFORE attempting any deploy over SSH.
 - [Gaia shell posture](gaia-shell-posture.md) — every Gaia host now logs in as clish and elevates to expert on demand (not just Spark); `GaiaSession`, the file-transfer shell-toggle maneuver, and the credential enforcement it required
+- [Security review 2026-08](security-review-2026-08.md) - findings, what shipped in v0.70.0, and which were deliberately declined (don't silently re-fix those)

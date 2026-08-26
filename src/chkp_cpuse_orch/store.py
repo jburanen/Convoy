@@ -582,6 +582,20 @@ _MIGRATIONS: tuple[str, ...] = (
     """
     ALTER TABLE environments ADD COLUMN api_only INTEGER NOT NULL DEFAULT 0;
     """,
+    # v28: failed-login throttling state. Keyed by an opaque scope string so the
+    # same table backs both per-username and per-source-IP counters (web/auth.py
+    # records one of each per failure, and the stricter of the two governs).
+    # Persisted rather than in-memory so a restart isn't a way to clear a
+    # lockout — this is the only brake on password guessing against a tool that
+    # can reboot production firewalls.
+    """
+    CREATE TABLE login_attempts (
+        scope         TEXT PRIMARY KEY,
+        failures      INTEGER NOT NULL DEFAULT 0,
+        first_failed_at TEXT NOT NULL,
+        last_failed_at  TEXT NOT NULL
+    );
+    """,
 )
 
 
@@ -1404,6 +1418,65 @@ class Store:
         with self._connect() as conn:
             cur = conn.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
         return cur.rowcount > 0
+
+    def delete_sessions_for_user(self, username: str) -> int:
+        """Delete every session belonging to ``username``. Returns the count
+        removed.
+
+        Used on a password change: the point of changing a password is to
+        revoke access someone else may already have, and a session token
+        outlives the password it was issued against unless it is explicitly
+        dropped. See web/auth.py's BasicAuthenticator.change_password."""
+        with self._connect() as conn:
+            cur = conn.execute("DELETE FROM sessions WHERE username = ?", (username,))
+        return cur.rowcount
+
+    # -- login throttling (see web/auth.py's LoginThrottle) ---------------------
+
+    def get_login_attempts(self, scope: str) -> tuple[int, datetime] | None:
+        """``(failures, last_failed_at)`` for ``scope``, or None if it has a
+        clean record."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT failures, last_failed_at FROM login_attempts WHERE scope = ?",
+                (scope,),
+            ).fetchone()
+        if row is None:
+            return None
+        return int(row["failures"]), datetime.fromisoformat(row["last_failed_at"])
+
+    def record_login_failure(self, scope: str, now: datetime | None = None) -> int:
+        """Increment ``scope``'s failure count and return the new total."""
+        stamp = (now or utcnow()).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO login_attempts (scope, failures, first_failed_at, last_failed_at)
+                VALUES (?, 1, ?, ?)
+                ON CONFLICT(scope) DO UPDATE SET
+                    failures = failures + 1,
+                    last_failed_at = excluded.last_failed_at
+                """,
+                (scope, stamp, stamp),
+            )
+            row = conn.execute(
+                "SELECT failures FROM login_attempts WHERE scope = ?", (scope,)
+            ).fetchone()
+        return int(row["failures"])
+
+    def clear_login_attempts(self, scope: str) -> None:
+        """Wipe ``scope``'s record — called on a successful login."""
+        with self._connect() as conn:
+            conn.execute("DELETE FROM login_attempts WHERE scope = ?", (scope,))
+
+    def purge_login_attempts(self, cutoff: datetime) -> int:
+        """Drop throttle records untouched since ``cutoff``, so the table
+        doesn't accumulate one row per address seen forever."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM login_attempts WHERE last_failed_at < ?", (cutoff.isoformat(),)
+            )
+        return cur.rowcount
 
     def purge_idle_sessions(self, cutoff: datetime) -> int:
         """Delete sessions not seen since ``cutoff``. Returns the count removed."""
