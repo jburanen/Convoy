@@ -16,6 +16,7 @@ import csv
 import io
 import re
 from dataclasses import dataclass, field
+from pathlib import PurePosixPath
 from xml.sax.saxutils import escape
 
 from .errors import CDTError
@@ -28,6 +29,21 @@ CDT_DIR = "/opt/CPcdt"
 CANDIDATES_FILENAME = "orch_candidates.csv"
 
 _SAFE_PATH_RE = re.compile(r"/[A-Za-z0-9/._-]+")
+
+
+def _check_cdt_path(label: str, path: str) -> str:
+    """Validate a path CDT will execute or read AS ROOT.
+
+    The allowlist above permits dots, so it happily accepted ``..`` segments —
+    a path like ``/opt/CPcdt/../../tmp/evil.sh`` matched. Only the one constant
+    caller keeps that unreachable today; a pre/post-script path from anywhere
+    else would have escaped its intended directory. Normalise and reject
+    traversal explicitly rather than relying on the caller staying constant."""
+    if not _SAFE_PATH_RE.fullmatch(path):
+        raise CDTError(f"suspicious {label} path for CDT config: {path!r}")
+    if ".." in PurePosixPath(path).parts:
+        raise CDTError(f"{label} path may not contain '..' segments: {path!r}")
+    return path
 
 
 @dataclass
@@ -86,8 +102,8 @@ def build_config_xml(
         ("pre-script", pre_script),
         ("post-script", post_script),
     ):
-        if path is not None and not _SAFE_PATH_RE.fullmatch(path):
-            raise CDTError(f"suspicious {label} path for CDT config: {path!r}")
+        if path is not None:
+            _check_cdt_path(label, path)
 
     lines = [
         "<?xml version='1.0' encoding='utf-8'?>",

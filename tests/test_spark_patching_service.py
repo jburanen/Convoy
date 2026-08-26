@@ -20,7 +20,11 @@ from chkp_cpuse_orch.inventory import Host, Inventory, Role, Site
 from chkp_cpuse_orch.jobs import JobRunner
 from chkp_cpuse_orch.packages import PackageStore
 from chkp_cpuse_orch.services.common import EnvironmentRegistry, HostConnector
-from chkp_cpuse_orch.services.spark_patching import SparkPatchingService, parse_fw_ver
+from chkp_cpuse_orch.services.spark_patching import (
+    SparkPatchingService,
+    builds_match,
+    parse_fw_ver,
+)
 from chkp_cpuse_orch.store import JobStatus, Store
 
 from .fakes import FakeTransport, make_factory
@@ -354,7 +358,7 @@ def test_transfer_then_install_full_flow(
     assert not any("bashUser" in e for e in events)
     assert any("upgrade_revert_image.sh" in e for e in events)
     assert any("session closed — device is rebooting" in e for e in events)
-    assert any(f"confirmed: fw ver reports build ...{IMG_BUILD}" in e for e in events)
+    assert any(f"confirmed: fw ver reports build {IMG_BUILD}" in e for e in events)
     assert store.get_server_state("default", "spark-01").installable == []
 
 
@@ -433,7 +437,7 @@ def test_install_succeeds_after_channel_closes_on_upgrade(
     assert finished.status is JobStatus.SUCCEEDED
     events = [e.message for e in store.events(job.id)]
     assert any("treating as the scheduled reboot" in e for e in events)
-    assert any(f"confirmed: fw ver reports build ...{IMG_BUILD}" in e for e in events)
+    assert any(f"confirmed: fw ver reports build {IMG_BUILD}" in e for e in events)
     assert finished.status_text is None  # cleared on success
 
 
@@ -471,7 +475,7 @@ def test_install_succeeds_when_reboot_never_observed_but_build_matches(
     assert finished.status is JobStatus.SUCCEEDED
     events = [e.message for e in store.events(job.id)]
     assert any("no reboot happened" in e for e in events)
-    assert any(f"confirmed: fw ver reports build ...{IMG_BUILD}" in e for e in events)
+    assert any(f"confirmed: fw ver reports build {IMG_BUILD}" in e for e in events)
 
 
 def test_install_fails_when_build_never_changes_despite_timeout(
@@ -761,3 +765,31 @@ def test_install_command_is_shell_quoted_at_the_sink(
     upgrade = [line for line in sent if "upgrade_revert_image.sh" in line]
     assert upgrade, f"no upgrade command issued; sent={sent!r}"
     assert shlex.split(upgrade[0])[1] == f"/storage/{IMG}"
+
+
+# -- build confirmation uses all available precision (M4) --------------------------
+#
+# `fw ver` renders a truncated form of the id in the .img filename, so the two
+# can only be compared on their overlap — but the overlap is however many digits
+# fw ver actually gave us, not a fixed three. Three digits alone left a 1-in-1000
+# chance of confirming a device that never took the upgrade.
+
+
+def test_builds_match_on_the_full_common_suffix() -> None:
+    assert builds_match("996004936", "936")  # what this device actually reports
+    assert builds_match("996004936", "004936")  # more digits -> still a match
+    assert builds_match("996004936", "996004936")
+
+
+def test_builds_differing_beyond_the_last_three_digits_are_rejected() -> None:
+    """The point of the change: fw ver reporting "004935" against an image
+    "...004936" shares its last three digits, so a fixed 3-digit compare would
+    have confirmed a device that never took the upgrade."""
+    assert not builds_match("996004936", "004935")
+    assert not builds_match("996004936", "111000935")
+
+
+def test_builds_refuse_to_confirm_on_too_little_overlap() -> None:
+    """A one- or two-digit overlap is not evidence of anything."""
+    assert not builds_match("996004936", "36")
+    assert not builds_match("996004936", "6")

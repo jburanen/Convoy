@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from chkp_cpuse_orch.config import Config, EnvironmentDef, Paths
 from chkp_cpuse_orch.credentials import MASTER_KEY_ENV
 from chkp_cpuse_orch.store import JobRecord, JobStatus
+from chkp_cpuse_orch.web import app as web_app
 from chkp_cpuse_orch.web.app import create_app
 from chkp_cpuse_orch.web.auth import AuthSettings
 
@@ -1865,3 +1866,81 @@ def test_disk_space_precheck_routes_are_gone(client: TestClient) -> None:
         # 405: the path no longer matches an API route and falls through to
         # the static mount, which serves GET only. Either way it is gone.
         assert resp.status_code in (404, 405), f"{kind}: {resp.status_code}"
+
+
+# -- security headers (Phase 3) ----------------------------------------------------
+
+
+def test_security_headers_present_on_api_and_static(client: TestClient) -> None:
+    for path in ("/api/status", "/login.html"):
+        resp = client.get(path)
+        assert resp.headers["X-Frame-Options"] == "DENY", path
+        assert resp.headers["X-Content-Type-Options"] == "nosniff", path
+        assert resp.headers["Referrer-Policy"] == "no-referrer", path
+        csp = resp.headers["Content-Security-Policy"]
+        assert "script-src 'self'" in csp, path
+        assert "frame-ancestors 'none'" in csp, path
+        assert "object-src 'none'" in csp, path
+
+
+def test_security_headers_present_on_an_unauthenticated_401(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The auth guard returns 401s itself, so the headers have to be applied
+    outside it or those responses go out bare."""
+    monkeypatch.setenv(MASTER_KEY_ENV, "hdr test master key")
+    app = create_app(_config(tmp_path), authenticator=_fake_auth(), auth_settings=AUTH_SETTINGS)
+    with TestClient(app) as c:
+        resp = c.get("/api/status")  # no login
+        assert resp.status_code == 401
+        assert resp.headers["X-Frame-Options"] == "DENY"
+
+
+def test_hsts_only_over_https(client: TestClient) -> None:
+    """Sending HSTS over plain HTTP is meaningless, and pinning a host to HTTPS
+    it isn't serving would lock operators out."""
+    assert "Strict-Transport-Security" not in client.get("/api/status").headers
+    forwarded = client.get("/api/status", headers={"X-Forwarded-Proto": "https"})
+    assert "max-age=" in forwarded.headers["Strict-Transport-Security"]
+
+
+# -- upload limits (M7) ------------------------------------------------------------
+#
+# The filename used to be validated only inside submit_upload -> add_stream,
+# i.e. after Starlette had spooled the whole body AND it had been copied again
+# to a staging path — two full writes of a GB-scale file before a rejection.
+# There was also no size ceiling anywhere in the stack and no free-space check,
+# and /data holds the SQLite DB (jobs, sessions, encrypted credentials) and the
+# job archive, so filling it breaks more than uploads.
+
+
+def test_upload_rejects_a_bad_filename_before_writing_anything(
+    client: TestClient, tmp_path: Path
+) -> None:
+    packages_dir = client.app.state.packages.directory
+    before = set(packages_dir.iterdir())
+
+    resp = client.post(
+        "/api/packages", files={"file": ("../../etc/passwd", b"x" * 1024, "application/gzip")}
+    )
+
+    assert resp.status_code in (400, 404)
+    assert set(packages_dir.iterdir()) == before  # nothing staged
+
+
+def test_upload_rejects_an_oversized_content_length(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(web_app, "MAX_UPLOAD_BYTES", 512)
+    resp = client.post(
+        "/api/packages", files={"file": ("jhf.tgz", b"x" * 4096, "application/gzip")}
+    )
+    assert resp.status_code == 413
+    assert "limit" in resp.json()["detail"]
+
+
+def test_upload_within_the_limit_still_works(client: TestClient) -> None:
+    resp = client.post(
+        "/api/packages", files={"file": ("small.tgz", b"x" * 2048, "application/gzip")}
+    )
+    assert resp.status_code == 200, resp.text

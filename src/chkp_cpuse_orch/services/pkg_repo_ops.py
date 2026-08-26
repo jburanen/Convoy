@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import posixpath
+import shlex
 import time
 from collections.abc import Callable
 from types import TracebackType
@@ -35,7 +36,7 @@ from ..cpuse import DEFAULT_STAGING_DIR
 from ..credentials import CredentialBundle, JobCredentialVault
 from ..errors import TransportError
 from ..inventory import Host
-from ..jobs import JobContext, JobRunner
+from ..jobs import JobContext, JobRunner, JobTimedOut
 from ..packages import PackageStore
 from ..store import JobRecord, Store
 from ..transport.mgmt_api import ManagementAPIClient
@@ -96,6 +97,7 @@ class PackageRepoService:
         mgmt_client_factory: RepoClientFactory | None = None,
         staging_dir: str = DEFAULT_STAGING_DIR,
         poll_interval: float = 5.0,
+        task_timeout: float = 3600.0,
     ) -> None:
         self.registry = registry
         self._packages = packages
@@ -108,6 +110,7 @@ class PackageRepoService:
         self._mgmt_client_factory = mgmt_client_factory or _default_repo_client_factory
         self._staging_dir = staging_dir
         self._poll_interval = poll_interval
+        self._task_timeout = task_timeout
         runner.register(JOB_PKG_PUSH_TO_REPO, self._push_job)
 
     # -- job submission -----------------------------------------------------------
@@ -158,7 +161,7 @@ class PackageRepoService:
         try:
             transport = connector.connect(host, creds)
             try:
-                existing = transport.run_bash(f"stat -c %s {remote_pkg} 2>/dev/null")
+                existing = transport.run_bash(f"stat -c %s {shlex.quote(remote_pkg)} 2>/dev/null")
                 if existing.ok and existing.stdout.strip() == str(local_size):
                     ctx.log(
                         f"{package} already staged at {remote_pkg} (size matches) — skip upload"
@@ -217,7 +220,7 @@ class PackageRepoService:
             )
             return
         try:
-            result = transport.run_bash(f"rm -f {remote_pkg}")
+            result = transport.run_bash(f"rm -f {shlex.quote(remote_pkg)}")
             if result.ok:
                 ctx.log(f"cleanup: removed staged package {remote_pkg}")
             else:
@@ -237,8 +240,19 @@ class PackageRepoService:
             transport.close()
 
     def _poll_task(self, ctx: JobContext, client: _RepoClient, task_id: str) -> None:
+        """Poll the add-repository-package task, with a wall-clock deadline —
+        see GatewayBootstrapService._poll_task for why an unbounded version
+        deadlocks the job queue. A server-side import of a GB-scale package is
+        genuinely slow, hence the generous default."""
         last_status = ""
+        deadline = time.monotonic() + self._task_timeout
         while True:
+            if time.monotonic() >= deadline:
+                raise JobTimedOut(
+                    f"repository task {task_id} did not reach a terminal state within "
+                    f"{self._task_timeout:.0f}s (last status: {last_status or 'unknown'}) "
+                    "— the import may still be running on the management server"
+                )
             time.sleep(self._poll_interval)
             task = client.show_task(task_id)
             status = str(task.get("status", "")).strip()

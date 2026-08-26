@@ -105,7 +105,7 @@ These gates define the major version releases - the milestones may change in the
 ◻️ CDT deployment to Gaia/Force gateways  
 
 ### Roadmap / Punch List
-🪲 Bugfix ⏫ Required for next release 🤞 Non-blocking nice-to-have ✨ Cosmetic only
+🪲 Bugfix ⏫ Required for next release 🤞 Non-blocking nice-to-have ✨ Cosmetic only  
 
 ✨ Add logic to display a warning on mobile devices that the UI of this tool does not scale down well (by design) and you should use it on a larger display.   
 🤞 RADIUS auth option  

@@ -408,15 +408,37 @@ def _looks_like_package_name(line: str) -> bool:
 _SHELL_METACHARS_RE = re.compile(r"""[;&|`$<>\\"'\r\n]""")
 
 
+# No real CPUSE identifier comes close to this; a longer one is a sign the
+# value did not come from CPUSE at all.
+_MAX_ID_LEN = 256
+# Control characters have no place in an identifier and can rewrite how a
+# terminal renders the command. CR/LF are already covered by the metachar
+# pattern above; this catches the rest.
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
 def _check_id(package_id: str) -> str:
     """Package IDs feed a clish command line — reject shell-metacharacters
     that could break out of the quoted command, rather than allowlisting a
     strict charset. Real CPUSE display names legitimately contain spaces and
     parens (e.g. "R82.10 Jumbo Hotfix Accumulator Recommended Jumbo Take
     40") — an earlier allowlist-only version of this check rejected those
-    as "suspicious" even though they're exactly what CPUSE itself reports."""
+    as "suspicious" even though they're exactly what CPUSE itself reports.
+
+    Deliberately NOT rejecting glob/brace characters (``*?[]{}~#``), which a
+    denylist review might suggest: nothing here reaches a bash word-expansion
+    context. In expert mode the whole clish command is ``shlex.quote``d before
+    bash sees it (see ``_clish``); in clish mode it goes straight to clish,
+    which does not glob. Adding them would reject legitimate CPUSE names for
+    no gain — the same mistake the allowlist version made with spaces."""
     if not package_id.strip() or _SHELL_METACHARS_RE.search(package_id):
         raise CPUSEError(f"suspicious package identifier: {package_id!r}")
+    if _CONTROL_CHARS_RE.search(package_id):
+        raise CPUSEError(f"package identifier contains control characters: {package_id!r}")
+    if len(package_id) > _MAX_ID_LEN:
+        raise CPUSEError(
+            f"package identifier is implausibly long ({len(package_id)} chars, max {_MAX_ID_LEN})"
+        )
     return package_id
 
 

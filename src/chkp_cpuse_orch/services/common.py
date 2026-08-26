@@ -427,7 +427,7 @@ def remote_sha1(client: Transport, remote_path: str) -> str:
     corrupted/truncated transfer before it's acted on (the size check alone
     wouldn't notice bit-level corruption). Shared by PatchingService and
     SparkPatchingService."""
-    result = client.run_bash(f"sha1sum {remote_path}")
+    result = client.run_bash(f"sha1sum {shlex.quote(remote_path)}")
     if not result.ok:
         detail = result.stderr.strip() or result.stdout.strip()
         raise TransportError(f"could not compute remote sha1 for {remote_path}: {detail}")

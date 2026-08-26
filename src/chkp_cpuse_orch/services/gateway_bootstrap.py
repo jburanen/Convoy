@@ -52,7 +52,7 @@ from typing import Any, Protocol
 from ..credentials import CredentialKind
 from ..errors import CredentialError, InventoryError, TransportError
 from ..inventory import Host, Role
-from ..jobs import JobContext, JobRunner
+from ..jobs import JobContext, JobRunner, JobTimedOut
 from ..store import JobRecord, Store
 from ..transport.mgmt_api import ManagementAPIClient
 from .common import EnvironmentRegistry, api_auth
@@ -198,12 +198,14 @@ class GatewayBootstrapService:
         runner: JobRunner,
         mgmt_client_factory: MgmtClientFactory | None = None,
         poll_interval: float = 3.0,
+        task_timeout: float = 900.0,
     ) -> None:
         self._registry = registry
         self._store = store
         self.runner = runner
         self._mgmt_client_factory = mgmt_client_factory or _default_mgmt_client_factory
         self._poll_interval = poll_interval
+        self._task_timeout = task_timeout
         runner.register(JOB_BOOTSTRAP_CREDENTIALS, self._bootstrap_job)
 
     def preview_bootstrap_commands(self, environment: str, name: str) -> list[str]:
@@ -307,8 +309,24 @@ class GatewayBootstrapService:
             self._poll_task(ctx, client, task_id)
 
     def _poll_task(self, ctx: JobContext, client: MgmtClientContext, task_id: str) -> None:
+        """Poll a run-script task to a terminal state, with a wall-clock
+        deadline.
+
+        This used to loop forever on any status outside the known
+        success/failure sets — including a status a broken or hostile
+        management server could simply keep returning. With JobRunner's
+        bounded concurrency, two such stuck jobs deadlock the whole queue and
+        Cancel cannot help, because the only cancellation check is inside the
+        loop the job never leaves."""
         last_status = ""
+        deadline = time.monotonic() + self._task_timeout
         while True:
+            if time.monotonic() >= deadline:
+                raise JobTimedOut(
+                    f"bootstrap task {task_id} did not reach a terminal state within "
+                    f"{self._task_timeout:.0f}s (last status: {last_status or 'unknown'}) "
+                    "— it may still be running on the management server"
+                )
             time.sleep(self._poll_interval)
             task = client.show_task(task_id)
             status = str(task.get("status", "")).strip()

@@ -195,19 +195,41 @@ _IMAGE_BUILD_RE = re.compile(r"_(\d+)\.img$", re.IGNORECASE)
 _FW_VER_BUILD_RE = re.compile(r"\bBuild\s+(\d+)", re.IGNORECASE)
 
 
-def _image_build_suffix(filename: str) -> str | None:
-    """Last 3 digits of the build id embedded in a Spark .img filename, or
-    None if the filename doesn't match the expected convention — callers
-    must treat that as "can't verify", not "assume success"."""
+# Comparing only three digits leaves a 1-in-1000 chance that a device which
+# did NOT take the upgrade still reports a "matching" build. Three was chosen
+# because `fw ver` reports fewer digits than the filename carries, so the two
+# can only be compared on their overlap — but the overlap is however many
+# digits `fw ver` actually gave us, not a fixed three. builds_match() below
+# uses all of them, which is never worse and is usually better.
+_MIN_BUILD_DIGITS = 3
+
+
+def _image_build_id(filename: str) -> str | None:
+    """The FULL build id embedded in a Spark .img filename, or None if the
+    filename doesn't match the expected convention — callers must treat that
+    as "can't verify", not "assume success"."""
     match = _IMAGE_BUILD_RE.search(filename)
-    return None if match is None else match.group(1)[-3:]
+    return None if match is None else match.group(1)
 
 
-def _fw_ver_build_suffix(fw_ver_output: str) -> str | None:
-    """Last 3 digits of `fw ver`'s own "Build NNN" number, or None if that
+def _fw_ver_build_id(fw_ver_output: str) -> str | None:
+    """The FULL number from `fw ver`'s own "Build NNN" text, or None if that
     text isn't present in its output."""
     match = _FW_VER_BUILD_RE.search(fw_ver_output)
-    return None if match is None else match.group(1)[-3:]
+    return None if match is None else match.group(1)
+
+
+def builds_match(image_build: str, fw_ver_build: str) -> bool:
+    """True if the build the device reports is consistent with the image.
+
+    `fw ver` renders a truncated form of the id in the filename, so these are
+    compared on their common suffix — using every digit both actually have,
+    rather than truncating to a fixed three. Refuses to compare on fewer than
+    _MIN_BUILD_DIGITS: a one- or two-digit overlap is not evidence."""
+    overlap = min(len(image_build), len(fw_ver_build))
+    if overlap < _MIN_BUILD_DIGITS:
+        return False
+    return image_build[-overlap:] == fw_ver_build[-overlap:]
 
 
 def _default_probe_reachable(address: str, port: int, *, timeout: float) -> bool:
@@ -717,7 +739,7 @@ class SparkPatchingService:
         # Computed up front and checked before touching the device at all:
         # if we can't even parse what build we're expecting, there's no
         # point running the upgrade only to discover we can't verify it.
-        expected_build = _image_build_suffix(package)
+        expected_build = _image_build_id(package)
         if expected_build is None:
             raise JobError(
                 f"{package!r} doesn't match the expected Spark image filename "
@@ -743,22 +765,20 @@ class SparkPatchingService:
             _safe_close(client)
 
         version = parse_fw_ver(result.stdout)
-        actual_build = _fw_ver_build_suffix(result.stdout)
+        actual_build = _fw_ver_build_id(result.stdout)
         if actual_build is None:
             raise JobError(
                 "reconnected successfully, but couldn't find a build number in "
                 f"fw ver's output to confirm the upgrade: {result.stdout.strip()!r}"
             )
-        if actual_build != expected_build:
+        if not builds_match(expected_build, actual_build):
             raise JobError(
-                f"reconnected after reboot, but fw ver reports build ...{actual_build} "
-                f"— expected ...{expected_build} (from {package!r}). The device did "
-                f"not come up on the installed image — do not treat this as a "
+                f"reconnected after reboot, but fw ver reports build {actual_build} "
+                f"— expected it to match {expected_build} (from {package!r}). The device "
+                f"did not come up on the installed image — do not treat this as a "
                 f"successful upgrade. fw ver: {version!r}"
             )
-        ctx.log(
-            f"confirmed: fw ver reports build ...{actual_build}, matching {package!r} — {version}"
-        )
+        ctx.log(f"confirmed: fw ver reports build {actual_build}, matching {package!r} — {version}")
         ctx.set_status(None)
 
     def _run_upgrade(

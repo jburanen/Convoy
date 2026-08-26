@@ -943,7 +943,9 @@ def test_install_job_logs_raw_command_output_and_poll_detail(
         responses={
             "installer install ": (0, "Install started; this may take a while."),
             "show installer package ": "Status:           Installed\nInstallation log: /var/log/x",
-            "cat /var/log/x": "line one\nline two\n",
+            # Bounded at the source now (head -c N), not `cat` — an unbounded
+            # read pulled the whole remote log into memory before capping it.
+            "head -c ": "line one" + chr(10) + "line two" + chr(10),
         }
     )
     _assign(store, inventory, "mgmt-01")
