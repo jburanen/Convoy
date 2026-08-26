@@ -197,17 +197,26 @@ header.condensed #header-logo { width: 26px; height: 26px; }
 /* Base width is a fallback only — resizeEnvPicker() (app.js) sets an inline
    width fitting just the selected environment's name on every load/switch,
    since a plain <select> otherwise sizes its closed box to the WIDEST
-   option, not the selected one. No border/background — reads as plain text
-   next to the "Env:" label, not a boxed form control (overrides the shared
-   `input, select, button` box styling further down). */
+   option, not the selected one. No border, and background matches the
+   header it sits in exactly (not `transparent`) - reads as plain text next
+   to the "Env:" label, not a boxed form control (overrides the shared
+   `input, select, button` box styling further down). Matching var(--bg)
+   rather than `transparent` matters beyond the closed control itself:
+   Chromium bases the popup listbox's own colors on the select's own
+   resolved background - `transparent` gives it nothing usable to theme
+   from and it fell back to a plain light popup even in dark mode, despite
+   :root's color-scheme. An explicit dark color (identical to the page
+   background, so still invisible as a "box") fixes that, same as it did
+   before this rule existed at all. */
 #env-picker {
   font-weight: 600;
   border: none;
-  background: transparent;
+  background: var(--bg);
   padding: 0.2rem 0.2rem;
   cursor: pointer;
 }
 #env-picker:focus { outline-offset: 1px; }
+#env-picker option { background: var(--bg); color: var(--text); }
 .tab-btn {
   background: transparent;
   color: var(--muted);
