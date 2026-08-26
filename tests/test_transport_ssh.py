@@ -18,6 +18,7 @@ from chkp_cpuse_orch.transport.ssh import (
     known_hosts_path,
     load_private_key,
     require_ok,
+    scrub_transcript,
     set_known_hosts_path,
 )
 
@@ -321,3 +322,38 @@ def test_fingerprint_is_openssh_shaped() -> None:
     assert fp.startswith("ssh-rsa SHA256:")
     assert not fp.endswith("=")  # unpadded, like ssh-keygen prints it
     assert _fingerprint(None) == "unknown"
+
+
+# -- pty transcripts must never carry secrets into an error (H6) -------------------
+#
+# A transcript embedded in an exception reaches job.error, job_events, the
+# flat-file archive AND the browser (via _map_error's str(exc) passthrough).
+# These sessions type the expert password into that pty and read `add api-key`
+# responses back out of it.
+
+
+def test_scrub_transcript_redacts_what_follows_a_password_prompt() -> None:
+    raw = "expert" + chr(13) + chr(10) + "Enter expert password:hunter2" + chr(13) + chr(10)
+    out = scrub_transcript(raw)
+    assert "hunter2" not in out
+    assert "Enter expert password:" in out  # shape kept, so the log is still readable
+
+
+def test_scrub_transcript_redacts_inline_secret_values() -> None:
+    for raw, secret in (
+        ("api-key: aBc123XYZ", "aBc123XYZ"),
+        ("password-hash $6$salt$hash", "$6$salt$hash"),
+        ("sid=deadbeefcafe", "deadbeefcafe"),
+    ):
+        assert secret not in scrub_transcript(raw), raw
+
+
+def test_scrub_transcript_caps_length() -> None:
+    out = scrub_transcript("x" * 20000)
+    assert len(out) < 5000
+    assert "more]" in out
+
+
+def test_scrub_transcript_leaves_ordinary_output_alone() -> None:
+    raw = "Filesystem 1024-blocks Used Available" + chr(10) + "/dev/sda1 100 20 80"
+    assert scrub_transcript(raw) == raw

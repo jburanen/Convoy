@@ -30,6 +30,7 @@ deliberately not folded into ``PrimaryConnectService``'s own mgmt_cli session
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import re
 from dataclasses import dataclass
 
@@ -39,8 +40,10 @@ from ..store import JobRecord
 from ..transport.ssh import require_ok
 from .common import EnvironmentRegistry
 from .provisioning import (
+    new_api_session_file,
     render_mgmt_login_command,
     render_publish_logout_commands,
+    render_remove_session_file_command,
     render_set_api_settings_command,
 )
 
@@ -99,10 +102,12 @@ def render_repair_commands(*, is_mds: bool) -> list[str]:
     describe restarting a specific Domain's API via ``mdsenv``, but this
     tool has no confirmed model yet for which scope a plain ``api
     restart``/``api status`` on an MDS affects."""
+    # A preview only — the real run generates its own fresh session path.
+    session_file = new_api_session_file()
     return [
-        render_mgmt_login_command(is_mds=is_mds),
-        render_set_api_settings_command(is_mds=is_mds),
-        *render_publish_logout_commands(),
+        render_mgmt_login_command(session_file, is_mds=is_mds),
+        render_set_api_settings_command(session_file, is_mds=is_mds),
+        *render_publish_logout_commands(session_file),
         "api restart",
     ]
 
@@ -173,6 +178,7 @@ class ApiAccessService:
         host = connector.mgmt_host(name)
         is_mds = bool(ctx.job.params["is_mds"])
 
+        session_file = new_api_session_file()
         client = connector.connect(host)
         try:
             ctx.log(f"connected to {host.name} ({host.address}) over SSH")
@@ -187,12 +193,18 @@ class ApiAccessService:
                 "API accessibility is restricted to localhost — widening accepted-api-calls-from "
                 'to "All IP addresses that can be used for GUI clients"'
             )
-            require_ok(client.run_bash(render_mgmt_login_command(is_mds=is_mds)))
-            require_ok(client.run_bash(render_set_api_settings_command(is_mds=is_mds)))
-            for cmd in render_publish_logout_commands():
+            require_ok(client.run_bash(render_mgmt_login_command(session_file, is_mds=is_mds)))
+            require_ok(
+                client.run_bash(render_set_api_settings_command(session_file, is_mds=is_mds))
+            )
+            for cmd in render_publish_logout_commands(session_file):
                 require_ok(client.run_bash(cmd))
             ctx.log("published the change and logged out of mgmt_cli")
             require_ok(client.run_bash("api restart"))
             ctx.log("restarted the API server for the new setting to take effect")
         finally:
+            # See connect_primary: a session id left on disk is a live
+            # credential, so remove it whether or not the logout above ran.
+            with contextlib.suppress(Exception):
+                client.run_bash(render_remove_session_file_command(session_file))
             client.close()

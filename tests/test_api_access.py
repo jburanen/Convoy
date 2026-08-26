@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 
 import pytest
@@ -82,7 +83,7 @@ def test_parse_api_status_not_started() -> None:
 def test_render_repair_commands_sms() -> None:
     cmds = render_repair_commands(is_mds=False)
     joined = "\n".join(cmds)
-    assert cmds[0].startswith('mgmt_cli login -r true --domain "System Data" > ')
+    assert cmds[0].startswith('umask 077; mgmt_cli login -r true --domain "System Data" > ')
     assert (
         'set api-settings accepted-api-calls-from "All IP addresses that can be used '
         'for GUI clients" --domain "System Data"'
@@ -200,7 +201,13 @@ def test_diagnose_ssh_failure_becomes_error(
 
 
 def test_preview_repair_commands_matches_render(service: ApiAccessService) -> None:
-    assert service.preview_repair_commands(ENV) == render_repair_commands(is_mds=False)
+    """Modulo the per-run session path: each render mints a fresh unguessable
+    one (see provisioning.new_api_session_file), which is the whole point."""
+
+    def norm(commands: list[str]) -> list[str]:
+        return [re.sub(r"cpuse_orch_mgmt_api\.[0-9a-f]+\.sid", "SESSION", c) for c in commands]
+
+    assert norm(service.preview_repair_commands(ENV)) == norm(render_repair_commands(is_mds=False))
 
 
 def test_repair_job_widens_restricted_access(

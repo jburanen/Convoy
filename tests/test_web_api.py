@@ -1389,15 +1389,15 @@ def test_connect_primary_captures_and_stores_key(client: TestClient) -> None:
     assert primary["has_api"] is True
 
     # Pop-once reveal: present once, null on the second call.
-    reveal = client.get(f"/api/jobs/{job['id']}/reveal-api-key")
+    reveal = client.post(f"/api/jobs/{job['id']}/reveal-api-key")
     assert reveal.status_code == 200, reveal.text
     assert reveal.json()["api_key"] == "generated-key-xyz"
-    reveal_again = client.get(f"/api/jobs/{job['id']}/reveal-api-key")
+    reveal_again = client.post(f"/api/jobs/{job['id']}/reveal-api-key")
     assert reveal_again.json()["api_key"] is None
 
 
 def test_reveal_api_key_unknown_job_returns_null(client: TestClient) -> None:
-    resp = client.get("/api/jobs/no-such-job/reveal-api-key")
+    resp = client.post("/api/jobs/no-such-job/reveal-api-key")
     assert resp.status_code == 200, resp.text
     assert resp.json()["api_key"] is None
 
@@ -1453,7 +1453,7 @@ def test_api_access_repair_widens_accessibility(
         0,
         "Overall API Status: Started\nAccessibility: require local\n",
     )
-    resp = client.post("/api/environments/default/api-access/repair")
+    resp = client.post("/api/environments/default/api-access/repair", json={"confirmed": True})
     assert resp.status_code == 202, resp.text
     job = _wait_for_job(client, resp.json()["id"])
     assert job["status"] == "succeeded", job["error"]
@@ -1474,7 +1474,10 @@ def test_firewall_bootstrap_credentials_preview_renders_commands(client: TestCli
     assert resp.status_code == 200, resp.text
     commands = resp.json()["commands"]
     assert commands[0] == "add user admin uid 0 homedir /home/admin"
-    assert commands[1].startswith("set user admin password-hash $6$")
+    # No real hash over the wire — this GET is open to every authenticated user
+    # and a 5000-round sha512_crypt hash is offline-crackable.
+    assert not any("$6$" in c for c in commands)
+    assert "password-hash" in commands[1]
 
 
 def test_firewall_bootstrap_credentials_preview_rejects_key_only_set(client: TestClient) -> None:
@@ -1506,7 +1509,9 @@ def test_firewall_bootstrap_credentials_submit_queues_a_job(client: TestClient) 
     _add_firewall(client, name="fw-x", address="192.0.2.70", role="gateway")
     client.post("/api/env/default/firewalls/fw-x/credential", json={"set": "primary"})
 
-    resp = client.post("/api/env/default/firewalls/fw-x/bootstrap-credentials")
+    resp = client.post(
+        "/api/env/default/firewalls/fw-x/bootstrap-credentials", json={"confirmed": True}
+    )
     assert resp.status_code == 202, resp.text
     job = resp.json()
     assert job["kind"] == "cred.bootstrap"
@@ -1516,7 +1521,9 @@ def test_firewall_bootstrap_credentials_submit_queues_a_job(client: TestClient) 
 def test_firewall_bootstrap_credentials_submit_rejects_unknown_firewall(
     client: TestClient,
 ) -> None:
-    resp = client.post("/api/env/default/firewalls/nope/bootstrap-credentials")
+    resp = client.post(
+        "/api/env/default/firewalls/nope/bootstrap-credentials", json={"confirmed": True}
+    )
     assert resp.status_code == 404, resp.text
 
 
@@ -1541,7 +1548,9 @@ def test_firewall_bootstrap_credentials_submit_rejects_spark_firewall(
     _add_firewall(client, name="spark-x", address="192.0.2.80", role="spark_firewall")
     client.post("/api/env/default/firewalls/spark-x/credential", json={"set": "primary"})
 
-    resp = client.post("/api/env/default/firewalls/spark-x/bootstrap-credentials")
+    resp = client.post(
+        "/api/env/default/firewalls/spark-x/bootstrap-credentials", json={"confirmed": True}
+    )
     assert resp.status_code == 400, resp.text
     assert "Spark firewall" in resp.json()["detail"]
 

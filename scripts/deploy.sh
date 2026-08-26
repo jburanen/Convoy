@@ -11,6 +11,18 @@
 # confirmation unless -y/--yes is also given.
 set -euo pipefail
 
+# Refuse to run as root. DEPLOY_UID below is taken from `id -u` and becomes the
+# container's `user:` in docker-compose.yml, so `sudo ./scripts/deploy.sh` would
+# silently run the whole service as uid 0 — overriding the Dockerfile's
+# `USER 1001:1001` and handing any future RCE in the app a root container
+# instead of an unprivileged one. Nothing here needs root: the deploying account
+# only needs to be in the `docker` group and able to write the checkout.
+if [ "$(id -u)" -eq 0 ]; then
+  echo "refusing to deploy as root: the container would inherit uid 0." >&2
+  echo "Re-run as an unprivileged user that is in the 'docker' group." >&2
+  exit 1
+fi
+
 cd "$(dirname "$0")/.."
 
 RESET=0

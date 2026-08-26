@@ -481,6 +481,38 @@ def require_ok(result: CommandResult) -> CommandResult:
     return result
 
 
+# A pty transcript is raw terminal bytes, and these sessions type PASSWORDS into
+# it (expert-mode escalation) and read secrets back out of it (the `add api-key`
+# response). Any transcript embedded in an exception travels a long way: into
+# job.error, the job_events log, the flat-file archive, and -- via _map_error's
+# deliberate str(exc) passthrough -- all the way to the browser. Scrub before it
+# ever enters an exception message, not at the far end where one missed path
+# leaks everything.
+
+# Everything typed after a password prompt is, by definition, the reply to it.
+_TRANSCRIPT_SECRET_RE = re.compile(r"((?:[Ee]nter\s+)?[Pp]assword[^:\r\n]*:)([^\r\n]*)")
+# CPUSE/mgmt_cli hand back API keys and hashes in-band.
+_TRANSCRIPT_VALUE_RE = re.compile(
+    # Separator is ":"/"=" OR bare whitespace: clish writes
+    # `set user x password-hash $6$...` with a space, which a colon-only
+    # pattern missed entirely — the exact shape that matters most here.
+    r"((?:api[-_ ]?key|password[-_ ]?hash|secret|sid)(?:\s*[:=]\s*|\s+))(\S+)",
+    re.IGNORECASE,
+)
+_TRANSCRIPT_CAP = 4096
+_REDACTED_TRANSCRIPT = "***REDACTED***"
+
+
+def scrub_transcript(text: str) -> str:
+    """Redact secrets from a pty transcript and cap its length, for use in an
+    error message. Never returns the raw text."""
+    cleaned = _TRANSCRIPT_SECRET_RE.sub(lambda m: m.group(1) + _REDACTED_TRANSCRIPT, text)
+    cleaned = _TRANSCRIPT_VALUE_RE.sub(lambda m: m.group(1) + _REDACTED_TRANSCRIPT, cleaned)
+    if len(cleaned) > _TRANSCRIPT_CAP:
+        cleaned = cleaned[:_TRANSCRIPT_CAP] + f"... [{len(cleaned) - _TRANSCRIPT_CAP} more]"
+    return cleaned
+
+
 class InteractiveShell:
     """A pty-backed, stateful SSH session (``invoke_shell``) for scripted
     interactive escalation — Gaia's ``expert`` command included.
@@ -528,12 +560,12 @@ class InteractiveShell:
             if self._channel.closed:
                 raise TransportError(
                     f"SSH channel to {self._host_name} closed while waiting for "
-                    f"{pattern!r}; output so far: {collected!r}"
+                    f"{pattern!r}; output so far: {scrub_transcript(collected)!r}"
                 )
             if time.monotonic() >= deadline:
                 raise TransportTimeoutError(
                     f"timed out waiting for {pattern!r} on {self._host_name}; "
-                    f"output so far: {collected!r}"
+                    f"output so far: {scrub_transcript(collected)!r}"
                 )
             time.sleep(0.1)
         return collected
@@ -560,7 +592,7 @@ class InteractiveShell:
             if time.monotonic() >= deadline:
                 raise TransportTimeoutError(
                     f"channel to {self._host_name} still open after {timeout:.0f}s waiting "
-                    f"for it to close; output so far: {collected!r}"
+                    f"for it to close; output so far: {scrub_transcript(collected)!r}"
                 )
             time.sleep(poll_interval)
 
@@ -693,25 +725,40 @@ class GaiaExpertSession:
 _CONFIG_LOCK_RE = re.compile(r"CLINFR0771|CLINFR0519|[Cc]onfig(?:uration)? lock")
 
 
-def _run_clish_breaking_lock(client: SSHClient | GaiaSession, command: str) -> CommandResult:
-    """Run a mutating clish command, taking the config lock only if we are
+def is_config_lock_error(result: CommandResult) -> bool:
+    """True when Gaia refused a command because the config database is locked."""
+    return not result.ok and bool(_CONFIG_LOCK_RE.search(result.stdout + result.stderr))
+
+
+def run_breaking_config_lock(run: Callable[[str], CommandResult], command: str) -> CommandResult:
+    """Run a MUTATING clish command, taking the config lock only if we are
     actually blocked by it.
+
+    ``run`` is whatever actually issues the command -- ``SSHClient.run`` here,
+    ``CPUSE._clish`` in cpuse.py (which wraps it in ``clish -c`` when the
+    session is in expert mode). Sharing this rather than the call site keeps
+    one definition of "what a lock conflict looks like" and one of what to do
+    about it.
 
     Deliberately NOT a pre-emptive `lock database override` on every call:
     that forcibly evicts whoever legitimately holds the lock (an admin mid-
-    change in SmartConsole or clish) and is exactly the pattern the security
-    review flagged in cpuse.py. Override only on an observed conflict, on a
-    mutating path we are already committed to, and log who held it."""
-    result = client.run(command)
-    if result.ok or not _CONFIG_LOCK_RE.search(result.stdout + result.stderr):
+    change in SmartConsole or clish). Override only on an observed conflict,
+    on a mutating path we are already committed to, and log who held it.
+
+    Read-only `show` commands must NOT use this. They are not blocked by the
+    lock -- Gaia prints the CLINFR0771 notice and answers anyway (confirmed
+    against real device output, see tests/test_cpuse.py::PACKAGE_DETAIL) -- so
+    overriding for them only steals the lock from someone mid-change."""
+    result = run(command)
+    if not is_config_lock_error(result):
         return result
     logger.warning(
         "clish config lock held; overriding to continue",
         command=command,
         detail=(result.stdout.strip() or result.stderr.strip())[:200],
     )
-    client.run("lock database override")
-    return client.run(command)
+    run("lock database override")
+    return run(command)
 
 
 def _restore_clish_shell(client: SSHClient, username: str) -> None:
@@ -720,8 +767,8 @@ def _restore_clish_shell(client: SSHClient, username: str) -> None:
     after a login-shell toggle to bash has already happened. Wrapped as
     ``clish -c`` since the connection this runs on is bash right now."""
     require_ok(
-        _run_clish_breaking_lock(
-            client, f"clish -c {shlex.quote(f'set user {username} shell /etc/cli.sh')}"
+        run_breaking_config_lock(
+            client.run, f"clish -c {shlex.quote(f'set user {username} shell /etc/cli.sh')}"
         )
     )
     require_ok(client.run(f"clish -c {shlex.quote('save config')}"))
@@ -865,9 +912,9 @@ class GaiaSession:
         # earlier step (a disk check, a sha1) -- so they must be able to break
         # that lock or the transfer can never start.
         require_ok(
-            _run_clish_breaking_lock(self, f"set user {shlex.quote(username)} shell /bin/bash")
+            run_breaking_config_lock(self.run, f"set user {shlex.quote(username)} shell /bin/bash")
         )
-        require_ok(_run_clish_breaking_lock(self, "save config"))
+        require_ok(run_breaking_config_lock(self.run, "save config"))
         # A previously-elevated interactive pty lives on the transport we're
         # about to close — drop it so a later run_bash() re-elevates fresh on
         # the reconnected session below, instead of using a dead channel.

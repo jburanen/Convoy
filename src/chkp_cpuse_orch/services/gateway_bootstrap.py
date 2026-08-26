@@ -222,7 +222,11 @@ class GatewayBootstrapService:
             )
         bundle = connector.host_credentials(host)
         username, password = _bootstrap_credential(host, bundle)
-        return render_gaia_user_commands(username, password)
+        # Hash elided: this is a plain GET available to every authenticated
+        # user, and a 5000-round sha512_crypt hash is offline-crackable. The
+        # real value is computed by the push itself (see _do_bootstrap), so the
+        # preview loses nothing by showing the command shape alone.
+        return render_gaia_user_commands(username, password, redact_hash=True)
 
     def preview_spark_admin_commands(self, environment: str, name: str) -> list[str]:
         """Read-only rendering (no server contact) of the Quantum Spark (SMB)

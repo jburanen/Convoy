@@ -13,6 +13,7 @@ from chkp_cpuse_orch.inventory import Host, Inventory, Role, Site
 from chkp_cpuse_orch.jobs import JobRunner
 from chkp_cpuse_orch.services.common import EnvironmentRegistry, HostConnector
 from chkp_cpuse_orch.services.gateway_bootstrap import GatewayBootstrapService
+from chkp_cpuse_orch.services.provisioning import REDACTED_HASH
 from chkp_cpuse_orch.store import JobStatus, Store
 
 
@@ -73,7 +74,11 @@ def test_preview_renders_gaia_user_commands_from_assigned_set(
     commands = service.preview_bootstrap_commands("default", "fw-01")
 
     assert commands[0] == "add user admin uid 0 homedir /home/admin"
-    assert commands[1].startswith("set user admin password-hash $6$")
+    # The preview must NOT carry a real hash: it is a plain GET open to every
+    # authenticated user, and a 5000-round sha512_crypt hash is offline-
+    # crackable. The push computes the real value itself.
+    assert commands[1] == f"set user admin password-hash {REDACTED_HASH}"
+    assert not any("$6$" in c for c in commands)
 
 
 def test_preview_rejects_private_key_only_credential_set(

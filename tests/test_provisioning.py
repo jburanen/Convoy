@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shlex
 
 import pytest
@@ -7,6 +8,7 @@ from passlib.hash import sha512_crypt
 
 from chkp_cpuse_orch.errors import ProvisioningError
 from chkp_cpuse_orch.services.provisioning import (
+    new_api_session_file,
     parse_api_key_from_add_api_key_output,
     render_add_administrator_command,
     render_add_api_key_command,
@@ -147,7 +149,8 @@ def test_mgmt_api_commands_single_session_and_api_key() -> None:
     # One login → session file reused for every mutation → published in that session.
     # SMS logins must target "System Data" or add administrator/add api-key fail
     # with err_inappropriate_domain_type.
-    assert cmds[0].startswith('mgmt_cli login -r true --domain "System Data" > ')
+    # umask 077 first, so the session id isn't world-readable on landing.
+    assert cmds[0].startswith('umask 077; mgmt_cli login -r true --domain "System Data" > ')
     assert 'authentication-method "api key"' in joined
     assert 'permissions-profile "Super User"' in joined
     # The administrator only sets the auth method; the key itself comes from a
@@ -185,28 +188,54 @@ def test_mgmt_api_commands_use_multi_domain_profile_for_mds() -> None:
 # idempotent run, unlike render_mgmt_api_commands' flat "assume-fresh" preview) --
 
 
+def _normalise_session(commands: list[str]) -> list[str]:
+    """Blank out the per-run session-file token so two renderings compare.
+
+    Each render generates a fresh unguessable path (see new_api_session_file),
+    which is the point — a fixed, predictable path was pre-creatable as a
+    symlink and shared between concurrent jobs.
+    """
+    return [re.sub(r"cpuse_orch_mgmt_api\.[0-9a-f]+\.sid", "SESSION", c) for c in commands]
+
+
 def test_composable_builders_match_the_flat_preview() -> None:
     """The idempotent run's building blocks must render byte-identical
     commands to the flat preview (minus the show-administrator probe, which
-    only the idempotent run needs)."""
+    only the idempotent run needs, and modulo the per-run session path)."""
+    session = new_api_session_file()
     flat = render_mgmt_api_commands("svc-patch", is_mds=False)
     composed = [
-        render_mgmt_login_command(is_mds=False),
-        render_add_administrator_command("svc-patch", is_mds=False),
-        render_add_api_key_command("svc-patch"),
-        *render_publish_logout_commands(),
+        render_mgmt_login_command(session, is_mds=False),
+        render_add_administrator_command("svc-patch", session, is_mds=False),
+        render_add_api_key_command("svc-patch", session),
+        *render_publish_logout_commands(session),
     ]
-    assert flat == composed
+    assert _normalise_session(flat) == _normalise_session(composed)
+
+
+def test_each_render_uses_a_fresh_unguessable_session_path() -> None:
+    """A fixed path was pre-creatable as a symlink by any local user (the
+    redirect runs as root) and was shared by concurrent jobs on the same host."""
+    a, b = new_api_session_file(), new_api_session_file()
+    assert a != b
+    assert re.fullmatch(r"/tmp/cpuse_orch_mgmt_api\.[0-9a-f]{32}\.sid", a)
+
+
+def test_login_creates_the_session_file_with_a_tight_umask() -> None:
+    """Otherwise the session id — a bearer credential for the life of the
+    login — lands world-readable under the default umask."""
+    assert render_mgmt_login_command(new_api_session_file()).startswith("umask 077; ")
 
 
 def test_show_administrator_command_rejects_bad_username() -> None:
     with pytest.raises(ProvisioningError, match="invalid username"):
-        render_show_administrator_command("Bad Name")
+        render_show_administrator_command("Bad Name", new_api_session_file())
 
 
 def test_show_administrator_command_uses_same_session_file_as_login() -> None:
-    login = render_mgmt_login_command(is_mds=False)
-    probe = render_show_administrator_command("svc-patch")
+    session = new_api_session_file()
+    login = render_mgmt_login_command(session, is_mds=False)
+    probe = render_show_administrator_command("svc-patch", session)
     session_file = login.rsplit("> ", 1)[1]
     assert f"-s {session_file}" in probe
 
@@ -251,8 +280,9 @@ def test_parse_api_key_rejects_missing_field() -> None:
 
 
 def test_set_api_settings_command_widens_accepted_calls_from() -> None:
-    login = render_mgmt_login_command(is_mds=False)
-    cmd = render_set_api_settings_command(is_mds=False)
+    session = new_api_session_file()
+    login = render_mgmt_login_command(session, is_mds=False)
+    cmd = render_set_api_settings_command(session, is_mds=False)
     session_file = login.rsplit("> ", 1)[1]
     assert cmd == (
         f"mgmt_cli -s {session_file} set api-settings accepted-api-calls-from "
@@ -261,5 +291,6 @@ def test_set_api_settings_command_widens_accepted_calls_from() -> None:
 
 
 def test_set_api_settings_command_mds_omits_domain() -> None:
-    cmd = render_set_api_settings_command(is_mds=True)
+    session = new_api_session_file()
+    cmd = render_set_api_settings_command(session, is_mds=True)
     assert "--domain" not in cmd

@@ -80,6 +80,7 @@ def service(store: Store, tmp_path: Path, transport: FakeTransport) -> CDTServic
         packages=packages,
         runner=JobRunner(store),
         vault=JobCredentialVault(),
+        store=store,
         poll_interval=0.01,  # fast execute polling in tests
     )
 
@@ -209,3 +210,26 @@ def test_execute_job_fails_when_status_reports_failures(
     finished = store.get_job(job.id)
     assert finished.status is JobStatus.FAILED
     assert finished.error is not None and "reported failures" in finished.error
+
+
+# -- CDT submits gate on the host being free (H7) ----------------------------------
+#
+# CDT drives a whole fleet from one management server, so overlapping jobs there
+# are the worst kind: a stage rewriting the shared candidates CSV underneath a
+# running execute. ensure_host_free() already guarded PatchingService and
+# SparkPatchingService; every CDT submit skipped it entirely.
+
+
+def test_cdt_submits_refuse_a_host_that_already_has_a_running_job(
+    service: CDTService, store: Store
+) -> None:
+    service.submit_stage("default", "mgmt-01", PKG)  # left PENDING, which counts
+
+    for submit in (
+        lambda: service.submit_stage("default", "mgmt-01", PKG),
+        lambda: service.submit_generate("default", "mgmt-01"),
+        lambda: service.submit_prepare("default", "mgmt-01"),
+        lambda: service.submit_execute("default", "mgmt-01", confirmed=True),
+    ):
+        with pytest.raises(JobError, match="already"):
+            submit()
