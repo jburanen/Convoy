@@ -166,6 +166,7 @@ class FakeInteractiveShell:
         drop_on: str | None = None,
         timeout_on: str | None = None,
         reboot_closes: bool = True,
+        password_needs_nudge: bool = False,
     ) -> None:
         self._expert_password = expert_password
         self._wrong_password = wrong_password
@@ -173,6 +174,11 @@ class FakeInteractiveShell:
         self._drop_on = drop_on
         self._timeout_on = timeout_on
         self._reboot_closes = reboot_closes
+        # Models the Gaia `expert` password reader that ignores the newline
+        # send_secret() already sent and only acts once a FURTHER newline
+        # arrives as its own write (see GaiaExpertSession.enter_expert).
+        self._password_needs_nudge = password_needs_nudge
+        self._awaiting_nudge = False
         self._last = ""
         self._last_secret: str | None = None
         self.sent: list[str] = []
@@ -192,7 +198,13 @@ class FakeInteractiveShell:
         if self._timeout_on is not None and self._timeout_on in self._last:
             raise TransportTimeoutError(f"fake: timed out waiting for {pattern!r}")
         if self._last_secret is not None:
+            if self._password_needs_nudge and not self._awaiting_nudge:
+                # Password buffered but not acted on: stay silent until a bare
+                # newline arrives, exactly as the real Gaia reader does.
+                self._awaiting_nudge = True
+                raise TransportTimeoutError(f"fake: timed out waiting for {pattern!r}")
             password, self._last_secret = self._last_secret, None
+            self._awaiting_nudge = False
             if password == self._expert_password and not self._wrong_password:
                 return "[Expert@host]# "
             return "wrong password\nPassword: "
