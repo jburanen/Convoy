@@ -592,6 +592,12 @@ class GaiaExpertSession:
     def __init__(self, shell: InteractiveShell) -> None:
         self._shell = shell
 
+    # How long to wait for the expert password to be acted on before nudging
+    # it with a further newline (see enter_expert). Short, because the healthy
+    # case answers in well under a second and the unhealthy case never answers
+    # at all -- this is dead time on every affected escalation.
+    _SUBMIT_NUDGE_AFTER = 10.0
+
     def enter_expert(self, expert_password: str, *, timeout: float = 20.0) -> None:
         self._shell.send_line("expert")
         first = self._shell.expect(
@@ -600,9 +606,25 @@ class GaiaExpertSession:
         if re.search(self._EXPERT_PROMPT, first):
             return  # already in expert mode
         self._shell.send_secret(expert_password)
-        result = self._shell.expect(
-            f"(?:{self._EXPERT_PROMPT})|(?:{self._PASSWORD_PROMPT})", timeout=timeout
-        )
+        want = f"(?:{self._EXPERT_PROMPT})|(?:{self._PASSWORD_PROMPT})"
+        try:
+            result = self._shell.expect(want, timeout=self._SUBMIT_NUDGE_AFTER)
+        except TransportTimeoutError:
+            # Some Gaia builds' `expert` password reader does not act on the
+            # newline send_secret() already sent: the password sits unread and
+            # the session hangs until the escalation times out. Confirmed on an
+            # R81.x gateway (clish login) 2026-08-26 -- a further newline, sent
+            # as its OWN write, submits the already-buffered password and lands
+            # in expert mode normally. Gaia Embedded (Spark) answers the first
+            # newline immediately and never reaches this branch.
+            #
+            # It MUST be a separate write, and only after silence. Sending the
+            # password and both newlines in one write is not a shortcut: the
+            # reader then takes the first newline as an empty password, fails,
+            # and the password itself is echoed IN CLEARTEXT at the clish prompt
+            # where Gaia logs it as an invalid command. Never combine them.
+            self._shell.send_line("")
+            result = self._shell.expect(want, timeout=timeout)
         if re.search(self._EXPERT_PROMPT, result):
             return
         detail = "wrong password" if self._WRONG_PASSWORD_RE.search(result) else "unexpected prompt"

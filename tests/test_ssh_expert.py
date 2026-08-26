@@ -14,6 +14,8 @@ import pytest
 from chkp_cpuse_orch.errors import ExpertModeError, TransportError
 from chkp_cpuse_orch.transport.ssh import GaiaExpertSession, InteractiveShell
 
+from .fakes import FakeInteractiveShell
+
 
 class FakeChannel:
     """A scripted queue of byte chunks, delivered one recv_ready()/recv()
@@ -159,3 +161,53 @@ def test_full_expert_conversation() -> None:
     assert channel.sent[0] == b"expert\n"
     assert channel.sent[1] == b"hunter2\n"
     assert channel.sent[-1] == b"exit\n"
+
+
+# -- the silent expert-password reader (live bug, 2026-08-26) ----------------------
+#
+# Confirmed against a real R81.x Gaia gateway: its `expert` password reader does
+# not act on the newline send_secret() already sent. The password sits unread and
+# the escalation hangs to its full timeout with ZERO bytes received -- which is
+# what "Disk space check ... timed out ... output so far: ''" was. A further
+# newline, as its own write, submits the buffered password normally.
+#
+# Combining them into one write is NOT an alternative fix: the reader then takes
+# the first newline as an empty password and the password itself is echoed in
+# CLEARTEXT at the clish prompt, where Gaia logs it as an invalid command.
+
+
+def test_enter_expert_nudges_a_reader_that_ignores_the_first_newline() -> None:
+    shell = FakeInteractiveShell(expert_password="expert-pw", password_needs_nudge=True)
+    GaiaExpertSession(shell).enter_expert("expert-pw")
+
+    # the password went out on its own, and the nudge is a SEPARATE empty write
+    assert shell.sent == ["expert", "***", ""]
+
+
+def test_enter_expert_does_not_nudge_when_the_reader_answers_normally() -> None:
+    """Spark/Gaia Embedded answers the first newline — it must not receive a
+    stray extra line, which would land as a blank command in expert mode."""
+    shell = FakeInteractiveShell(expert_password="expert-pw")
+    GaiaExpertSession(shell).enter_expert("expert-pw")
+
+    assert shell.sent == ["expert", "***"]
+
+
+def test_enter_expert_still_reports_a_wrong_password_after_a_nudge() -> None:
+    """The nudge must not paper over a genuinely wrong password."""
+    shell = FakeInteractiveShell(
+        expert_password="expert-pw", wrong_password=True, password_needs_nudge=True
+    )
+    with pytest.raises(ExpertModeError, match="wrong password"):
+        GaiaExpertSession(shell).enter_expert("not-the-password")
+
+
+def test_enter_expert_never_sends_the_password_and_nudge_in_one_write() -> None:
+    """Regression guard for the cleartext-leak shape: the password must be its
+    own write, never concatenated with extra terminators."""
+    shell = FakeInteractiveShell(expert_password="expert-pw", password_needs_nudge=True)
+    GaiaExpertSession(shell).enter_expert("expert-pw")
+
+    secret_writes = [w for w in shell.sent if w == "***"]
+    assert len(secret_writes) == 1
+    assert "expert-pw" not in shell.sent  # never echoed as a plain command

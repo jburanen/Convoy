@@ -163,3 +163,35 @@ FAILED" for this case were rewritten to expect a synchronous raise instead
   the transfer toggle-and-restore maneuver success/failure/restore-failure
   paths) — monkeypatches `chkp_cpuse_orch.transport.ssh.SSHClient` so
   `GaiaSession._new_client()` picks up the fake.
+
+## The silent expert-password reader (confirmed on live gear, 2026-08-26)
+
+**Symptom:** every `run_bash` on a full-Gaia gateway hung and failed with
+`timed out waiting for '(?:\[Expert@...\]#\s*$)|(?:[Pp]assword\s*:\s*$)' on
+<host>; output so far: ''`. Surfaced first as "Disk space check for <host>
+failed" from the synchronous pre-import check
+(`PatchingService.check_import_disk_space`).
+
+**Cause:** the `expert` password reader on that Gaia build does **not** act on
+the newline `send_secret()` already sent. The password sits buffered and unread
+and the escalation waits out its whole timeout having received *zero* bytes. A
+further newline, sent as **its own write**, submits the buffered password and
+lands in expert mode normally. Gaia Embedded (Spark) answers the first newline
+immediately, which is why Spark patching never hit this — and why it went
+unnoticed: this posture ([[gaia-shell-posture]], v0.60.0, 2026-08-24) shipped
+after the last successful CPUSE import to a Gaia host (2026-08-18), so no
+gateway import had exercised it.
+
+**Fix:** `GaiaExpertSession.enter_expert` waits `_SUBMIT_NUDGE_AFTER` (10s) for
+the password to be acted on; on timeout it sends one bare newline and waits
+again. Costs ~10s on affected boxes, nothing on boxes that answer normally.
+
+**Do NOT "simplify" this by sending the password and both newlines in one
+write.** Tested on live gear: the reader then takes the first newline as an
+empty password, fails with `Wrong password.`, and the password itself is echoed
+**in cleartext at the clish prompt**, where Gaia logs it
+(`CLINFR0329 Invalid command:'<password>'`). Password + CRLF and password + CR
+in a single write both hang exactly like the original bug. Two separate writes
+is the only sequence that works safely — `tests/test_ssh_expert.py` guards
+this, including a test asserting the password is never concatenated with extra
+terminators.
