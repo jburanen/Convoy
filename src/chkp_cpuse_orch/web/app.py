@@ -228,8 +228,9 @@ class OperationCredentials(BaseModel):
 
 class ImportRequest(OperationCredentials):
     package: str  # filename in the package store
-    # Set after the UI's disk-space precheck (see PatchingService.
-    # check_import_disk_space) showed a shortfall eligible for override
+    # Carries an operator's override past a disk-space shortfall a previous
+    # run of this same import already failed on (see
+    # PatchingService.retry_import_with_override)
     # (still >=1.5x the package's own size) and the operator chose to
     # proceed anyway. Ignored by the precheck endpoint itself.
     force_low_space: bool = False
@@ -1423,37 +1424,6 @@ def _register_routes(app: FastAPI) -> None:
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
-    @app.post("/api/env/{env}/servers/{name}/import/disk-space")
-    async def server_import_disk_space(
-        env: str, name: str, body: ImportRequest, request: Request
-    ) -> list[dict[str, Any]]:
-        """Synchronous precheck the UI runs before submit_import — same
-        disk-space thresholds as the job's own gate, but read-only: no
-        upload, no CPUSE interaction. Lets the operator see a shortfall and
-        choose to override before the real (background) job ever queues."""
-        service = _service(request)
-        try:
-            checks = await asyncio.to_thread(
-                service.check_import_disk_space,
-                env,
-                name,
-                body.package,
-                credentials=_build_credentials(body.credentials, name, env),
-            )
-        except OrchestratorError as exc:
-            raise _map_error(exc) from exc
-        return [
-            {
-                "path": c.path,
-                "multiplier": c.multiplier,
-                "available": c.available,
-                "required": c.required,
-                "ok": c.ok,
-                "override_eligible": c.override_eligible,
-            }
-            for c in checks
-        ]
-
     @app.post("/api/env/{env}/servers/{name}/import-cloud", status_code=202)
     def server_import_cloud(
         env: str, name: str, body: ImportCloudRequest, request: Request
@@ -1756,35 +1726,6 @@ def _register_routes(app: FastAPI) -> None:
             )
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
-
-    @app.post("/api/env/{env}/firewalls/{name}/import/disk-space")
-    async def firewall_import_disk_space(
-        env: str, name: str, body: ImportRequest, request: Request
-    ) -> list[dict[str, Any]]:
-        """Same precheck as server_import_disk_space, for firewalls — see
-        that endpoint's docstring."""
-        service = _service(request)
-        try:
-            checks = await asyncio.to_thread(
-                service.check_import_disk_space,
-                env,
-                name,
-                body.package,
-                credentials=_build_credentials(body.credentials, name, env),
-            )
-        except OrchestratorError as exc:
-            raise _map_error(exc) from exc
-        return [
-            {
-                "path": c.path,
-                "multiplier": c.multiplier,
-                "available": c.available,
-                "required": c.required,
-                "ok": c.ok,
-                "override_eligible": c.override_eligible,
-            }
-            for c in checks
-        ]
 
     @app.post("/api/env/{env}/firewalls/{name}/import-cloud", status_code=202)
     def firewall_import_cloud(
@@ -2228,6 +2169,31 @@ def _register_routes(app: FastAPI) -> None:
         except StoreError as exc:
             raise _map_error(exc) from exc
         return {"status": "cancel requested"}
+
+    @app.post("/api/jobs/{job_id}/retry-import-with-override")
+    async def retry_import_with_override(
+        job_id: str, body: OperationCredentials, request: Request
+    ) -> JobRecord:
+        """ "Retry with override" for an import job that failed on an
+        override-eligible disk-space shortfall (Jobs tab). Submits a NEW
+        import for the same host/package with force_low_space set; the failed
+        job stays as the record of why. Rejected unless that job really did
+        fail that way — and the job's own check still refuses anything below
+        1.5x the package size regardless."""
+        store: Store = request.app.state.store
+        try:
+            job = store.get_job(job_id)
+        except StoreError as exc:
+            raise _map_error(exc) from exc
+        try:
+            return await asyncio.to_thread(
+                _service(request).retry_import_with_override,
+                job_id,
+                credentials=_build_credentials(body.credentials, job.target or "", job.environment),
+                triggered_by=_current_user(request),
+            )
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
 
     @app.post("/api/jobs/{job_id}/recheck-import")
     async def recheck_import(

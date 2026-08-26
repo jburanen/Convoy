@@ -26,7 +26,7 @@ from chkp_cpuse_orch.inventory import Host, Inventory, Role, Site
 from chkp_cpuse_orch.jobs import JobRunner
 from chkp_cpuse_orch.packages import PackageStore
 from chkp_cpuse_orch.services.common import EnvironmentRegistry, HostConnector
-from chkp_cpuse_orch.services.patching import PatchingService
+from chkp_cpuse_orch.services.patching import LOW_SPACE_OVERRIDABLE, PatchingService
 from chkp_cpuse_orch.store import JobStatus, Store
 
 from .fakes import DA_BUILD, SHOW_PACKAGES_ALL, FakeTransport, make_factory
@@ -527,17 +527,85 @@ def test_import_job_never_overrides_below_the_hard_floor(
     assert transport.puts == []
 
 
-def test_check_import_disk_space_reports_ok_and_shortfalls(
-    service: PatchingService, transport: FakeTransport, packages: PackageStore
-) -> None:
+# -- disk space is part of the import job (operator-directed, 2026-08-26) ---------
+#
+# It used to be a synchronous pre-submit probe, so a slow SSH + expert
+# escalation left the operator on a spinner with no job to look at, and a
+# shortfall surfaced as a browser alert rather than a job they could inspect.
+# Now the job owns it: the failure IS the job's failure, and an eligible
+# shortfall is retried through retry_import_with_override.
+
+
+def _fail_import_on_low_space(
+    service: PatchingService, store: Store, transport: FakeTransport, packages: PackageStore
+) -> str:
     packages.add_stream(_BIG_PKG, io.BytesIO(_BIG_PKG_CONTENT))
     transport.responses["df -Pk /var/log"] = _df_with_available_kb("/var/log", 200)
     transport.responses["df -Pk /"] = _PLENTY_DF
-    checks = {c.path: c for c in service.check_import_disk_space("default", "mgmt-01", _BIG_PKG)}
-    assert checks["/var/log"].ok is False
-    assert checks["/var/log"].override_eligible is True
-    assert checks["/"].ok is True
-    assert transport.puts == []  # read-only precheck — never uploads anything
+    # So a retry that gets PAST the gate can complete normally.
+    transport.responses["sha1sum"] = f"{_BIG_PKG_SHA1}  /var/log/upload/{_BIG_PKG}"
+    transport.responses["show installer packages imported"] = f"{_BIG_PKG}      Imported"
+    job = service.submit_import("default", "mgmt-01", _BIG_PKG)
+    _run(service)
+    return job.id
+
+
+def test_import_job_fails_on_an_overridable_shortfall_without_uploading(
+    service: PatchingService, store: Store, transport: FakeTransport, packages: PackageStore
+) -> None:
+    job_id = _fail_import_on_low_space(service, store, transport, packages)
+
+    finished = store.get_job(job_id)
+    assert finished.status is JobStatus.FAILED
+    assert LOW_SPACE_OVERRIDABLE in (finished.error or "")
+    assert "/var/log" in (finished.error or "")
+    assert transport.puts == []  # failed the gate before uploading anything
+
+
+def test_retry_with_override_submits_a_new_import_that_proceeds(
+    service: PatchingService, store: Store, transport: FakeTransport, packages: PackageStore
+) -> None:
+    job_id = _fail_import_on_low_space(service, store, transport, packages)
+
+    retried = service.retry_import_with_override(job_id)
+    assert retried.id != job_id  # a NEW job; the failure stays as the audit record
+    _run(service)
+
+    assert store.get_job(retried.id).status is JobStatus.SUCCEEDED
+    assert store.get_job(job_id).status is JobStatus.FAILED  # untouched
+    assert transport.puts  # the override actually let the upload happen
+
+
+def test_retry_with_override_is_refused_for_an_unrelated_failure(
+    service: PatchingService, store: Store, transport: FakeTransport
+) -> None:
+    """The link must not become a way to blanket-force any failed import."""
+    transport.put_size = lambda local: 1  # fails on size mismatch, not disk space
+    job = service.submit_import("default", "mgmt-01", PKG)
+    _run(service)
+    assert store.get_job(job.id).status is JobStatus.FAILED
+
+    with pytest.raises(JobError, match="overridable disk-space shortfall"):
+        service.retry_import_with_override(job.id)
+
+
+def test_retry_with_override_is_refused_below_the_hard_floor(
+    service: PatchingService, store: Store, transport: FakeTransport, packages: PackageStore
+) -> None:
+    """Below 1.5x the package size there is no override, so there is no link —
+    and forging the call still fails the job's own re-check."""
+    packages.add_stream(_BIG_PKG, io.BytesIO(_BIG_PKG_CONTENT))
+    transport.responses["df -Pk /var/log"] = _df_with_available_kb("/var/log", 1)
+    transport.responses["df -Pk /"] = _PLENTY_DF
+    job = service.submit_import("default", "mgmt-01", _BIG_PKG)
+    _run(service)
+
+    finished = store.get_job(job.id)
+    assert finished.status is JobStatus.FAILED
+    assert "cannot be overridden" in (finished.error or "")
+    assert LOW_SPACE_OVERRIDABLE not in (finished.error or "")
+    with pytest.raises(JobError, match="overridable disk-space shortfall"):
+        service.retry_import_with_override(job.id)
 
 
 def test_import_job_fails_closed_on_size_mismatch(

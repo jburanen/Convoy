@@ -17,7 +17,12 @@ import pytest
 from chkp_cpuse_orch.errors import CredentialError, GaiaShellRestoreError, TransportError
 from chkp_cpuse_orch.inventory import Host, Role
 from chkp_cpuse_orch.transport import ssh as ssh_module
-from chkp_cpuse_orch.transport.ssh import CommandResult, GaiaSession, GaiaShell
+from chkp_cpuse_orch.transport.ssh import (
+    CommandResult,
+    GaiaSession,
+    GaiaShell,
+    require_ok,
+)
 
 
 def _host() -> Host:
@@ -94,6 +99,12 @@ class FakeSSHClient:
         self.commands.append(command)
         for key, scripted in self.responses.items():
             if key in command:
+                # A list is a sequence consumed one call at a time, holding on
+                # the last entry — lets a test script "fails, then succeeds"
+                # (e.g. a config-lock conflict cleared by an override). Same
+                # shape as test_gateway_bootstrap.py's task_sequence.
+                if isinstance(scripted, list):
+                    scripted = scripted.pop(0) if len(scripted) > 1 else scripted[0]
                 if isinstance(scripted, Exception):
                     raise scripted
                 return scripted
@@ -306,3 +317,66 @@ def test_put_raises_gaia_shell_restore_error_if_restore_itself_fails(
 
     with pytest.raises(GaiaShellRestoreError, match="left on a standing bash shell"):
         session.put("local.tgz", "/var/log/upload/local.tgz")
+
+
+# -- clish config lock (live bug, 2026-08-26) --------------------------------------
+#
+# Elevating to expert takes Gaia's config-database lock, so the very next clish
+# `set` in the same session is refused -- which is what broke the transfer
+# shell-toggle on a real gateway. Gaia reports it on STDOUT (CLINFR0771 /
+# CLINFR0519) with rc=1 and an EMPTY stderr, which is why the job error was a
+# bare "command failed (rc=1)" with no reason attached.
+
+_LOCK_STDOUT = (
+    "CLINFR0771  Config lock is owned by admin. Use the command "
+    "'lock database override' to acquire the lock."
+    + chr(10)
+    + "CLINFR0519  Configuration lock present. Can not execute this command."
+)
+
+
+def _lock_then_ok(command: str) -> list[CommandResult]:
+    return [
+        CommandResult(command=command, exit_status=1, stdout=_LOCK_STDOUT, stderr=""),
+        CommandResult(command=command, exit_status=0, stdout="", stderr=""),
+    ]
+
+
+def test_put_breaks_the_config_lock_when_the_shell_toggle_is_refused() -> None:
+    session = _session()
+    first = FakeSSHClient.instances[0]
+    first.responses["echo"] = CommandResult(command="echo", exit_status=1, stdout="", stderr="")
+    first.responses["shell /bin/bash"] = _lock_then_ok("set user svc shell /bin/bash")
+
+    session.put("local.tgz", "/var/log/upload/local.tgz")
+
+    # Positions, not values: both toggle commands are the same string, so
+    # .index() would just find the first one twice.
+    at = [i for i, c in enumerate(first.commands) if "shell /bin/bash" in c]
+    assert len(at) == 2  # refused, then retried
+    override_at = first.commands.index("lock database override")
+    assert at[0] < override_at < at[1]  # override sits between the two attempts
+
+
+def test_no_lock_override_when_nothing_is_blocking() -> None:
+    """The override forcibly evicts whoever holds the lock — an admin mid-change
+    in SmartConsole or clish — so it must never fire pre-emptively."""
+    session = _session()
+    first = FakeSSHClient.instances[0]
+    first.responses["echo"] = CommandResult(command="echo", exit_status=1, stdout="", stderr="")
+
+    session.put("local.tgz", "/var/log/upload/local.tgz")
+
+    every = [c for inst in FakeSSHClient.instances for c in inst.commands]
+    assert not any("lock database override" in c for c in every)
+
+
+def test_require_ok_reports_clish_errors_from_stdout() -> None:
+    """clish writes errors to stdout; reporting stderr alone turned every clish
+    failure into a bare rc with no reason."""
+    with pytest.raises(TransportError, match="CLINFR0771"):
+        require_ok(
+            CommandResult(
+                command="set user x shell /bin/bash", exit_status=1, stdout=_LOCK_STDOUT, stderr=""
+            )
+        )

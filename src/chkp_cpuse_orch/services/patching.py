@@ -10,10 +10,11 @@ CPUSE mechanics below don't care which kind of Gaia host they're talking to:
   size) and `/` (2x) before doing anything else — `df -Pk`, fails the job
   closed with PreCheckError if either falls short (operator-specified,
   2026-07-23). A shortfall down to 1.5x the package's own size can be
-  overridden by the operator — the UI runs check_import_disk_space as a
-  synchronous precheck, offers an override when eligible, and the job itself
-  re-verifies rather than trusting the flag blindly; below 1.5x there is no
-  override, ever (operator-specified, 2026-07-24) — then SFTPs the package to
+  overridden by the operator — the job fails with the shortfall in its log and
+  the Jobs tab offers "Retry with override", which resubmits through
+  retry_import_with_override; the retried job re-verifies rather than trusting
+  the flag blindly; below 1.5x there is no override, ever
+  (operator-specified, 2026-07-24) — then SFTPs the package to
   a temp path on the host, verifies its
   sha1 on the host itself (catches a corrupted/truncated transfer before
   `installer import` ever touches it), `installer import local`, then remove
@@ -141,6 +142,13 @@ _DISK_CHECK_PATHS = (("/var/log", 3), ("/", 2))
 # (operator-specified, 2026-07-24). Above it but still short of the full
 # requirement, the UI may offer the operator a way to proceed anyway.
 _MIN_OVERRIDE_MULTIPLIER = 1.5
+
+# Stable tail on the "short on space but overridable" job error. The Jobs tab
+# matches it to decide whether to offer "Retry with override" (app.js's
+# LOW_SPACE_OVERRIDABLE_RE — keep the two in step). A marker in the message
+# rather than a field on JobRecord because the failure is already carried to
+# the browser as job.error, and a job's params are fixed at submit time.
+LOW_SPACE_OVERRIDABLE = "so this can be overridden if you choose to proceed anyway"
 
 
 def _is_imported_now(cpuse: CPUSE, package_filename: str, hf_config: HfConfig | None) -> bool:
@@ -290,31 +298,6 @@ class PatchingService:
         finally:
             client.close()
 
-    def check_import_disk_space(
-        self,
-        environment: str,
-        host_name: str,
-        package_filename: str,
-        *,
-        credentials: CredentialBundle | None = None,
-    ) -> list[DiskSpaceCheck]:
-        """Synchronous, read-only precheck the UI runs before submit_import:
-        same thresholds as the job's own gate (_check_disk_space), but no
-        upload and no CPUSE interaction — lets the operator see a shortfall
-        and choose to override before the real (background) job ever queues.
-        Blocking (SSH) — call via ``asyncio.to_thread`` from async contexts."""
-        connector = self.registry.get(environment)
-        host = connector.patchable_host(host_name)
-        # Disk space is read via `df`, a bash-native command — see remote_free_bytes.
-        creds = connector.require_credentials(host, credentials, require_expert=True)
-        local_path = self._packages.path_for(package_filename)
-        local_size = local_path.stat().st_size
-        client = connector.connect(host, creds)
-        try:
-            return self._disk_space_report(client, local_size)
-        finally:
-            client.close()
-
     def _cache_state(
         self,
         environment: str,
@@ -383,10 +366,10 @@ class PatchingService:
     ) -> JobRecord:
         """Enqueue: SFTP the stored package to the host + `installer import local`.
         ``force_low_space`` carries an operator's override past a disk-space
-        shortfall the UI's precheck already showed them (see
-        check_import_disk_space) — it's re-verified, not trusted blindly: the
-        job's own _check_disk_space still fails closed below
-        _MIN_OVERRIDE_MULTIPLIER, no override can cross that floor."""
+        shortfall a previous run of this same import already failed on and
+        reported (see retry_import_with_override) — it's re-verified, not
+        trusted blindly: the job's own _check_disk_space still fails closed
+        below _MIN_OVERRIDE_MULTIPLIER, no override can cross that floor."""
         connector = self.registry.get(environment)
         host = connector.patchable_host(host_name)
         ensure_host_free(self._store, environment, host_name)
@@ -599,10 +582,8 @@ class PatchingService:
 
     def _disk_space_report(self, client: Transport, local_size: int) -> list[DiskSpaceCheck]:
         """Measures free space on every required path against ``local_size``
-        (the package's own size) — no upload, no CPUSE interaction. Shared by
-        the synchronous UI precheck (check_import_disk_space) and the job's
-        own fail-fast gate (_check_disk_space) so both apply identical
-        thresholds."""
+        (the package's own size) — no upload, no CPUSE interaction. Feeds the
+        job's fail-fast gate, _check_disk_space."""
         hard_floor = int(local_size * _MIN_OVERRIDE_MULTIPLIER)
         report = []
         for path, multiplier in _DISK_CHECK_PATHS:
@@ -627,10 +608,26 @@ class PatchingService:
         """Fail fast — before ever uploading — if the target doesn't have
         enough free space to import this package. A shortfall down to
         _MIN_OVERRIDE_MULTIPLIER (1.5x the package's own size) can be passed
-        with ``override=True`` (the UI's precheck-then-confirm flow, see
-        check_import_disk_space); below that floor there is no override —
-        this always raises. Raises PreCheckError (never touches CPUSE state)
-        whenever it fails closed."""
+        with ``override=True`` — the Jobs tab's "Retry with override" link,
+        which resubmits this same import via retry_import_with_override.
+        Below that floor there is no override — this always raises. Raises
+        PreCheckError (never touches CPUSE state) whenever it fails closed.
+
+        This runs INSIDE the import job (operator-directed, 2026-08-26) rather
+        than as a synchronous pre-submit probe: the check needs SSH plus an
+        expert-mode escalation, which is slow enough that doing it before the
+        job existed left the operator watching a spinner with nothing on the
+        Jobs tab, and surfaced failures as a browser alert instead of a job
+        they could inspect."""
+        # The operator is watching this on the Jobs tab now, and it is the
+        # slowest thing that happens before anything visible does: an SSH
+        # connect plus an expert-mode escalation before the first `df` returns.
+        # Say so, rather than showing an idle job.
+        ctx.set_status("checking disk space")
+        ctx.log(
+            f"checking free disk space for a {format_bytes(local_size)} package "
+            f"({', '.join(p for p, _ in _DISK_CHECK_PATHS)})"
+        )
         for check in self._disk_space_report(client, local_size):
             if check.ok:
                 ctx.log(
@@ -651,7 +648,7 @@ class PatchingService:
             if not override:
                 raise PreCheckError(
                     f"{base} — still at least {_MIN_OVERRIDE_MULTIPLIER}x the package size, "
-                    "so this can be overridden if you choose to proceed anyway"
+                    f"{LOW_SPACE_OVERRIDABLE}"
                 )
             ctx.log(f"{base} — proceeding anyway (operator override confirmed)", level="warning")
 
@@ -679,6 +676,47 @@ class PatchingService:
                 progress_seq = event.seq
                 time.sleep(self._import_verify_delay)
         return False
+
+    def retry_import_with_override(
+        self,
+        job_id: str,
+        *,
+        credentials: CredentialBundle | None = None,
+        triggered_by: str | None = None,
+    ) -> JobRecord:
+        """Resubmit a FAILED import that fell short on disk space, carrying the
+        operator's override — the Jobs tab's "Retry with override" link.
+
+        Only offered (and only permitted) when the original failure was
+        override-eligible, i.e. the host still had at least
+        _MIN_OVERRIDE_MULTIPLIER x the package size free. Below that floor
+        _check_disk_space raises regardless of the flag, so a forged call
+        can't cross it either; this gate exists so the *link* can't be used to
+        blanket-force any failed import.
+
+        Returns a NEW job (the failed one stays as the audit record of why an
+        override was needed) — unlike recheck_import, which resolves the
+        original job in place because nothing was re-run there."""
+        job = self._store.get_job(job_id)
+        if job.kind != JOB_IMPORT:
+            raise JobError(f"job {job_id!r} is not an import job (kind: {job.kind})")
+        if job.status != JobStatus.FAILED:
+            raise JobError(
+                f"job {job_id!r} did not fail (status: {job.status.value}) — nothing to retry"
+            )
+        if LOW_SPACE_OVERRIDABLE not in (job.error or ""):
+            raise JobError(
+                f"job {job_id!r} did not fail on an overridable disk-space shortfall — "
+                "there is nothing here an override would change"
+            )
+        return self.submit_import(
+            job.environment,
+            job.target or "",
+            str(job.params["package"]),
+            force_low_space=True,
+            credentials=credentials,
+            triggered_by=triggered_by,
+        )
 
     def recheck_import(
         self, job_id: str, *, credentials: CredentialBundle | None = None
