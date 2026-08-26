@@ -6,6 +6,13 @@
 */
 
 :root {
+  /* Tells the browser this page supports both schemes so it paints native
+     chrome (the env-picker's <select> popup, scrollbars, etc.) to match
+     the OS preference too - without this, a control with no explicit
+     background (like #env-picker, made borderless/transparent further
+     down) has nothing to infer dark mode from and its native popup
+     defaults to a light background even on an otherwise-dark page. */
+  color-scheme: light dark;
   --bg: #f7f8fa;
   --panel: #ffffff;
   --text: #1c2430;
