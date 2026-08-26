@@ -73,6 +73,12 @@ _SENSITIVE_KEY_PARTS = (
 )
 _REDACTED = "***REDACTED***"
 
+# Bounds on paging (see _paged_objects). Generous enough that no real estate
+# reaches them; small enough that a hostile or broken server can't make this
+# loop or allocate without limit.
+_MAX_PAGES = 200
+_MAX_OBJECTS = 50_000
+
 
 def _is_sensitive_key(key: str) -> bool:
     lowered = key.lower()
@@ -191,26 +197,52 @@ class ManagementAPIClient:
 
     # -- commands ----------------------------------------------------------------
 
+    def _paged_objects(self, command: str, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        """Page through a ``show-*`` command's ``objects`` list, bounded.
+
+        The management server is the far end of an unverified TLS connection
+        (see verify_tls) and its ``total`` is just a number in a response body,
+        so nothing here treats it as trustworthy: a non-numeric total is an
+        error rather than an unhandled ValueError, page count and object count
+        are both capped, and a page that fails to advance the offset ends the
+        loop instead of spinning on it forever."""
+        objects: list[dict[str, Any]] = []
+        offset = 0
+        for _page in range(_MAX_PAGES):
+            data = self._post(command, {**payload, "limit": _PAGE_LIMIT, "offset": offset})
+            batch = data.get("objects") or []
+            objects.extend(batch)
+            if len(objects) > _MAX_OBJECTS:
+                raise TransportError(
+                    f"{command} returned more than {_MAX_OBJECTS} objects — refusing to "
+                    "keep paging; this is far beyond any real estate size"
+                )
+            raw_total = data.get("total", len(objects))
+            try:
+                total = int(raw_total)
+            except (TypeError, ValueError) as exc:
+                raise TransportError(
+                    f"{command} returned a non-numeric 'total': {raw_total!r}"
+                ) from exc
+            if not batch:  # no progress possible
+                break
+            offset += len(batch)
+            if offset >= total:
+                break
+        else:
+            raise TransportError(
+                f"{command} did not finish paging within {_MAX_PAGES} pages — refusing "
+                "to keep going"
+            )
+        return objects
+
     def show_gateways_and_servers(self, *, details_level: str = "full") -> list[dict[str, Any]]:
         """Return every gateway/server object the management database knows about.
 
         Pages through the result set (``show-gateways-and-servers`` caps each page)
         and returns the concatenated ``objects`` list untouched — mapping object
         types to roles is the service layer's job."""
-        objects: list[dict[str, Any]] = []
-        offset = 0
-        while True:
-            data = self._post(
-                "show-gateways-and-servers",
-                {"details-level": details_level, "limit": _PAGE_LIMIT, "offset": offset},
-            )
-            batch = data.get("objects") or []
-            objects.extend(batch)
-            total = int(data.get("total", len(objects)))
-            offset += len(batch)
-            if not batch or offset >= total:
-                break
-        return objects
+        return self._paged_objects("show-gateways-and-servers", {"details-level": details_level})
 
     def show_simple_clusters(self, *, details_level: str = "full") -> list[dict[str, Any]]:
         """Return every ClusterXL/VRRP cluster object the management database
@@ -218,20 +250,7 @@ class ManagementAPIClient:
         gateway's real cluster object name (the SmartConsole name, unlike the
         peer-hostname stand-in ``clusterxl.py`` builds from live `cphaprob`
         output). Paged the same way as ``show_gateways_and_servers``."""
-        objects: list[dict[str, Any]] = []
-        offset = 0
-        while True:
-            data = self._post(
-                "show-simple-clusters",
-                {"details-level": details_level, "limit": _PAGE_LIMIT, "offset": offset},
-            )
-            batch = data.get("objects") or []
-            objects.extend(batch)
-            total = int(data.get("total", len(objects)))
-            offset += len(batch)
-            if not batch or offset >= total:
-                break
-        return objects
+        return self._paged_objects("show-simple-clusters", {"details-level": details_level})
 
     def show_domains(self) -> list[dict[str, Any]]:
         """Return every Domain (CMA) a Multi-Domain Server knows about.

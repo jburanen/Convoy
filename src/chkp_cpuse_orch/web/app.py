@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import shutil
 import uuid
 from collections.abc import AsyncIterator, Callable
@@ -56,7 +57,7 @@ from ..errors import (
     TransportError,
 )
 from ..jobs import JobRunner
-from ..packages import PackageStore
+from ..packages import PackageStore, check_filename
 from ..reporting import configure_logging, get_logger, resolve_log_level
 from ..services.api_access import ApiAccessService
 from ..services.cdt_ops import CDTService
@@ -99,6 +100,22 @@ from .auth import (
 logger = get_logger(__name__)
 
 _STATIC_DIR = Path(__file__).parent / "static"
+
+# Ceiling on one /api/jobs page, including the Jobs tab's "All" option. Each
+# JobRecord can carry up to 2 MB of captured install-log text, so "all" over a
+# year of retained history is an expensive response to rebuild on every poll.
+MAX_JOBS_PAGE = 500
+
+# Ceiling on one package upload. Check Point JHF bundles run to a few GB, so
+# this has to be generous — it exists to stop an unbounded or repeated upload
+# filling /data, which also holds the SQLite DB and the job archive, not to
+# second-guess a legitimate package. Overridable for deployments with unusually
+# large images.
+MAX_UPLOAD_BYTES = int(os.environ.get("CHKP_CPUSE_MAX_UPLOAD_BYTES") or 16 * 1024**3)
+# Keep this much free beyond the incoming file, so an upload that just fits
+# doesn't leave the DB with nowhere to write.
+_UPLOAD_FREE_SPACE_MARGIN = 1 * 1024**3
+_UPLOAD_CHUNK = 1024 * 1024
 
 # How often the background reaper sweeps for expired packages.
 _REAP_INTERVAL_SECONDS = 3600.0
@@ -669,9 +686,74 @@ def create_app(
         summary="Orchestration API for Check Point CDT/CPUSE deployments.",
         lifespan=lifespan,
     )
+    # Registered after the auth guard so it runs OUTSIDE it — Starlette
+    # applies middleware in reverse order of registration, and the headers
+    # must be on every response including the 401s and redirects the auth
+    # guard itself returns.
     _register_auth_middleware(app)
+    _register_security_headers(app)
     _register_routes(app)
     return app
+
+
+# Content-Security-Policy for the UI. Strict because it can be: the pages carry
+# no inline <script>, no inline style attributes, no inline event handlers and
+# no external script/style/font/image sources (the GitHub mark is inline SVG).
+# The only external references are ordinary anchor hrefs, which CSP does not
+# restrict. Verified against index.html and login.html — if either ever grows an
+# inline handler or a CDN reference, THIS is what will break, and the fix is to
+# move the code into a .js file rather than to loosen the policy.
+_CSP = "; ".join(
+    (
+        "default-src 'self'",
+        "script-src 'self'",
+        "style-src 'self'",
+        "img-src 'self' data:",
+        "font-src 'self'",
+        # No <object>/<embed>, and no <base> rewriting of relative URLs.
+        "object-src 'none'",
+        "base-uri 'none'",
+        # Only same-origin XHR/fetch/WebSocket.
+        "connect-src 'self'",
+        # Modern equivalent of X-Frame-Options: DENY (kept below for older UAs).
+        "frame-ancestors 'none'",
+        "form-action 'self'",
+    )
+)
+
+_SECURITY_HEADERS = {
+    "Content-Security-Policy": _CSP,
+    "X-Frame-Options": "DENY",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+}
+
+
+def _register_security_headers(app: FastAPI) -> None:
+    """Set defence-in-depth response headers on every response.
+
+    None of these is the primary control for anything — there are no reachable
+    XSS sinks today — but clickjacking was otherwise entirely unmitigated, and
+    a CSP is the difference between one future injected string being an
+    inconvenience and being a full compromise of a tool that patches firewalls.
+
+    HSTS is set only when the response was actually served over HTTPS: sending
+    it over plain HTTP is meaningless, and pinning a host to HTTPS that is not
+    yet serving it would lock operators out. Deployments behind a TLS-
+    terminating proxy get it via X-Forwarded-Proto.
+    """
+
+    @app.middleware("http")
+    async def _security_headers(request: Request, call_next: RequestResponseEndpoint) -> Response:
+        response = await call_next(request)
+        for header, value in _SECURITY_HEADERS.items():
+            response.headers.setdefault(header, value)
+        forwarded = request.headers.get("x-forwarded-proto", "")
+        if request.url.scheme == "https" or forwarded.split(",")[0].strip() == "https":
+            response.headers.setdefault(
+                "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+            )
+        return response
 
 
 def _register_auth_middleware(app: FastAPI) -> None:
@@ -1332,11 +1414,17 @@ def _register_routes(app: FastAPI) -> None:
         Never itself raises an OrchestratorError: any failure (no SSH
         credential, unreachable host, bad command) comes back as ``error``
         for the UI to show inline."""
+        # Every sibling route has this; without it an unknown environment
+        # returned 200 with a diagnosis of nothing instead of 404.
+        _require_env(request, env)
         diag = _api_access(request).diagnose(env)
+        # raw_output is deliberately NOT returned: it is unparsed remote command
+        # output that nothing in the UI reads, so it was pure extra surface for
+        # anything sensitive `api status` might print. It stays available
+        # server-side on the diagnosis object.
         return {
             "overall_started": diag.overall_started,
             "restricted_to_local": diag.restricted_to_local,
-            "raw_output": diag.raw_output,
             "error": diag.error,
         }
 
@@ -1904,6 +1992,40 @@ def _register_routes(app: FastAPI) -> None:
         packages: PackageStore = request.app.state.packages
         if not file.filename:
             raise HTTPException(status_code=400, detail="upload is missing a filename")
+        # Validate the NAME before writing a single byte. This used to run only
+        # inside submit_upload -> add_stream, i.e. after the whole body had been
+        # spooled by Starlette AND copied again to the staging path — so a
+        # rejected filename still cost two full writes of a GB-scale file.
+        try:
+            check_filename(file.filename)
+        except PackageError as exc:
+            raise _map_error(exc) from exc
+
+        declared = request.headers.get("content-length")
+        if declared is not None:
+            try:
+                declared_size = int(declared)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="invalid Content-Length") from None
+            if declared_size > MAX_UPLOAD_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=(
+                        f"upload is {declared_size} bytes, over the {MAX_UPLOAD_BYTES}-byte limit"
+                    ),
+                )
+            # /data also holds the SQLite DB (jobs, sessions, encrypted
+            # credentials) and the job archive, so filling it does not merely
+            # fail the upload — it starts failing session and job writes too.
+            free = shutil.disk_usage(packages.directory).free
+            if declared_size + _UPLOAD_FREE_SPACE_MARGIN > free:
+                raise HTTPException(
+                    status_code=507,
+                    detail=(
+                        f"not enough free space to accept this upload: {declared_size} bytes "
+                        f"incoming, {free} bytes free on the package volume"
+                    ),
+                )
         # Stage to a stable path inside the package directory first — the
         # upload's bytes only exist for the lifetime of this request (Starlette
         # tears down its spooled temp file once the response is sent), so the
@@ -1915,8 +2037,15 @@ def _register_routes(app: FastAPI) -> None:
         staged_path = packages.directory / f".upload-{uuid.uuid4().hex}"
 
         def _stage() -> None:
+            # Content-Length is whatever the client claimed, so the cap is
+            # enforced again against the bytes actually arriving.
+            written = 0
             with staged_path.open("wb") as out:
-                shutil.copyfileobj(file.file, out)
+                while chunk := file.file.read(_UPLOAD_CHUNK):
+                    written += len(chunk)
+                    if written > MAX_UPLOAD_BYTES:
+                        raise PackageError(f"upload exceeded the {MAX_UPLOAD_BYTES}-byte limit")
+                    out.write(chunk)
 
         try:
             await asyncio.to_thread(_stage)
@@ -2166,12 +2295,16 @@ def _register_routes(app: FastAPI) -> None:
         status: Annotated[list[str] | None, Query()] = None,
         user: Annotated[list[str] | None, Query()] = None,
     ) -> list[JobRecord]:
-        """``limit <= 0`` returns every job (the Jobs tab's "All" option).
+        """``limit <= 0`` means "as many as allowed" — capped at
+        ``MAX_JOBS_PAGE``, not unbounded: each record can carry up to 2 MB of
+        captured install log, so an uncapped listing over a year of retained
+        jobs is a large response to build and serialise on demand, repeatedly.
         kind/target/environment/status/user each accept repeated query params
         (``?status=failed&status=succeeded``) and filter as OR within a field,
         AND across fields — powers the Jobs tab's multiselect filters. Options
         come from ``/api/jobs/facets``, not this endpoint."""
         store: Store = request.app.state.store
+        limit = MAX_JOBS_PAGE if limit <= 0 else min(limit, MAX_JOBS_PAGE)
         statuses: list[JobStatus] | None = None
         if status:
             try:

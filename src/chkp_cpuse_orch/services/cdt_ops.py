@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import posixpath
+import shlex
 import tempfile
 import time
 from pathlib import Path
@@ -235,7 +236,7 @@ class CDTService:
         remote_pkg = posixpath.join(self._staging_dir, package)
 
         with self._job_session(ctx.job) as s:
-            existing = s.transport.run_bash(f"stat -c %s {remote_pkg} 2>/dev/null")
+            existing = s.transport.run_bash(f"stat -c %s {shlex.quote(remote_pkg)} 2>/dev/null")
             if existing.ok and existing.stdout.strip() == str(local_size):
                 ctx.log(f"{package} already staged at {remote_pkg} (size matches) — skip upload")
             else:

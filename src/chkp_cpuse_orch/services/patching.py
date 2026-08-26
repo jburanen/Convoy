@@ -219,6 +219,7 @@ class PatchingService:
         install_verify_attempts: int = 30,
         install_verify_delay: float = 30.0,
         install_stall_seconds: float = 90.0,
+        install_max_seconds: float = 14400.0,
     ) -> None:
         self.runner = runner
         self.registry = registry
@@ -239,6 +240,7 @@ class PatchingService:
         self._install_verify_attempts = install_verify_attempts
         self._install_verify_delay = install_verify_delay
         self._install_stall_seconds = install_stall_seconds
+        self._install_max_seconds = install_max_seconds
         runner.register(JOB_IMPORT, self._import_job)
         runner.register(JOB_IMPORT_CLOUD, self._import_cloud_job)
         runner.register(JOB_INSTALL, self._install_job)
@@ -545,7 +547,7 @@ class PatchingService:
 
             # Best-effort: the import is confirmed, so a cleanup failure here
             # is a warning, not a job failure.
-            cleanup = client.run_bash(f"rm -f {remote_path}")
+            cleanup = client.run_bash(f"rm -f {shlex.quote(remote_path)}")
             if cleanup.ok:
                 ctx.log(f"removed temp copy {remote_path}")
             else:
@@ -665,6 +667,7 @@ class PatchingService:
         and a live timestamp, just as one line, not one per poll."""
         progress_seq: int | None = None
         for attempt in range(1, self._import_verify_attempts + 1):
+            ctx.raise_if_cancelled()  # so Cancel works mid-poll
             if _is_imported_now(cpuse, package_filename, hf_config):
                 return True
             if attempt < self._import_verify_attempts:
@@ -756,7 +759,7 @@ class PatchingService:
             self._store.append_event(
                 job_id, "manual check: confirmed package is listed as imported"
             )
-            cleanup = client.run_bash(f"rm -f {remote_path}")
+            cleanup = client.run_bash(f"rm -f {shlex.quote(remote_path)}")
             if cleanup.ok:
                 self._store.append_event(job_id, f"removed temp copy {remote_path}")
             else:
@@ -907,6 +910,7 @@ class PatchingService:
         last_logged_status: str | None = None
         try:
             for attempt in range(1, self._install_verify_attempts + 1):
+                ctx.raise_if_cancelled()  # so Cancel works mid-poll
                 will_continue = attempt < self._install_verify_attempts
                 try:
                     if client is None:
@@ -923,6 +927,22 @@ class PatchingService:
                     continue
                 except CPUSEError as exc:
                     ctx.log(f"could not read uninstall status yet: {exc}", level="warning")
+                    if will_continue:
+                        time.sleep(self._install_verify_delay)
+                    continue
+
+                if not packages:
+                    # An EMPTY list is "we could not read the state", not "the
+                    # package is gone". Treating absence-from-nothing as proof
+                    # of a successful uninstall is how a parse failure, or a
+                    # CPUSE that answered with nothing useful, got reported to
+                    # the operator as a completed uninstall. Absence only means
+                    # anything once we have a list we actually parsed.
+                    ctx.log(
+                        "`show installer packages` returned no packages at all — "
+                        "treating as unreadable state, not as proof of uninstall",
+                        level="warning",
+                    )
                     if will_continue:
                         time.sleep(self._install_verify_delay)
                     continue
@@ -990,6 +1010,22 @@ class PatchingService:
         attempt = 0
         try:
             while uncapped or attempt < self._install_verify_attempts:
+                # Cancel has to work here. Without this the loop never checks,
+                # so a stuck install held a bounded JobRunner slot forever and
+                # the operator's Cancel did nothing at all.
+                ctx.raise_if_cancelled()
+                # The uncapped branch deliberately drops the attempt budget so a
+                # genuinely long install isn't cut off — but "no budget" must
+                # not mean "no limit", or one wedged install pins a runner slot
+                # indefinitely. TIMED_OUT is the right status: giving up is not
+                # a verdict, CPUSE may still be working (see JobStatus.TIMED_OUT).
+                if uncapped and time.monotonic() - started >= self._install_max_seconds:
+                    raise JobTimedOut(
+                        f"{package_id} was still installing after "
+                        f"{self._install_max_seconds / 3600:.1f}h (last status: "
+                        f"{last_detail.status!r}) — giving up watching; the install may "
+                        "still be running on the host"
+                    )
                 attempt += 1
                 will_continue = uncapped or attempt < self._install_verify_attempts
                 try:
@@ -1064,7 +1100,12 @@ class PatchingService:
             ctx.log(f"could not connect to capture installation log: {exc}", level="warning")
             return
         try:
-            result = client.run_bash(f"cat {shlex.quote(path)}")
+            # Bound the read AT THE SOURCE. `cat` pulled the whole file into
+            # memory and only then applied the size cap, so a large or
+            # runaway CPUSE log was already resident before being truncated.
+            # head -c fetches one byte more than the cap so we can still tell
+            # whether truncation happened.
+            result = client.run_bash(f"head -c {_INSTALL_LOG_MAX_BYTES + 1} {shlex.quote(path)}")
         finally:
             client.close()
         if not result.ok:
@@ -1072,7 +1113,7 @@ class PatchingService:
             ctx.log(f"could not read installation log at {path}: {detail}", level="warning")
             return
         text = result.stdout
-        if len(text) > _INSTALL_LOG_MAX_BYTES:
+        if len(text) > _INSTALL_LOG_MAX_BYTES:  # head fetched the extra byte
             text = text[:_INSTALL_LOG_MAX_BYTES] + (
                 f"\n... truncated at {_INSTALL_LOG_MAX_BYTES} bytes"
             )

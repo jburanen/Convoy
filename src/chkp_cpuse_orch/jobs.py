@@ -58,7 +58,16 @@ class JobContext:
             if replace is not None
             else self._store.append_event(self.job.id, message, level=level)
         )
-        logger.info(message, job_id=self.job.id, kind=self.job.kind, target=self.job.target)
+        # Honour the caller's level. This was hardcoded to info(), so every
+        # ctx.log(..., level="error") — job failures included — was emitted at
+        # INFO and therefore filtered out by the default WARNING threshold.
+        # Job failures were correctly recorded in the DB but never reached
+        # `docker compose logs`, which is exactly where an operator looks first
+        # and precisely the case log-level alerting exists for.
+        log_at = getattr(logger, level, None)
+        if not callable(log_at):
+            log_at = logger.info
+        log_at(message, job_id=self.job.id, kind=self.job.kind, target=self.job.target)
         return event
 
     def raise_if_cancelled(self) -> None:
@@ -168,7 +177,16 @@ class JobRunner:
                 tasks.add(asyncio.create_task(self._run(job)))
             if not tasks:
                 return
-            _done, tasks = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            done, tasks = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            # Retrieve every completed task's result. _run catches broadly, but
+            # an exception from the terminal-status write ITSELF (a StoreError
+            # on a full disk, say) escapes it — and an un-retrieved task
+            # exception surfaces only as a "Task exception was never retrieved"
+            # warning at GC, leaving the job stuck RUNNING with no explanation.
+            for task in done:
+                exc = task.exception()
+                if exc is not None:
+                    logger.error("job task failed outside its own error handling", error=str(exc))
 
     async def serve(self, poll_interval: float = 1.0) -> None:
         """Long-running loop for the web app. Polls as well as waking on submit,

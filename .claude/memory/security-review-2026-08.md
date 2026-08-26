@@ -140,8 +140,47 @@ revisiting the reasoning.
   `logger.debug` to `logger.warning` — an accepted posture nobody can see is
   one nobody can reconsider.
 
-## Still outstanding (Phase 3, not started)
-Phase 3: the `shlex.quote()` sweep,
-`..` in `cdt.py`'s `_SAFE_PATH_RE`, fail-open confirmations, unbounded
-reads/polls, upload caps, security headers, `JobContext.log()`'s hardcoded INFO. Full plan lives at
-`~/.claude/plans/review-these-security-findings-imperative-possum.md`.
+## Phase 3 shipped in v0.74.0 — the review is now closed
+- **M1**: all six `shlex.quote()` sinks quoted (never reachable; hygiene).
+- **M2**: `cdt.py` rejects `..` segments in paths CDT runs as root (the
+  allowlist permitted dots, so `/opt/CPcdt/../../tmp/evil.sh` matched).
+  `_check_id` gained control-character and length checks. It deliberately does
+  **NOT** reject glob/brace characters, which a denylist review suggests:
+  nothing there reaches a bash word-expansion context (expert mode
+  `shlex.quote`s the whole clish command; clish mode goes straight to clish,
+  which does not glob), so adding them would only reject legitimate CPUSE
+  names — the same mistake the old allowlist made with spaces.
+- **M4**: uninstall no longer treats an EMPTY package list as proof of
+  removal — absence only means something once we have a list we actually
+  parsed. Spark build confirmation compares the full common suffix of the two
+  ids instead of a fixed three digits (`builds_match`), refusing to confirm on
+  under three digits of overlap. Full ids can't be compared: `fw ver` reports
+  a truncated form of what the .img filename carries.
+- **M5**: install-log read bounded at the source (`head -c N`, was `cat` then
+  truncate); mgmt-API paging bounded via `_paged_objects` (page + object caps,
+  non-numeric `total` is an error not an unhandled ValueError, non-advancing
+  page ends the loop); `hfconfig._read_capped` caps the two metadata member
+  reads that ran unbounded on every upload.
+- **M6**: wall-clock deadlines on both `_poll_task` loops and on the install
+  poll's "uncapped" branch (which drops its attempt budget on purpose so a long
+  install isn't cut off — but no budget must not mean no limit, or one wedged
+  install pins a JobRunner slot forever). `raise_if_cancelled()` added to the
+  import/install/uninstall polls, so **Cancel actually works** mid-poll.
+- **M7**: upload filename validated BEFORE staging (it was checked only inside
+  `add_stream`, i.e. after two full writes of a GB-scale file); `Content-Length`
+  ceiling (`MAX_UPLOAD_BYTES`, env-overridable) re-enforced while streaming
+  since the header is client-supplied; free-space precheck, because /data also
+  holds the DB and job archive.
+- **Low**: security-headers middleware (CSP/X-Frame-Options/nosniff/
+  Referrer-Policy, HSTS only over real HTTPS) — registered AFTER the auth guard
+  so it wraps it and the 401s get headers too; a strict CSP is safe because the
+  pages carry no inline script/style/handlers (verified — if one ever appears,
+  this is what breaks, and the fix is to move the code to a .js file, not to
+  loosen the policy). `JobContext.log()` honours its `level` (job failures were
+  emitted at INFO and so never reached `docker compose logs`). `JobRunner`
+  retrieves completed task exceptions. `api-access/diagnose` gained
+  `_require_env` and stopped returning `raw_output` nothing consumed.
+  `/api/jobs` capped at `MAX_JOBS_PAGE`.
+
+**Everything not listed as shipped was a decision, not an omission — see
+"Deliberately NOT implemented" above.**

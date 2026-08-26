@@ -45,6 +45,26 @@ _MAX_DEPTH = 5  # nested tar/tgz layers to descend before giving up
 # Skip nested archives bigger than this when descending — hf.config lives in
 # a small metadata sub-archive, not the (possibly GB-scale) payload.
 _MAX_NESTED_SIZE = 200 * 1024 * 1024
+# Cap on a metadata member read into memory. hf.config and conditions_set.json
+# are small text files; the nested-archive path already had a size guard, but
+# these two were read unbounded on EVERY package upload, so a crafted (or
+# corrupt) archive declaring a huge hf.config could exhaust memory. Reading a
+# bounded number of bytes is fine — anything past this is not the small text
+# file we came for.
+_MAX_METADATA_SIZE = 4 * 1024 * 1024
+
+
+def _read_capped(tar: tarfile.TarFile, member: tarfile.TarInfo) -> bytes | None:
+    """Extract one member, refusing anything implausibly large for metadata."""
+    if member.size > _MAX_METADATA_SIZE:
+        return None
+    extracted = tar.extractfile(member)
+    if extracted is None:
+        return None
+    # Read one byte past the cap: a member whose header understates its real
+    # size still cannot spend more than this.
+    data = extracted.read(_MAX_METADATA_SIZE + 1)
+    return None if len(data) > _MAX_METADATA_SIZE else data
 
 
 @dataclass(frozen=True)
@@ -157,25 +177,20 @@ def _find_metadata(fileobj: io.IOBase, depth: int) -> tuple[bytes, bytes | None]
             members = tar.getmembers()
             root_hf = next((m for m in members if m.isfile() and m.name == _HF_CONFIG_NAME), None)
             if root_hf is not None:
-                extracted = tar.extractfile(root_hf)
-                if extracted is not None:
+                root_bytes = _read_capped(tar, root_hf)
+                if root_bytes is not None:
                     note_member = next(
                         (m for m in members if m.isfile() and m.name == _CONDITIONS_SET_NAME),
                         None,
                     )
-                    note_bytes = None
-                    if note_member is not None:
-                        note_extracted = tar.extractfile(note_member)
-                        note_bytes = note_extracted.read() if note_extracted is not None else None
-                    return extracted.read(), note_bytes
+                    note_bytes = _read_capped(tar, note_member) if note_member else None
+                    return root_bytes, note_bytes
             for member in members:
                 if not member.isfile():
                     continue
                 basename = member.name.rsplit("/", 1)[-1]
                 if basename == _HF_CONFIG_NAME and fallback is None:
-                    extracted = tar.extractfile(member)
-                    if extracted is not None:
-                        fallback = extracted.read()
+                    fallback = _read_capped(tar, member)
                 elif _looks_like_archive(basename) and member.size <= _MAX_NESTED_SIZE:
                     extracted = tar.extractfile(member)
                     if extracted is None:
