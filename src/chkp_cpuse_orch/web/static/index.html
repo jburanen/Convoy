@@ -36,9 +36,14 @@
      without hiding or reflowing any of its content. -->
 <header>
   <div id="header-top">
-    <img src="/favicon.svg" alt="" id="header-logo" width="40" height="40">
-    <h1>Convoy</h1>
-    <p class="subtitle">Patching orchestration for Check Point systems</p>
+    <img src="/favicon.svg" alt="" id="header-logo" width="46" height="46">
+    <!-- Title + tagline stacked so the bigger logo has two lines to sit next
+         to; header.condensed (app.js) hides the tagline and shrinks the logo
+         so only the title remains, matched in height. -->
+    <div id="header-titles">
+      <h1>Convoy</h1>
+      <p class="subtitle">Patching orchestration for Check Point systems</p>
+    </div>
     <!-- right-aligned: signed-in user + logout; shown only when auth is
          enabled. The username opens the User Settings modal (password
          change; basic-auth only — see app.js initAuth). Logout also clears
