@@ -34,6 +34,27 @@ services:
     volumes:
       - ./data:/data:rw
     restart: unless-stopped
+    # Container hardening. This service holds the credential store and can drive
+    # root-level change across a firewall fleet, so it should hold no capability
+    # it does not use — it opens outbound SSH/HTTPS and listens on one port, none
+    # of which needs a Linux capability once the port is >1024.
+    cap_drop:
+      - ALL
+    security_opt:
+      # Blocks setuid/setcap escalation inside the container even if something
+      # in the image is (or becomes) setuid.
+      - no-new-privileges:true
+    # Bounds a runaway job/upload: without these, an unbounded package upload or
+    # a fork loop takes the whole host down, not just this service.
+    mem_limit: 2g
+    pids_limit: 512
+    # NOT set here, deliberately:
+    #   read_only: true  — the app writes to /data (SQLite WAL, packages, the job
+    #     archive) and mgmt_cli/CDT staging expects a writable /tmp; a read-only
+    #     rootfs needs both carved out as tmpfs and has not been tested.
+    #   ports: "127.0.0.1:8080:8080" — the UI is reached from operators' browsers
+    #     over the network and there is no reverse proxy in this stack, so
+    #     binding to loopback would simply make it unreachable.
     # No healthcheck override here — the Dockerfile's own HEALTHCHECK already
     # covers this (and follows CHKP_CPUSE_SSL_CERTFILE to probe https:// when
     # native TLS is on). A duplicate here previously went stale and always

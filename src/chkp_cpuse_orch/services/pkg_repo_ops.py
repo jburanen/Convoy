@@ -37,12 +37,13 @@ from ..errors import TransportError
 from ..inventory import Host
 from ..jobs import JobContext, JobRunner
 from ..packages import PackageStore
-from ..store import JobRecord
+from ..store import JobRecord, Store
 from ..transport.mgmt_api import ManagementAPIClient
 from .common import (
     EnvironmentRegistry,
     HostConnector,
     api_auth,
+    ensure_host_free,
     job_run_credentials,
     submit_host_job,
 )
@@ -91,6 +92,7 @@ class PackageRepoService:
         packages: PackageStore,
         runner: JobRunner,
         vault: JobCredentialVault,
+        store: Store,
         mgmt_client_factory: RepoClientFactory | None = None,
         staging_dir: str = DEFAULT_STAGING_DIR,
         poll_interval: float = 5.0,
@@ -99,6 +101,10 @@ class PackageRepoService:
         self._packages = packages
         self.runner = runner
         self._vault = vault
+        # Only to answer "is this host already busy?" — see ensure_host_free.
+        # This SFTPs a GB-scale package to the primary and drives a server-side
+        # import, so it must not overlap a CPUSE install on that same box.
+        self._store = store
         self._mgmt_client_factory = mgmt_client_factory or _default_repo_client_factory
         self._staging_dir = staging_dir
         self._poll_interval = poll_interval
@@ -116,6 +122,7 @@ class PackageRepoService:
     ) -> JobRecord:
         connector = self.registry.get(environment)
         host = connector.primary_mgmt_host()
+        ensure_host_free(self._store, environment, host.name)
         self._packages.path_for(package_filename)  # validates record + content up front
         return submit_host_job(
             self.runner,

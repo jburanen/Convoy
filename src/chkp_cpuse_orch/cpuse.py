@@ -20,7 +20,12 @@ from enum import StrEnum
 
 from .clusterxl import ClusterMemberState, parse_cluster_state
 from .errors import CPUSEError
-from .transport.ssh import CommandResult, CommandRunner, GaiaShell
+from .transport.ssh import (
+    CommandResult,
+    CommandRunner,
+    GaiaShell,
+    run_breaking_config_lock,
+)
 
 # Conventional staging directory for uploaded packages (any dir works; the docs
 # use /var/log/upload in their examples).
@@ -157,7 +162,6 @@ class CPUSE:
         This is the source of truth the UI reflects — always *detected* state,
         never our last action's assumed outcome.
         """
-        self._override_lock()
         result = self._clish(f"show installer packages {scope.value}")
         if not result.ok:
             raise CPUSEError(f"failed to list packages: {_failure_detail(result)}")
@@ -171,7 +175,6 @@ class CPUSE:
         actually completed instead of trusting ``installer install``'s
         immediate return (observed 2026-07-22: it can report success while
         the install is still running or has actually failed)."""
-        self._override_lock()
         result = self._clish(f"show installer package {_check_id(package_id)}")
         if not result.ok:
             raise CPUSEError(
@@ -181,11 +184,10 @@ class CPUSE:
 
     def agent_build(self) -> str:
         """`show installer status build` → Deployment Agent build string."""
-        self._override_lock()
         result = self._clish("show installer status build")
         if not result.ok:
             raise CPUSEError(f"failed to read DA build: {_failure_detail(result)}")
-        return result.stdout.strip()
+        return _strip_clish_notices(result.stdout)
 
     def cluster_state(self) -> ClusterMemberState | None:
         """`show cluster state` → this member's live ClusterXL role plus a
@@ -194,20 +196,10 @@ class CPUSE:
         either errors or prints no recognizable member table, either way
         treated as "not a cluster member" rather than raised — this backs a
         display-only status line, so it should never fail a refresh."""
-        self._override_lock()
         result = self._clish("show cluster state")
         if not result.ok:
             return None
         return parse_cluster_state(result.stdout)
-
-    def _override_lock(self) -> None:
-        """`lock database override` — force-release Gaia's config-database
-        lock (e.g. held by another admin session) so the read query that
-        follows isn't blocked behind it. Best-effort: if nothing is locked
-        this is a harmless no-op, and a failure here shouldn't abort the
-        refresh — the read command itself will surface a clear error if it's
-        genuinely still blocked."""
-        self._clish("lock database override")
 
     # -- lifecycle (mutating; caller must gate on safety checks) ---------------
 
@@ -238,14 +230,26 @@ class CPUSE:
         return self._run_installer(f"uninstall {_check_id(package_id)}", "uninstall")
 
     def _run_installer(self, verb: str, action: str) -> str:
-        # Same config-database lock that can block the read commands
-        # (see _override_lock) can hold up these mutating ones too.
-        self._override_lock()
+        """Run a mutating CPUSE verb, breaking the config lock only if it
+        actually blocks us.
+
+        This used to issue `lock database override` before EVERY CPUSE call,
+        read-only status polls included — so the UI's background refresh
+        repeatedly, silently stole Gaia's config lock from any admin working in
+        SmartConsole or clish, on a fixed interval. That was the security
+        review's M9. Overriding is now confined to the mutating path, and only
+        after Gaia has actually refused us; a refusal means the command did not
+        run, so retrying it once is safe.
+
+        The read-only queries above override nothing at all now: they are not
+        blocked by the lock in the first place — Gaia prints the CLINFR0771
+        notice and answers anyway (real device output, see
+        tests/test_cpuse.py::PACKAGE_DETAIL)."""
         # not-interactive suppresses prompts — required for automation.
-        result = self._clish(f"installer {verb} not-interactive")
+        result = run_breaking_config_lock(self._clish, f"installer {verb} not-interactive")
         if not result.ok:
             raise CPUSEError(f"CPUSE {action} failed: {_failure_detail(result)}")
-        return result.stdout.strip()
+        return _strip_clish_notices(result.stdout)
 
     # -- command plumbing --------------------------------------------------------
 
@@ -414,6 +418,19 @@ def _check_id(package_id: str) -> str:
     if not package_id.strip() or _SHELL_METACHARS_RE.search(package_id):
         raise CPUSEError(f"suspicious package identifier: {package_id!r}")
     return package_id
+
+
+# clish prefixes its output with CLINFR#### notices — most importantly the
+# CLINFR0771 "Config lock is owned by ..." line, which it prints on read-only
+# commands while still answering them normally. The table/block parsers ignore
+# stray lines, but anything returning stdout AS A VALUE has to drop them or the
+# notice becomes the value (caught on live gear: agent_build() returned the lock
+# notice as the Deployment Agent build string).
+_CLISH_NOTICE_RE = re.compile(r"^CLINFR\d+\s.*$", re.MULTILINE)
+
+
+def _strip_clish_notices(text: str) -> str:
+    return _CLISH_NOTICE_RE.sub("", text).strip()
 
 
 def _failure_detail(result: CommandResult) -> str:

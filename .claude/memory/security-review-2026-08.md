@@ -101,14 +101,47 @@ revisiting the reasoning.
 - **No `127.0.0.1` port bind** — would break browser access with no reverse
   proxy in the compose stack.
 
-## Still outstanding (Phases 2-3, not started)
-Phase 2: H6 (four credential/session leak paths — pty transcripts reaching
-`job.error`, the fixed `/tmp` mgmt_cli sid file, `reveal-api-key` as an unowned
-GET, `_redact`'s exact-match key list missing `script`), H7 (`ensure_host_free`
-is missing from every `cdt_ops`/`pkg_repo_ops` submit), M8 (preview endpoints
-render a real 5000-round sha512_crypt hash into a GET body), M14, H8/M11
-(deploy.sh root guard, container hardening). Phase 3: the `shlex.quote()` sweep,
+## Done since (outside the Phase 1 batch)
+- **M9 shipped in v0.72.1.** `cpuse.py` no longer issues `lock database
+  override` before every call. Read-only queries override nothing at all
+  (verified on live gear: Gaia prints CLINFR0771 and answers anyway); the
+  mutating path uses `transport/ssh.py`'s `run_breaking_config_lock`, which
+  overrides only after an observed refusal and logs who held it. See
+  [[gaia-shell-posture]].
+
+## Phase 2 shipped in v0.73.0
+- **H6, all four leaks.** Pty transcripts run through `scrub_transcript()`
+  before entering any exception (they reach job.error, job_events, the archive
+  AND the browser). The mgmt_cli session id moved from one fixed
+  `/tmp/cpuse_orch_mgmt_api.sid` to a per-run unguessable path created under
+  `umask 077` and removed in a `finally` (`new_api_session_file()`);
+  `reveal-api-key` became a POST scoped to `job.username`; `_redact` matches
+  key **substrings**, so `script` / `password-hash` / `new-password` /
+  `session-id` are covered — `script` was the sharp one, since the bootstrap
+  run-script payload carries a `password-hash $6$...`.
+- **H7.** `ensure_host_free` now guards all four `cdt_ops` submits and
+  `pkg_repo_ops.submit_push_to_repo`; both services took a `Store` for it.
+- **M8.** The full-Gaia bootstrap preview renders `REDACTED_HASH` instead of a
+  real one (`render_gaia_user_commands(..., redact_hash=True)`); the push
+  computes the real value. **The Spark preview deliberately still renders a
+  real hash** — it is display-only with no automated push, so the operator has
+  to paste it; eliding it would just break the feature. Rounds stay at 5000:
+  raising them makes passlib emit a `rounds=` directive, and whether Gaia's
+  `set user password-hash` accepts that form is unverified.
+- **M14.** `bootstrap-credentials` and `api-access/repair` take a
+  `ConfirmRequest` body; both UI paths already had confirm modals, the server
+  just wasn't enforcing it.
+- **H8 / M11.** `deploy.sh` refuses to run as root (it feeds `DEPLOY_UID` into
+  compose's `user:`, so `sudo ./deploy.sh` silently ran the container as uid 0).
+  Compose gained `cap_drop: [ALL]`, `no-new-privileges`, `mem_limit`,
+  `pids_limit`. Still deliberately NOT `read_only` (the app writes /data and
+  /tmp) and NOT a loopback port bind (no reverse proxy in this stack).
+- Also folded in: the mgmt-API "TLS verification disabled" note went from
+  `logger.debug` to `logger.warning` — an accepted posture nobody can see is
+  one nobody can reconsider.
+
+## Still outstanding (Phase 3, not started)
+Phase 3: the `shlex.quote()` sweep,
 `..` in `cdt.py`'s `_SAFE_PATH_RE`, fail-open confirmations, unbounded
-reads/polls, upload caps, `_override_lock()` on read-only polls, security
-headers, `JobContext.log()`'s hardcoded INFO. Full plan lives at
+reads/polls, upload caps, security headers, `JobContext.log()`'s hardcoded INFO. Full plan lives at
 `~/.claude/plans/review-these-security-findings-imperative-possum.md`.

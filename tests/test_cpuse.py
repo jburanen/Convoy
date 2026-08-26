@@ -17,16 +17,30 @@ from chkp_cpuse_orch.transport.ssh import CommandResult
 
 
 class FakeRunner:
-    """Records commands; replies with a scripted result."""
+    """Records commands; replies with a scripted result.
 
-    def __init__(self, stdout: str = "", exit_status: int = 0, stderr: str = "") -> None:
+    ``sequence`` overrides the default reply for the first N calls that match a
+    substring — used to script "refused by the config lock, then accepted".
+    """
+
+    def __init__(
+        self,
+        stdout: str = "",
+        exit_status: int = 0,
+        stderr: str = "",
+        sequence: dict[str, list[CommandResult]] | None = None,
+    ) -> None:
         self.commands: list[str] = []
         self._stdout = stdout
         self._exit_status = exit_status
         self._stderr = stderr
+        self._sequence = sequence or {}
 
     def run(self, command: str, *, timeout: float | None = None) -> CommandResult:
         self.commands.append(command)
+        for key, scripted in self._sequence.items():
+            if key in command and scripted:
+                return scripted.pop(0)
         return CommandResult(
             command=command,
             exit_status=self._exit_status,
@@ -42,7 +56,6 @@ def test_expert_shell_wraps_with_clish() -> None:
     runner = FakeRunner()
     CPUSE(runner, shell=GaiaShell.EXPERT).import_local("/var/log/upload/jhf.tgz")
     assert runner.commands == [
-        "clish -c 'lock database override'",
         "clish -c 'installer import local /var/log/upload/jhf.tgz not-interactive'",
     ]
 
@@ -51,7 +64,6 @@ def test_clish_shell_sends_bare_command() -> None:
     runner = FakeRunner()
     CPUSE(runner, shell=GaiaShell.CLISH).verify("Check_Point_R81.20_JHF_T99")
     assert runner.commands == [
-        "lock database override",
         "installer verify Check_Point_R81.20_JHF_T99 not-interactive",
     ]
 
@@ -62,9 +74,7 @@ def test_install_and_uninstall_are_not_interactive() -> None:
     cpuse.install("Pkg-1.0")
     cpuse.uninstall("Pkg-1.0")
     assert runner.commands == [
-        "lock database override",
         "installer install Pkg-1.0 not-interactive",
-        "lock database override",
         "installer uninstall Pkg-1.0 not-interactive",
     ]
 
@@ -73,7 +83,6 @@ def test_import_cloud_uses_bare_id_not_local() -> None:
     runner = FakeRunner()
     CPUSE(runner, shell=GaiaShell.CLISH).import_cloud("Check_Point_R81.20_JHF_T99")
     assert runner.commands == [
-        "lock database override",
         "installer import Check_Point_R81.20_JHF_T99 not-interactive",
     ]
 
@@ -91,7 +100,7 @@ def test_cluster_state_parses_local_role() -> None:
     )
     runner = FakeRunner(stdout=stdout)
     state = CPUSE(runner, shell=GaiaShell.CLISH).cluster_state()
-    assert runner.commands == ["lock database override", "show cluster state"]
+    assert runner.commands == ["show cluster state"]
     assert state is not None
     assert state.is_active
     assert state.cluster_name == "Member1, Member2"
@@ -107,7 +116,7 @@ def test_list_packages_uses_scope() -> None:
     CPUSE(runner, shell=GaiaShell.CLISH).list_packages(PackageScope.IMPORTED)
     # A read-only query first overrides Gaia's config-database lock (in case
     # another admin session is holding it) so it isn't blocked behind it.
-    assert runner.commands == ["lock database override", "show installer packages imported"]
+    assert runner.commands == ["show installer packages imported"]
 
 
 def test_failure_raises_cpuse_error_with_detail() -> None:
@@ -148,7 +157,6 @@ def test_real_display_name_with_spaces_is_accepted() -> None:
     package_id = "R82.10 Jumbo Hotfix Accumulator Recommended Jumbo Take 40"
     CPUSE(runner, shell=GaiaShell.CLISH).install(package_id)
     assert runner.commands == [
-        "lock database override",
         f"installer install {package_id} not-interactive",
     ]
 
@@ -362,3 +370,86 @@ def test_summarize_jumbo_falls_back_to_any_installed_version_without_a_jhf() -> 
 
 def test_summarize_jumbo_empty_without_packages() -> None:
     assert summarize_jumbo([]) == summarize_jumbo([PackageState("x", "Not Applicable")])
+
+
+# -- config lock is no longer stolen pre-emptively (security review M9) -----------
+#
+# This used to issue `lock database override` before EVERY CPUSE call, read-only
+# status polls included -- so the UI's background refresh silently, repeatedly
+# evicted any admin working in SmartConsole or clish. Overriding is now confined
+# to the mutating path, and only after Gaia has actually refused us.
+
+_LOCK_REFUSAL = (
+    "CLINFR0771  Config lock is owned by admin. Use the command "
+    "'lock database override' to acquire the lock."
+)
+
+
+def _refused_then_ok(command: str) -> list[CommandResult]:
+    return [
+        CommandResult(command=command, exit_status=1, stdout=_LOCK_REFUSAL, stderr=""),
+        CommandResult(command=command, exit_status=0, stdout="done", stderr=""),
+    ]
+
+
+def test_read_only_queries_never_touch_the_lock() -> None:
+    """The whole point of M9: a background refresh must not evict a live admin."""
+    runner = FakeRunner(stdout=TABULAR)
+    cpuse = CPUSE(runner, shell=GaiaShell.CLISH)
+    cpuse.list_packages()
+    cpuse.agent_build()
+    cpuse.cluster_state()
+    CPUSE(FakeRunner(stdout=PACKAGE_DETAIL), shell=GaiaShell.CLISH).package_detail("Pkg-1.0")
+
+    assert not any("lock database override" in c for c in runner.commands)
+
+
+def test_read_only_query_still_parses_when_the_lock_notice_is_printed() -> None:
+    """Gaia answers `show` commands while the lock is held, printing CLINFR0771
+    above the real output — which is exactly why read-only calls never needed an
+    override. PACKAGE_DETAIL is real device output captured in that state."""
+    detail = CPUSE(FakeRunner(stdout=PACKAGE_DETAIL), shell=GaiaShell.CLISH).package_detail(
+        "Check_Point_R82_10_jumbo_hf_main_Bundle_T36_FULL.tgz"
+    )
+    assert detail.status == "Imported"
+
+
+def test_mutating_verb_does_not_override_unless_refused() -> None:
+    runner = FakeRunner()
+    CPUSE(runner, shell=GaiaShell.CLISH).install("Pkg-1.0")
+    assert runner.commands == ["installer install Pkg-1.0 not-interactive"]
+
+
+def test_mutating_verb_overrides_and_retries_once_when_refused() -> None:
+    runner = FakeRunner(sequence={"installer install": _refused_then_ok("installer install")})
+    out = CPUSE(runner, shell=GaiaShell.CLISH).install("Pkg-1.0")
+
+    assert runner.commands == [
+        "installer install Pkg-1.0 not-interactive",
+        "lock database override",
+        "installer install Pkg-1.0 not-interactive",
+    ]
+    assert out == "done"
+
+
+def test_mutating_verb_surfaces_a_non_lock_failure_without_overriding() -> None:
+    """A failure that isn't a lock conflict must not trigger an override, and
+    must still report clish's reason (which arrives on stdout)."""
+    runner = FakeRunner(exit_status=1, stdout="CLINFR0329  Invalid command")
+    with pytest.raises(CPUSEError, match="Invalid command"):
+        CPUSE(runner, shell=GaiaShell.CLISH).install("Pkg-1.0")
+
+    assert not any("lock database override" in c for c in runner.commands)
+
+
+def test_agent_build_drops_the_config_lock_notice() -> None:
+    """Caught on live gear: with no pre-emptive override, clish prints
+    CLINFR0771 above the real output on read-only commands, and agent_build
+    returned that notice AS the Deployment Agent build string."""
+    runner = FakeRunner(stdout=_LOCK_REFUSAL + chr(10) + "Build 1234")
+    assert CPUSE(runner, shell=GaiaShell.CLISH).agent_build() == "Build 1234"
+
+
+def test_agent_build_is_unchanged_without_a_notice() -> None:
+    runner = FakeRunner(stdout="Build 1234")
+    assert CPUSE(runner, shell=GaiaShell.CLISH).agent_build() == "Build 1234"

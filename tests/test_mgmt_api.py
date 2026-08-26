@@ -146,7 +146,11 @@ def test_api_calls_not_logged_by_default(monkeypatch: pytest.MonkeyPatch) -> Non
         return httpx.Response(200, json={"sid": "SID-123"})
 
     _client(handler).login()
-    assert calls == []
+    # The TLS-verification-disabled notice is a deliberate standing warning
+    # (it was logger.debug, i.e. invisible at the default level) — what must
+    # not appear without CHKP_CPUSE_LOG_API_CALLS is the calls themselves.
+    assert not [msg for msg, _ in calls if msg.startswith("mgmt-api request")]
+    assert not [msg for msg, _ in calls if msg.startswith("mgmt-api response")]
 
 
 def test_login_defaults_to_read_only() -> None:
@@ -298,3 +302,48 @@ def test_api_calls_logged_and_sanitized_when_enabled(monkeypatch: pytest.MonkeyP
     messages = {msg: kw for msg, kw in calls}
     assert messages["mgmt-api request"]["payload"]["api-key"] == "***REDACTED***"
     assert messages["mgmt-api response"]["body"]["sid"] == "***REDACTED***"
+
+
+# -- log redaction (H6) ------------------------------------------------------------
+#
+# _redact used to match keys EXACTLY, which missed every compound name the API
+# actually uses. The sharp one was "script": the credential-bootstrap run-script
+# payload carries the whole clish script including `set user <u> password-hash
+# $6$...`, so enabling CHKP_CPUSE_LOG_API_CALLS wrote a crackable hash of a
+# gateway's admin password into `docker compose logs` at WARNING level.
+
+
+def test_redact_covers_compound_and_nested_secret_keys() -> None:
+    payload = {
+        "script": "set user svc password-hash $6$salt$hash",
+        "new-password": "p",
+        "password-hash": "h",
+        "api_key": "k",
+        "session-id": "s",
+        "sid": "s",
+        "nested": {"passwd": "q", "targets": ["fw-01"]},
+    }
+    out = _redact(payload)
+
+    for key in ("script", "new-password", "password-hash", "api_key", "session-id", "sid"):
+        assert out[key] == "***REDACTED***", key
+    assert out["nested"]["passwd"] == "***REDACTED***"
+    assert "$6$" not in json.dumps(out)
+
+
+def test_redact_leaves_ordinary_fields_alone() -> None:
+    payload = {"name": "fw-01", "uid": "abc", "targets": ["fw-01"], "details-level": "full"}
+    assert _redact(payload) == payload
+
+
+def test_tls_disabled_posture_is_warned_not_hidden(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verification-off is an accepted operator decision, but a posture nobody
+    can see is one nobody can reconsider — it used to be logger.debug."""
+    calls: list[str] = []
+    monkeypatch.setattr(mgmt_api.logger, "warning", lambda msg, **kw: calls.append(msg))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"sid": "SID-123"})
+
+    _client(handler).login()
+    assert any("TLS verification disabled" in m for m in calls)

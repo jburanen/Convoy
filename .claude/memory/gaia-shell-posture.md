@@ -227,8 +227,21 @@ who held it. Used by the shell-toggle, `save config`, and the clish restore.
 
 **Deliberately not pre-emptive.** Overriding on every call forcibly evicts
 whoever legitimately holds the lock (an admin mid-change in SmartConsole or
-clish) — exactly what the security review flagged as **M9** against `cpuse.py`,
-which *does* override before every call including read-only status polls. When
-M9 is fixed, make cpuse.py adopt this same observe-then-override shape rather
-than inventing a second one. `tests/test_gaia_session.py` asserts both the
-retry ordering and that no override fires when nothing is blocking.
+clish) — exactly what the security review flagged as **M9** against `cpuse.py`.
+`tests/test_gaia_session.py` asserts both the retry ordering and that no
+override fires when nothing is blocking.
+
+**M9 is now fixed too (v0.72.1), on this same helper.** `cpuse.py` no longer
+overrides before every call. Read-only queries (`list_packages`,
+`package_detail`, `agent_build`, `cluster_state`) override **nothing** — they
+are not blocked by the lock: Gaia prints the CLINFR0771 notice and answers
+anyway, confirmed on live gear (5 packages parsed, cluster state returned,
+while the lock was demonstrably held). Only `_run_installer` breaks the lock,
+via the shared `run_breaking_config_lock`.
+
+**Gotcha that fix introduced, caught live:** without the pre-emptive override,
+clish's CLINFR#### notices now reach read-only output — and `agent_build()`
+returned the lock notice *as the Deployment Agent build string*. Anything that
+returns clish stdout AS A VALUE (not through a tolerant parser) must run it
+through `_strip_clish_notices()`. The table/block package parsers ignore stray
+lines and were unaffected.

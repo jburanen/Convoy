@@ -310,3 +310,52 @@ def test_adding_a_brand_new_server_needs_no_confirmation(
 ) -> None:
     _submit(service)
     assert [s.name for s in env_manager.list_servers(ENV)] == ["mgmt-01"]
+
+
+# -- api-key reveal is scoped to the operator who ran the job (H6) -----------------
+#
+# Pop-once limits HOW MANY times the key can be read, not by whom. Job ids are
+# listed to every authenticated user by /api/jobs, so without an ownership check
+# anyone logged in could poll for a fresh connect-primary job and win the race
+# for someone else's freshly minted Management API key.
+
+
+def test_reveal_api_key_refuses_another_operators_job(
+    service: PrimaryConnectService, store: Store
+) -> None:
+    job = service.submit_connect_primary(
+        ENV,
+        name="mgmt-01",
+        address="192.0.2.10",
+        role="primary_sms",
+        ssh_user="svc-patch",
+        ssh_port=22,
+        credential_set="primary",
+        is_mds=False,
+        triggered_by="alice",
+    )
+    _run(service)
+
+    assert service.reveal_api_key(job.id, requested_by="mallory") is None
+    # ...and it was not consumed by the refusal, so the owner can still read it
+    assert service.reveal_api_key(job.id, requested_by="alice") is not None
+
+
+def test_reveal_api_key_allows_the_owner_and_is_still_pop_once(
+    service: PrimaryConnectService,
+) -> None:
+    job = service.submit_connect_primary(
+        ENV,
+        name="mgmt-01",
+        address="192.0.2.10",
+        role="primary_sms",
+        ssh_user="svc-patch",
+        ssh_port=22,
+        credential_set="primary",
+        is_mds=False,
+        triggered_by="alice",
+    )
+    _run(service)
+
+    assert service.reveal_api_key(job.id, requested_by="alice") is not None
+    assert service.reveal_api_key(job.id, requested_by="alice") is None

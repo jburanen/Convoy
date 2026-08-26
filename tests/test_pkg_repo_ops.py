@@ -108,6 +108,7 @@ def _service(
         packages=packages,
         runner=JobRunner(store),
         vault=JobCredentialVault(),
+        store=store,
         mgmt_client_factory=repo_client_factory,
         poll_interval=0.01,
     )
@@ -242,6 +243,7 @@ def test_submit_push_to_repo_requires_a_primary(
         packages=packages,
         runner=JobRunner(store),
         vault=JobCredentialVault(),
+        store=store,
         mgmt_client_factory=lambda host, **kw: _FakeRepoClient(),
     )
 

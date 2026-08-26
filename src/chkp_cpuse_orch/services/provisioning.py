@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 import shlex
 
 from passlib.hash import sha512_crypt
@@ -54,12 +55,17 @@ DEFAULT_UID = 0
 DEFAULT_ROLE = "adminRole"  # full admin: CPUSE installer verbs require it
 
 
+# Stand-in shown instead of a real hash when rendering for display only.
+REDACTED_HASH = "<password-hash computed when the bootstrap actually runs>"
+
+
 def render_gaia_user_commands(
     username: str,
     password: str,
     *,
     uid: int = DEFAULT_UID,
     role: str = DEFAULT_ROLE,
+    redact_hash: bool = False,
 ) -> list[str]:
     """Clish commands to create the service account on one management server.
 
@@ -70,6 +76,20 @@ def render_gaia_user_commands(
     .claude/memory/gaia-shell-posture.md). Rounds=5000 keeps the classic
     ``$6$salt$hash`` format (no ``rounds=`` directive) for maximum Gaia
     compatibility.
+
+    ``redact_hash`` renders the command shape with the hash replaced by a
+    placeholder, for the confirm-dialog preview. A sha512_crypt hash at 5000
+    rounds is offline-crackable, and the preview is a plain GET, so returning a
+    real one handed any authenticated user a crackable hash of every firewall's
+    stored password without ever needing the credential store's master key. The
+    push itself (render_bootstrap_script) computes the real hash, so nothing is
+    lost by withholding it here.
+
+    The round count deliberately stays at 5000: raising it makes passlib emit a
+    ``rounds=`` directive in the hash string, and whether Gaia's ``set user
+    password-hash`` accepts that form is unverified. Getting it wrong would
+    write an unusable hash onto a production account, so it is not a change to
+    make without live confirmation.
     """
     if not _USERNAME_RE.fullmatch(username):
         raise ProvisioningError(
@@ -85,7 +105,7 @@ def render_gaia_user_commands(
 
     # types-passlib leaves .using() untyped; the call shape is stable.
     hasher = sha512_crypt.using(rounds=5000)  # type: ignore[no-untyped-call]
-    password_hash = hasher.hash(password)
+    password_hash = REDACTED_HASH if redact_hash else hasher.hash(password)
     return [
         f"add user {username} uid {uid} homedir /home/{username}",
         f"set user {username} password-hash {password_hash}",
@@ -177,7 +197,29 @@ PROVISIONING_NOTES = [
 # account system in the management database — so it needs its own provisioning. The
 # tool's estate auto-discovery uses the Management API, so an API-enabled admin (with
 # an API key) is what makes discovery work.
-_API_SESSION_FILE = "/tmp/cpuse_orch_mgmt_api.sid"
+# mgmt_cli's session id is a bearer credential for the life of the login, and it
+# lands in a file on the MANAGED server. This used to be one fixed path,
+# "/tmp/cpuse_orch_mgmt_api.sid", written with a plain `>` redirect: predictable
+# (so pre-creatable as a symlink by any local user, redirecting root's write),
+# world-readable under the default umask, shared by concurrent jobs on the same
+# host, and removed only on the success path. Now: an unpredictable per-run name,
+# created under `umask 077`, and removed in a `finally` whatever happens.
+_API_SESSION_DIR = "/tmp"
+_API_SESSION_PREFIX = "cpuse_orch_mgmt_api"
+
+
+def new_api_session_file() -> str:
+    """A fresh, unguessable path for one mgmt_cli login's session id."""
+    return f"{_API_SESSION_DIR}/{_API_SESSION_PREFIX}.{secrets.token_hex(16)}.sid"
+
+
+def render_remove_session_file_command(session_file: str) -> str:
+    """Best-effort cleanup, safe to run whether or not the file exists. Callers
+    MUST run this in a finally — a failed login/publish leaves a live session id
+    on disk otherwise."""
+    return f"rm -f {shlex.quote(session_file)}"
+
+
 DEFAULT_API_PROFILE = "Super User"  # built-in profile; read access is enough for discovery
 DEFAULT_MDS_API_PROFILE = "Multi-Domain Super User"  # built-in global (all-Domains) profile
 
@@ -200,7 +242,7 @@ def _validate_mgmt_api_args(username: str, permissions_profile: str | None, is_m
     return permissions_profile
 
 
-def render_mgmt_login_command(*, is_mds: bool = False) -> str:
+def render_mgmt_login_command(session_file: str, *, is_mds: bool = False) -> str:
     """Log into ``mgmt_cli`` as root (no password) and save the session to a
     well-known temp file so later commands (possibly separate SSH round-trips)
     can reuse it via ``-s``.
@@ -214,10 +256,11 @@ def render_mgmt_login_command(*, is_mds: bool = False) -> str:
     untouched here.
     """
     domain_flag = "" if is_mds else ' --domain "System Data"'
-    return f"mgmt_cli login -r true{domain_flag} > {_API_SESSION_FILE}"
+    # umask 077 so the session id is not world-readable the moment it lands.
+    return f"umask 077; mgmt_cli login -r true{domain_flag} > {shlex.quote(session_file)}"
 
 
-def render_show_administrator_command(username: str) -> str:
+def render_show_administrator_command(username: str, session_file: str) -> str:
     """Existence probe for the Management API administrator, run against the
     session opened by ``render_mgmt_login_command``. Used to decide whether
     ``add administrator`` is needed (re-running the flow to issue a fresh API
@@ -230,11 +273,17 @@ def render_show_administrator_command(username: str) -> str:
     """
     if not _USERNAME_RE.fullmatch(username):
         raise ProvisioningError(f"invalid username {username!r}")
-    return f"mgmt_cli -s {_API_SESSION_FILE} show administrator name {username} --format json"
+    return (
+        f"mgmt_cli -s {shlex.quote(session_file)} show administrator name {username} --format json"
+    )
 
 
 def render_add_administrator_command(
-    username: str, *, permissions_profile: str | None = None, is_mds: bool = False
+    username: str,
+    session_file: str,
+    *,
+    permissions_profile: str | None = None,
+    is_mds: bool = False,
 ) -> str:
     """Create the Management API administrator (API-key auth method only —
     this does not itself issue a key; see ``render_add_api_key_command``).
@@ -247,12 +296,12 @@ def render_add_administrator_command(
     permissions_profile = _validate_mgmt_api_args(username, permissions_profile, is_mds)
     profile_param = "multi-domain-profile" if is_mds else "permissions-profile"
     return (
-        f"mgmt_cli -s {_API_SESSION_FILE} add administrator name {username} "
+        f"mgmt_cli -s {shlex.quote(session_file)} add administrator name {username} "
         f'authentication-method "api key" {profile_param} "{permissions_profile}"'
     )
 
 
-def render_add_api_key_command(username: str) -> str:
+def render_add_api_key_command(username: str, session_file: str) -> str:
     """Issue a (new) API key for ``username``, printed once in its JSON output
     (CLI reference: ``add-api-key`` v2.1) — see
     ``parse_api_key_from_add_api_key_output``. Safe to re-run for an
@@ -261,10 +310,12 @@ def render_add_api_key_command(username: str) -> str:
     """
     if not _USERNAME_RE.fullmatch(username):
         raise ProvisioningError(f"invalid username {username!r}")
-    return f"mgmt_cli -s {_API_SESSION_FILE} add api-key admin-name {username} --format json"
+    return (
+        f"mgmt_cli -s {shlex.quote(session_file)} add api-key admin-name {username} --format json"
+    )
 
 
-def render_set_api_settings_command(*, is_mds: bool = False) -> str:
+def render_set_api_settings_command(session_file: str, *, is_mds: bool = False) -> str:
     """Widen which IPs the Management API accepts calls from, run against the
     session opened by ``render_mgmt_login_command``. The parameter is
     ``accepted-api-calls-from`` — NOT ``accessibility``/``"minimize"``, which
@@ -284,17 +335,17 @@ def render_set_api_settings_command(*, is_mds: bool = False) -> str:
     on estate discovery (services/discovery.py)."""
     domain_flag = "" if is_mds else ' --domain "System Data"'
     return (
-        f"mgmt_cli -s {_API_SESSION_FILE} set api-settings accepted-api-calls-from "
+        f"mgmt_cli -s {shlex.quote(session_file)} set api-settings accepted-api-calls-from "
         f'"All IP addresses that can be used for GUI clients"{domain_flag}'
     )
 
 
-def render_publish_logout_commands() -> list[str]:
+def render_publish_logout_commands(session_file: str) -> list[str]:
     """Publish the session's changes, log out, and remove the session file."""
     return [
-        f"mgmt_cli -s {_API_SESSION_FILE} publish",
-        f"mgmt_cli -s {_API_SESSION_FILE} logout",
-        f"rm -f {_API_SESSION_FILE}",
+        f"mgmt_cli -s {shlex.quote(session_file)} publish",
+        f"mgmt_cli -s {shlex.quote(session_file)} logout",
+        render_remove_session_file_command(session_file),
     ]
 
 
@@ -315,13 +366,15 @@ def render_mgmt_api_commands(
     the account already exists, which this flat preview does not model.
     """
     permissions_profile = _validate_mgmt_api_args(username, permissions_profile, is_mds)
+    # A preview only — an automated run generates its own fresh session path.
+    session_file = new_api_session_file()
     return [
-        render_mgmt_login_command(is_mds=is_mds),
+        render_mgmt_login_command(session_file, is_mds=is_mds),
         render_add_administrator_command(
-            username, permissions_profile=permissions_profile, is_mds=is_mds
+            username, session_file, permissions_profile=permissions_profile, is_mds=is_mds
         ),
-        render_add_api_key_command(username),
-        *render_publish_logout_commands(),
+        render_add_api_key_command(username, session_file),
+        *render_publish_logout_commands(session_file),
     ]
 
 

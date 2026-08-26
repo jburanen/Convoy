@@ -362,6 +362,16 @@ class EnvServerIn(BaseModel):
     credential_set: str | None = None
 
 
+class ConfirmRequest(BaseModel):
+    """Body for a destructive endpoint whose only input is the operator saying
+    yes. Same `confirmed` convention as InstallRequest/UninstallRequest/
+    ExecuteRequest — these two were the only state-changing routes taking no
+    body at all, so a bare POST was enough to rewrite a live gateway's admin
+    account or restart a management server's API."""
+
+    confirmed: bool = False
+
+
 class AcceptHostKeyRequest(BaseModel):
     """Operator acknowledgement that a host's SSH key legitimately changed."""
 
@@ -561,7 +571,9 @@ def create_app(
             store=store,
             probe_reachable=spark_probe_reachable,
         )
-        cdt_service = CDTService(registry=registry, packages=packages, runner=runner, vault=vault)
+        cdt_service = CDTService(
+            registry=registry, packages=packages, runner=runner, vault=vault, store=store
+        )
         # No runner: package CRUD runs synchronously (services/pkgs_ops.py).
         pkgs_jobs = PackageJobService(packages=packages, store=store)
         # Only when the store is actually unlocked — a locked store already
@@ -596,6 +608,7 @@ def create_app(
             packages=packages,
             runner=runner,
             vault=vault,
+            store=store,
             # Same test-injection knob DiscoveryService uses just above — both
             # protocols just mean "a callable that builds a ManagementAPIClient".
             mgmt_client_factory=cast("RepoClientFactory | None", mgmt_client_factory),
@@ -1288,12 +1301,21 @@ def _register_routes(app: FastAPI) -> None:
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
 
-    @app.get("/api/jobs/{job_id}/reveal-api-key")
+    @app.post("/api/jobs/{job_id}/reveal-api-key")
     def reveal_api_key(job_id: str, request: Request) -> dict[str, str | None]:
         """Pop-once read of a connect-primary job's captured API key — returns
-        null on a second call, an unknown job id, or a job that isn't a
-        connect-primary job. Never logged; see PrimaryConnectService."""
-        return {"api_key": _primary_connect(request).reveal_api_key(job_id)}
+        null on a second call, an unknown job id, a job that isn't a
+        connect-primary job, or one submitted by a different operator. Never
+        logged; see PrimaryConnectService.
+
+        POST rather than GET: this both returns a secret and CONSUMES it, so it
+        is a state change, and it must never be reachable by anything that
+        follows or prefetches links."""
+        return {
+            "api_key": _primary_connect(request).reveal_api_key(
+                job_id, requested_by=_current_user(request)
+            )
+        }
 
     # -- Management API accessibility diagnose/repair (SSH) --------------------
     # Proactive follow-up to Connect to Primary above: the UI calls diagnose
@@ -1330,11 +1352,24 @@ def _register_routes(app: FastAPI) -> None:
         return {"commands": commands}
 
     @app.post("/api/environments/{env}/api-access/repair", status_code=202)
-    def repair_api_access(env: str, request: Request) -> JobRecord:
+    def repair_api_access(env: str, body: ConfirmRequest, request: Request) -> JobRecord:
         """Widens the primary's Management API accessibility off
         `require-local` over SSH (see services/api_access.py) and restarts
-        the API server for the change to take effect."""
+        the API server for the change to take effect.
+
+        Confirm-gated: the restart briefly interrupts every other Management
+        API session against that server, which the UI's own help text warns
+        about — so it should not be reachable by a bare POST."""
         _require_env(request, env)
+        if not body.confirmed:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "repairing API access requires explicit confirmation — it widens "
+                    "Management API accessibility and restarts the API server, briefly "
+                    "interrupting other sessions"
+                ),
+            )
         try:
             return _api_access(request).submit_repair(env, triggered_by=_current_user(request))
         except OrchestratorError as exc:
@@ -1653,12 +1688,25 @@ def _register_routes(app: FastAPI) -> None:
         return {"commands": commands}
 
     @app.post("/api/env/{env}/firewalls/{name}/bootstrap-credentials", status_code=202)
-    def firewall_bootstrap_credentials(env: str, name: str, request: Request) -> JobRecord:
+    def firewall_bootstrap_credentials(
+        env: str, name: str, body: ConfirmRequest, request: Request
+    ) -> JobRecord:
         """Pushes the firewall's assigned credential set onto the gateway via
         the Management API's run-script (see services/gateway_bootstrap.py) —
         the "Bootstrap Credentials" link's Run button, after the operator has
         reviewed the preview above. Rejects Spark firewalls (no automated
-        push there — see the Spark bootstrap preview route)."""
+        push there — see the Spark bootstrap preview route).
+
+        Confirm-gated: this rewrites a live gateway's local admin account
+        (uid 0, adminRole) over SIC."""
+        if not body.confirmed:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "bootstrapping credentials requires explicit confirmation — it "
+                    "rewrites this gateway's local admin account"
+                ),
+            )
         try:
             return _gateway_bootstrap(request).submit_bootstrap(
                 env, name, triggered_by=_current_user(request)

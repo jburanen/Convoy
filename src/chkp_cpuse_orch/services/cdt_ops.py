@@ -30,8 +30,14 @@ from ..credentials import CredentialBundle, JobCredentialVault
 from ..errors import CDTError, JobError, TransportError
 from ..jobs import JobCancelled, JobContext, JobRunner
 from ..packages import PackageStore
-from ..store import JobRecord
-from .common import EnvironmentRegistry, Transport, job_run_credentials, submit_host_job
+from ..store import JobRecord, Store
+from .common import (
+    EnvironmentRegistry,
+    Transport,
+    ensure_host_free,
+    job_run_credentials,
+    submit_host_job,
+)
 from .patching import ProgressReporter
 
 JOB_CDT_STAGE = "cdt.stage"
@@ -50,6 +56,7 @@ class CDTService:
         packages: PackageStore,
         runner: JobRunner,
         vault: JobCredentialVault,
+        store: Store,
         staging_dir: str = DEFAULT_STAGING_DIR,
         poll_interval: float = 15.0,
     ) -> None:
@@ -57,6 +64,11 @@ class CDTService:
         self.registry = registry
         self._packages = packages
         self._vault = vault
+        # Needed only to answer "is this host already busy?" — see
+        # ensure_host_free. CDT drives a whole fleet from one management
+        # server, so overlapping jobs there are the worst kind: a stage
+        # rewriting the shared candidates CSV under a running execute.
+        self._store = store
         self._staging_dir = staging_dir
         self._poll_interval = poll_interval
         runner.register(JOB_CDT_STAGE, self._stage_job)
@@ -112,6 +124,7 @@ class CDTService:
     ) -> JobRecord:
         connector = self.registry.get(environment)
         host = connector.mgmt_host(host_name)
+        ensure_host_free(self._store, environment, host_name)
         self._packages.path_for(package_filename)  # validates record + content
         return submit_host_job(
             self.runner,
@@ -135,6 +148,7 @@ class CDTService:
     ) -> JobRecord:
         connector = self.registry.get(environment)
         host = connector.mgmt_host(host_name)
+        ensure_host_free(self._store, environment, host_name)
         return submit_host_job(
             self.runner,
             self._vault,
@@ -157,6 +171,7 @@ class CDTService:
     ) -> JobRecord:
         connector = self.registry.get(environment)
         host = connector.mgmt_host(host_name)
+        ensure_host_free(self._store, environment, host_name)
         return submit_host_job(
             self.runner,
             self._vault,
@@ -187,6 +202,7 @@ class CDTService:
             )
         connector = self.registry.get(environment)
         host = connector.mgmt_host(host_name)
+        ensure_host_free(self._store, environment, host_name)
         return submit_host_job(
             self.runner,
             self._vault,

@@ -24,6 +24,7 @@ automatically, right after this job succeeds (see services/api_access.py).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import threading
 
 from ..credentials import CredentialBundle, CredentialStore, JobCredentialVault
@@ -35,11 +36,13 @@ from ..transport.ssh import require_ok
 from .common import EnvironmentRegistry, job_run_credentials, submit_host_job
 from .environments import EnvironmentManager
 from .provisioning import (
+    new_api_session_file,
     parse_api_key_from_add_api_key_output,
     render_add_administrator_command,
     render_add_api_key_command,
     render_mgmt_login_command,
     render_publish_logout_commands,
+    render_remove_session_file_command,
     render_show_administrator_command,
 )
 
@@ -169,13 +172,30 @@ class PrimaryConnectService:
             require_expert=True,  # mgmt_cli is bash-native
         )
 
-    def reveal_api_key(self, job_id: str) -> str | None:
-        """Pop-once read of a completed connect-primary job's captured key."""
+    def reveal_api_key(self, job_id: str, *, requested_by: str | None = None) -> str | None:
+        """Pop-once read of a completed connect-primary job's captured key.
+
+        Scoped to the operator who submitted the job. It is pop-once and
+        in-memory, but that only limits how MANY times it can be read, not by
+        whom: job ids are listed to every authenticated user by /api/jobs, so
+        without this check anyone logged in could poll for a fresh
+        connect-primary job and win the race for someone else's freshly minted
+        Management API key. ``requested_by`` is None only when auth is off, in
+        which case there is no identity to scope to and nothing to protect
+        against."""
         try:
             job = self._store.get_job(job_id)
         except StoreError:
             return None
         if job.kind != JOB_CONNECT_PRIMARY:
+            return None
+        if requested_by is not None and job.username not in (None, requested_by):
+            logger.warning(
+                "refused an api-key reveal for another operator's job",
+                job_id=job_id,
+                owner=job.username,
+                requested_by=requested_by,
+            )
             return None
         return self._reveal.pop(job_id)
 
@@ -195,16 +215,17 @@ class PrimaryConnectService:
         credential_set = ctx.job.params.get("credential_set")
 
         creds = job_run_credentials(connector, self._vault, ctx.job)
+        session_file = new_api_session_file()
         client = connector.connect(host, creds)
         try:
             ctx.log(f"connected to {host.name} ({host.address}) over SSH")
-            require_ok(client.run_bash(render_mgmt_login_command(is_mds=is_mds)))
+            require_ok(client.run_bash(render_mgmt_login_command(session_file, is_mds=is_mds)))
 
             # NOT YET CONFIRMED against live gear: whether a not-found
             # administrator makes this command exit non-zero or return a JSON
             # error body with exit 0 — either is treated as "doesn't exist
             # yet" for now (see render_show_administrator_command).
-            probe = client.run_bash(render_show_administrator_command(username))
+            probe = client.run_bash(render_show_administrator_command(username, session_file))
             if probe.ok:
                 ctx.log(
                     f"Management API administrator {username!r} already exists — "
@@ -212,17 +233,27 @@ class PrimaryConnectService:
                 )
             else:
                 require_ok(
-                    client.run_bash(render_add_administrator_command(username, is_mds=is_mds))
+                    client.run_bash(
+                        render_add_administrator_command(username, session_file, is_mds=is_mds)
+                    )
                 )
                 ctx.log(f"created Management API administrator {username!r}")
 
-            key_result = require_ok(client.run_bash(render_add_api_key_command(username)))
+            key_result = require_ok(
+                client.run_bash(render_add_api_key_command(username, session_file))
+            )
             api_key = parse_api_key_from_add_api_key_output(key_result.stdout)
 
-            for cmd in render_publish_logout_commands():
+            for cmd in render_publish_logout_commands(session_file):
                 require_ok(client.run_bash(cmd))
             ctx.log("published changes and logged out")
         finally:
+            # The session id is a live bearer credential until it is logged out
+            # AND the file is gone. The publish/logout above only runs on the
+            # success path, so anything that raised before it would otherwise
+            # leave a usable session sitting on the managed server.
+            with contextlib.suppress(Exception):
+                client.run_bash(render_remove_session_file_command(session_file))
             client.close()
 
         if credential_set is not None and self._credentials is not None:

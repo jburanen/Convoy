@@ -350,8 +350,10 @@ def ensure_host_free(store: Store, environment: str, host_name: str) -> None:
     enforcement behind that, since a stale page or a direct API call could
     otherwise still race two jobs onto the same host. Scoped to the
     environment too — host names are only unique within one, not globally.
-    Shared by every host-job-submitting service (PatchingService,
-    SparkPatchingService)."""
+    Shared by every host-job-submitting service: PatchingService,
+    SparkPatchingService, CDTService and PackageRepoService. The latter two
+    skipped it until 2026-08-26 — which mattered most for CDT, where a stage
+    can rewrite the shared candidates CSV underneath a running execute."""
     active = store.list_jobs(
         targets=[host_name],
         environments=[environment],

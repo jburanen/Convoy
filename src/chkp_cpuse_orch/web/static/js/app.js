@@ -974,7 +974,11 @@ document.getElementById("connect-primary-confirm-run").addEventListener("click",
       return;
     }
     connectPrimaryStatus("Connected — Management API access provisioned.", "ok");
-    const reveal = await api(`/api/jobs/${encodeURIComponent(job.id)}/reveal-api-key`);
+    // POST: this consumes the key (pop-once), so it is a state change, and a
+    // GET could be followed or prefetched.
+    const reveal = await api(`/api/jobs/${encodeURIComponent(job.id)}/reveal-api-key`, {
+      method: "POST",
+    });
     if (reveal.api_key) openApiKeyRevealModal(reveal.api_key, payload.credential_set);
     // Explicit collapse right at the success moment this workflow step asks
     // for — updateProvisionCollapse() itself only runs on env load/switch, by
@@ -1078,6 +1082,9 @@ document.getElementById("api-access-repair-confirm-run").addEventListener("click
   try {
     const job = await api(`/api/environments/${encodeURIComponent(currentEnv)}/api-access/repair`, {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
+      // The confirm modal above is the operator's yes; the server re-checks it.
+      body: JSON.stringify({ confirmed: true }),
     });
     lastJobStatus.set(job.id, job.status);
     await loadJobs();
@@ -2434,10 +2441,9 @@ async function bulkImport(btn, getTargets, perServer) {
   // An import job's FIRST step is the disk-space check, which needs SSH plus an
   // expert-mode escalation and so takes a noticeable moment. Send the operator
   // to the Jobs tab so that wait is visible work on a real job rather than a
-  // silent pause (operator-directed, 2026-08-26). Expanding the log only for a
-  // single target is deliberate: every open log is re-fetched on each poll, so
-  // auto-expanding a ten-host bulk run would multiply the polling cost for
-  // output nobody is reading yet.
+  // silent pause (operator-directed, 2026-08-26). The row is NOT auto-expanded
+  // (operator-directed) — switching tabs is the useful part; opening the log is
+  // the operator's call, and every open log is re-fetched on each poll.
   const submitted = [];
   try {
     for (const name of targets) {
@@ -2449,7 +2455,6 @@ async function bulkImport(btn, getTargets, perServer) {
         toast(`Import to ${name} failed to start: ${e.message}`);
       }
     }
-    if (submitted.length === 1) openJobLogs.add(submitted[0]);
     if (submitted.length) selectTab("jobs");
     await loadJobs();
   } finally {
@@ -2921,6 +2926,9 @@ document.getElementById("fw-bootstrap-creds-confirm-run").addEventListener("clic
   try {
     const job = await api(envUrl(`/firewalls/${encodeURIComponent(name)}/bootstrap-credentials`), {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
+      // The confirm modal above is the operator's yes; the server re-checks it.
+      body: JSON.stringify({ confirmed: true }),
     });
     lastJobStatus.set(job.id, job.status);
     await loadJobs();

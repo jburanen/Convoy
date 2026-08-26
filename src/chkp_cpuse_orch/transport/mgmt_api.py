@@ -48,11 +48,35 @@ _PAGE_LIMIT = 200
 
 LOG_API_CALLS_ENV = "CHKP_CPUSE_LOG_API_CALLS"
 
-# Keys whose values are redacted before a payload/response is logged — secrets
-# (password/api-key) and the session id, which is itself a bearer credential
-# for the lifetime of the login.
-_SENSITIVE_KEYS = {"password", "api-key", "apikey", "secret", "sid"}
+# Substrings marking a key whose value must be redacted before a payload or
+# response body is logged. Matched as SUBSTRINGS, not exact keys: exact matching
+# silently missed every compound name the API actually uses — "new-password",
+# "password-hash", "api_key", "session-id" — and, worst, "script". The
+# credential-bootstrap run-script payload carries the whole clish script
+# including `set user <u> password-hash $6$...`, so with exact matching, turning
+# on CHKP_CPUSE_LOG_API_CALLS wrote a crackable hash of a gateway's admin
+# password into `docker compose logs` at WARNING level.
+_SENSITIVE_KEY_PARTS = (
+    "password",
+    "passwd",
+    "api-key",
+    "apikey",
+    "api_key",
+    "secret",
+    "token",
+    "hash",
+    "script",
+    # "sid" is the API's own session-id field; "session" also catches
+    # session-id / session_id, which "sid" does not contain.
+    "sid",
+    "session",
+)
 _REDACTED = "***REDACTED***"
+
+
+def _is_sensitive_key(key: str) -> bool:
+    lowered = key.lower()
+    return any(part in lowered for part in _SENSITIVE_KEY_PARTS)
 
 
 def _log_api_calls_enabled() -> bool:
@@ -61,12 +85,10 @@ def _log_api_calls_enabled() -> bool:
 
 
 def _redact(value: Any) -> Any:
-    """Recursively replace sensitive values (see ``_SENSITIVE_KEYS``) so a
+    """Recursively replace sensitive values (see ``_SENSITIVE_KEY_PARTS``) so a
     logged payload/response body never carries a real secret."""
     if isinstance(value, dict):
-        return {
-            k: (_REDACTED if k.lower() in _SENSITIVE_KEYS else _redact(v)) for k, v in value.items()
-        }
+        return {k: (_REDACTED if _is_sensitive_key(k) else _redact(v)) for k, v in value.items()}
     if isinstance(value, list):
         return [_redact(v) for v in value]
     return value
@@ -124,7 +146,14 @@ class ManagementAPIClient:
 
     def login(self) -> None:
         if not self._verify_tls:
-            logger.debug("mgmt-api: TLS verification disabled", server=self.server.address)
+            # Warning, not debug: this is a standing security posture the
+            # operator has accepted (see .claude/memory/security-review-2026-08.md),
+            # and a posture nobody can see is one nobody can reconsider.
+            logger.warning(
+                "mgmt-api: TLS verification disabled — API key and admin password "
+                "cross the network without certificate verification",
+                server=self.server.address,
+            )
         self._client = httpx.Client(
             base_url=self._base_url,
             verify=self._verify_tls,
