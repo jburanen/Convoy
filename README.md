@@ -109,9 +109,14 @@ These gates define the major version releases - the milestones may change in the
 ### Roadmap / Punch List
 🪲 Functional bugfix ⏫ v2 Release gate 🤞 Non-blocking nice-to-have ✨ Cosmetic only  
 
+#### General Features
+
 ✨ Add logic to display a warning on mobile devices that the UI of this tool does not scale down well (by design) and you should use it on a larger display.   
 🤞 RADIUS auth option  
 🤞 Timed/scheduled install actions  
+
+#### Provisioning
+All clear here!  
 
 #### Packages
 🤞 If disk space check fails, parse for large folders, suggest things to clean  
@@ -121,6 +126,9 @@ These gates define the major version releases - the milestones may change in the
 🤞 Some kind of sledgehammer to swing to release config/job lock from management server and firewalls if a job gets stranded/stuck  
 ✨ Separate firewalls into two panels? Spark and non-Spark  
 🤞 Leverage the gateway family identifier built into Spark filenames to limit choices  
+
+#### CDT Patching
+Plan coming soon.  
 
 #### Jobs
 🤞 Add syslog output  
