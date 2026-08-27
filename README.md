@@ -78,7 +78,7 @@ docker compose up -d
 
 ### Multi-user and Best-Practice Secret Storage
 
-Store your `CONVOY_MASTER_KEY` in the `.env` file next to `docker-compose.yml` and add **`CONVOY_LDAP_*`** settings (see [.env.example](.env.example) for the full list of vars) to authenticate against your directory instead of the single built-in account. Note that every member of `CONVOY_LDAP_REQUIRED_GROUP` gets full destructive authority over every environment — there are no roles — so scope that group accordingly.
+Store your `CONVOY_MASTER_KEY` in the `.env` file next to `docker-compose.yml` instead of the compose file, and add **`CONVOY_LDAP_*`** settings (see [.env.example](.env.example) for the full list of vars) to authenticate against your directory instead of the single built-in account. Note that every member of `CONVOY_LDAP_REQUIRED_GROUP` gets full destructive authority over every environment — there are no roles — so scope that group accordingly.
 
 > **FOR DEVELOPMENT DEPLOYMENTS**  
 > To run from a checkout instead, `./scripts/deploy.sh` builds the image from source via `docker-compose.dev.yml` (bind-mounting `./data`), sets `DEPLOY_UID`/`DEPLOY_GID` for you, then pulls, rebuilds and health-checks. `./scripts/deploy.sh --reset` (dev only) wipes `./data` and `.env` first — every environment, server, firewall, credential, package, and job history entry, plus every runtime setting back to its built-in default — then deploys clean. Prompts for confirmation unless you also pass `-y`/`--yes`.
@@ -100,20 +100,7 @@ This tool has the capability to alter or negatively impact your management serve
 
 ## 🎯 Status and Milestones
 
-### Milestones to reach v1 / Initial Release
-These gates define the major version releases - the milestones may change in the future but they will remain documented here. A milestone is not marked complete until it is tested and confirmed working by a human. There will not be a packaged release until v1.
-
-✅ LDAP authentication  
-✅ Basic auth  
-✅ Native TLS support  
-✅ Test functionality behind Nginx/NPM  
-✅ Test firewall discovery in SMS/Smart Center environment  
-✅ Test firewall discovery in MDS/Multi-Domain environment  
-✅ Test Gaia/Force Gateway patching via CPUSE  
-✅ Test Spark (Gaia Embedded) firmware patching via upgrade_revert_image.sh  
-✅ Independent agentic code security review  
-✅ Re-test of functionality  
-◻️ Containerized deployment release that doesn't require git clone and --build  
+These gates define the major version releases - the milestones may change in the future but they will remain documented here. A milestone is not marked complete until it is tested and confirmed working by a human.  
 
 ### Milestones to reach v2
 
