@@ -184,10 +184,11 @@ PROVISIONING_NOTES = [
     "The user keeps Gaia's default clish shell — this tool elevates to `expert` "
     "itself, only for the specific commands that need it, and never leaves a "
     "standing bash/expert session.",
-    "Also store an expert-mode password for this box in its credential set — "
-    "it's the device's own `expert` password (`set expert-password`), not tied "
-    "to this account, and is required before any CDT, install, or file-transfer "
-    "operation can run.",
+    "The Expert password field is the box's own `expert` password "
+    "(`set expert-password`), not tied to the account these commands create. "
+    "It is required before any CDT, install, or file-transfer operation can "
+    "run, and a credential set cannot be stored without one — left blank, "
+    "these commands are still generated but the credentials are not saved.",
     "The password appears only as a salted SHA-512 hash, never in plaintext.",
 ]
 

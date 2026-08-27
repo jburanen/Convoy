@@ -875,9 +875,12 @@ button.link-btn.fw-name-link {
   gap: 0.25rem 0.6rem;
   align-items: end;
 }
-/* Bootstrap panel's grid has one fewer column — this tool always provisions
-   uid 0 (built-in adminRole accounts), so there's no UID field to make room for. */
-#provision-form .field-grid { grid-template-columns: 2fr 2fr 2fr; }
+/* Bootstrap panel: name, username, password, expert password — four equal
+   columns rather than the shared grid's trailing narrow one, since none of
+   these is a short numeric field like Connect to Primary's port. (No UID
+   field: this tool always provisions uid 0, matching the built-in adminRole
+   accounts it mirrors.) */
+#provision-form .field-grid { grid-template-columns: 2fr 2fr 2fr 2fr; }
 .field-grid label {
   font-size: 0.8rem;
   font-weight: 600;
