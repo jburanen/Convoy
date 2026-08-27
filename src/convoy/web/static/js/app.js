@@ -2939,16 +2939,17 @@ document.getElementById("fw-bootstrap-creds-confirm-modal").addEventListener("cl
   if (ev.target.id === "fw-bootstrap-creds-confirm-modal") closeBootstrapCredsConfirmModal();
 });
 
-document.getElementById("fw-bootstrap-creds-confirm-run").addEventListener("click", async () => {
-  if (!fwBootstrapCredsCtx) return;
-  const { name, handlers } = fwBootstrapCredsCtx;
-  closeBootstrapCredsConfirmModal();
+// The push itself, split out of the confirm modal's Run handler so the
+// Bootstrap-all batch can drive it too having confirmed once for the whole set.
+// Callers are responsible for having obtained the operator's confirmation
+// first — the server re-checks it per firewall regardless (app.py).
+async function pushBootstrapCredentials(name, handlers) {
   handlers.setStatus("bootstrapping credentials…");
   try {
     const job = await api(envUrl(`/firewalls/${encodeURIComponent(name)}/bootstrap-credentials`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      // The confirm modal above is the operator's yes; the server re-checks it.
+      // A confirm modal was the operator's yes; the server re-checks it.
       body: JSON.stringify({ confirmed: true }),
     });
     lastJobStatus.set(job.id, job.status);
@@ -2970,6 +2971,13 @@ document.getElementById("fw-bootstrap-creds-confirm-run").addEventListener("clic
   } catch (e) {
     handlers.setStatus("Bootstrap failed to start: " + e.message);
   }
+}
+
+document.getElementById("fw-bootstrap-creds-confirm-run").addEventListener("click", async () => {
+  if (!fwBootstrapCredsCtx) return;
+  const { name, handlers } = fwBootstrapCredsCtx;
+  closeBootstrapCredsConfirmModal();
+  await pushBootstrapCredentials(name, handlers);
 });
 
 // Spark (Gaia Embedded) equivalent of openBootstrapCredsConfirm above —
@@ -3225,7 +3233,53 @@ function updateFirewallSelectAllState() {
   const checkedCount = boxes.filter((cb) => cb.checked).length;
   selectAll.checked = boxes.length > 0 && checkedCount === boxes.length;
   selectAll.indeterminate = checkedCount > 0 && checkedCount < boxes.length;
+  updateFirewallRemoveButton();
 }
+
+// "Remove selected" only exists while there is a selection to act on. Every
+// selection change already funnels through updateFirewallSelectAllState above
+// (per-row change -> applyFirewallPackageFilter -> setFirewallRowLock), so
+// that is the single place this needs hooking into.
+function updateFirewallRemoveButton() {
+  const names = selectedFirewallNames();
+  const btn = document.getElementById("fw-remove-selected-btn");
+  btn.classList.toggle("hidden", names.length === 0);
+  btn.textContent = `Remove selected (${names.length})`;
+}
+
+// Removes the firewalls from THIS tool's inventory only — it does not touch
+// the devices themselves, uninstall anything, or alter their credentials.
+// Same per-firewall DELETE (a tracked prov.delete job) the edit modal's own
+// Remove button issues, just batched.
+document.getElementById("fw-remove-selected-btn").addEventListener("click", async () => {
+  const names = selectedFirewallNames();
+  if (!names.length || !currentEnv) return;
+  const listed = names.length <= 10
+    ? names.join(", ")
+    : `${names.slice(0, 10).join(", ")} and ${names.length - 10} more`;
+  if (!confirm(
+    `Remove ${names.length} firewall${names.length === 1 ? "" : "s"} from ${currentEnv}?\n\n` +
+    `${listed}\n\n` +
+    "This only removes them from this tool's inventory — the devices themselves " +
+    "are not changed."
+  )) return;
+  const btn = document.getElementById("fw-remove-selected-btn");
+  btn.disabled = true;
+  const failed = [];
+  for (const name of names) {
+    try {
+      const job = await api(
+        `/api/environments/${encodeURIComponent(currentEnv)}/firewalls/${encodeURIComponent(name)}`,
+        { method: "DELETE" },
+      );
+      lastJobStatus.set(job.id, job.status); // so pollJobs() catches it from any tab
+      if (job.status !== "succeeded") failed.push(`${name}: ${job.error || "unknown error"}`);
+    } catch (e) { failed.push(`${name}: ${e.message}`); }
+  }
+  btn.disabled = false;
+  if (failed.length) toast(`Removed ${names.length - failed.length}. Failed: ${failed.join("; ")}`);
+  await Promise.all([loadJobs(), loadFirewalls()]);
+});
 
 document.getElementById("fw-select-all").addEventListener("change", (ev) => {
   for (const cb of document.querySelectorAll("#firewalls-table .fw-select:not(:disabled)")) {
@@ -3696,6 +3750,7 @@ function fillDiscoverCredSelect(select, selected) {
 function resetDiscoverFirewallsResults() {
   document.getElementById("discover-firewalls-status").textContent = "";
   document.getElementById("discover-firewalls-cred-row").classList.add("hidden");
+  document.getElementById("discover-firewalls-bootstrap-all").classList.add("hidden");
   const warn = document.getElementById("discover-firewalls-warnings");
   warn.classList.add("hidden");
   warn.replaceChildren();
@@ -3892,21 +3947,32 @@ document.getElementById("discover-firewalls-import").addEventListener("click", a
       if (job.status === "succeeded") {
         ok++;
         imported.push({ name, row: r, role });
-        // Locked like an already-in-inventory row: the modal now stays open for
-        // the credential test, so nothing should let a second Import-selected
-        // click resubmit a name that already exists.
+        // Inputs lock so a second Import-selected click can't resubmit a name
+        // that now exists — but the row deliberately does NOT get .disc-existing:
+        // after an import the table shows only what was imported, and dimming
+        // every remaining row would make the whole table look inert.
         for (const f of r.querySelectorAll("input, select")) f.disabled = true;
-        r.classList.add("disc-existing");
         // Awaited so the operator can copy this row's commands before the
         // next Spark row's prompt/preview overwrites the same modal.
         if (bootstrapAfter) await openSparkBootstrapModal(name);
       } else {
-        failed.push(`${name}: ${job.error || "unknown error"}`);
+        const why = job.error || "unknown error";
+        failed.push(`${name}: ${why}`);
+        r.querySelector(".disc-note-text").textContent = "import failed: " + why;
       }
-    } catch (e) { failed.push(`${name}: ${e.message}`); }
+    } catch (e) {
+      failed.push(`${name}: ${e.message}`);
+      r.querySelector(".disc-note-text").textContent = "import failed: " + e.message;
+    }
   }
   await Promise.all([loadJobs(), loadFirewalls()]);
   if (failed.length) toast(`Imported ${ok}. Failed: ${failed.join("; ")}`);
+  // The table now represents the import, not the scan: drop every row that
+  // wasn't picked (unselected, or already in inventory) so what's left is
+  // exactly the firewalls chosen — nothing greyed out, nothing to re-read.
+  for (const r of document.querySelectorAll("#discover-firewalls-table tbody tr")) {
+    if (!picks.includes(r)) r.remove();
+  }
   // The modal deliberately no longer closes itself on success: the credential
   // test below reports per row, and a row that fails on authentication grows
   // its own Bootstrap button. The operator closes it when done.
@@ -3933,6 +3999,23 @@ async function testImportedFirewallCredentials(imported) {
     (passed === n
       ? ". Close when you're done."
       : ` — use Bootstrap credentials on the ${n - passed} that failed.`);
+  updateBootstrapAllButton();
+}
+
+// Rows still offering a Bootstrap button, i.e. those whose credential test
+// failed on authentication. Drives both the Bootstrap-all button's visibility
+// and what that button acts on.
+function rowsNeedingBootstrap() {
+  return [...document.querySelectorAll("#discover-firewalls-table tbody tr")].filter(
+    (r) => !r.querySelector(".disc-bootstrap").classList.contains("hidden"),
+  );
+}
+
+function updateBootstrapAllButton() {
+  const rows = rowsNeedingBootstrap();
+  const btn = document.getElementById("discover-firewalls-bootstrap-all");
+  btn.classList.toggle("hidden", rows.length < 2); // one row: use its own button
+  btn.textContent = `Bootstrap all (${rows.length})`;
 }
 
 // One row's credential test; returns true when the firewall authenticated.
@@ -3955,6 +4038,7 @@ async function runDiscoverCredentialTest(name, role, row) {
     });
     note.textContent = state.version ? `credentials OK — ${state.version}` : "credentials OK";
     row.classList.remove("disc-review");
+    updateBootstrapAllButton();
     return true;
   } catch (e) {
     cacheEvictCreds(name); // a cached wrong/stale password re-prompts next time
@@ -3965,6 +4049,7 @@ async function runDiscoverCredentialTest(name, role, row) {
       btn.classList.remove("hidden");
       btn.onclick = () => startDiscoverBootstrap(name, role, row);
     }
+    updateBootstrapAllButton();
     return false;
   }
 }
@@ -3979,11 +4064,78 @@ async function startDiscoverBootstrap(name, role, row) {
     await runDiscoverCredentialTest(name, role, row);
     return;
   }
-  openBootstrapCredsConfirm(name, {
+  openBootstrapCredsConfirm(name, discoverBootstrapHandlers(name, role, row));
+}
+
+// Where a discovery row reports progress and how it re-verifies itself —
+// shared by the single-row confirm and the Bootstrap-all batch.
+function discoverBootstrapHandlers(name, role, row) {
+  return {
     setStatus: (text) => { row.querySelector(".disc-note-text").textContent = text; },
     verify: () => runDiscoverCredentialTest(name, role, row),
-  });
+  };
 }
+
+function closeBootstrapAllModal() {
+  document.getElementById("disc-bootstrap-all-modal").classList.add("hidden");
+}
+document.getElementById("disc-bootstrap-all-close").addEventListener("click", closeBootstrapAllModal);
+document.getElementById("disc-bootstrap-all-cancel").addEventListener("click", closeBootstrapAllModal);
+document.getElementById("disc-bootstrap-all-modal").addEventListener("click", (ev) => {
+  if (ev.target.id === "disc-bootstrap-all-modal") closeBootstrapAllModal();
+});
+
+// One confirmation for the whole set, then a push per firewall. Spark can't be
+// pushed to at all, so it's called out here and handled after the rest by
+// showing its commands to paste (services/gateway_bootstrap.py).
+document.getElementById("discover-firewalls-bootstrap-all").addEventListener("click", () => {
+  const rows = rowsNeedingBootstrap();
+  if (!rows.length) return;
+  const list = document.getElementById("disc-bootstrap-all-list");
+  list.replaceChildren();
+  for (const r of rows) {
+    const li = document.createElement("li");
+    const isSpark = r.querySelector(".disc-role").value === "spark_firewall";
+    li.textContent =
+      r.querySelector(".disc-name").value.trim() + (isSpark ? " (Spark — manual)" : "");
+    list.appendChild(li);
+  }
+  const sparkCount = rows.filter(
+    (r) => r.querySelector(".disc-role").value === "spark_firewall",
+  ).length;
+  const sparkNote = document.getElementById("disc-bootstrap-all-spark");
+  sparkNote.classList.toggle("hidden", sparkCount === 0);
+  sparkNote.textContent = sparkCount
+    ? `${sparkCount} Spark firewall${sparkCount === 1 ? "" : "s"} cannot be pushed to ` +
+      "automatically — their commands will be shown for you to paste, one at a time, " +
+      "after the others finish."
+    : "";
+  document.getElementById("disc-bootstrap-all-modal").classList.remove("hidden");
+});
+
+document.getElementById("disc-bootstrap-all-run").addEventListener("click", async () => {
+  closeBootstrapAllModal();
+  const runBtn = document.getElementById("discover-firewalls-bootstrap-all");
+  runBtn.disabled = true;
+  // Snapshot up front: each push re-tests its row, which mutates the set
+  // rowsNeedingBootstrap() would return mid-loop.
+  const rows = rowsNeedingBootstrap().map((row) => ({
+    row,
+    name: row.querySelector(".disc-name").value.trim(),
+    role: row.querySelector(".disc-role").value,
+  }));
+  // Pushable ones first, so the operator isn't interrupted by paste-these
+  // modals while the automated ones are still running.
+  for (const { row, name, role } of rows.filter((r) => r.role !== "spark_firewall")) {
+    await pushBootstrapCredentials(name, discoverBootstrapHandlers(name, role, row));
+  }
+  for (const { row, name, role } of rows.filter((r) => r.role === "spark_firewall")) {
+    await openSparkBootstrapModal(name);
+    await runDiscoverCredentialTest(name, role, row);
+  }
+  runBtn.disabled = false;
+  updateBootstrapAllButton();
+});
 
 document.getElementById("discover-firewalls-btn").addEventListener("click", openDiscoverFirewallsModal);
 document.getElementById("discover-firewalls-close").addEventListener("click", closeDiscoverFirewallsModal);

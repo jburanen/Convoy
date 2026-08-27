@@ -336,6 +336,9 @@
       <details id="firewalls-details" class="collapsible-panel" open>
         <summary><h2>Firewalls</h2></summary>
         <div class="section-head-actions">
+          <!-- Shown only while at least one firewall is ticked in the table
+               below (app.js's updateFirewallRemoveButton). -->
+          <button type="button" id="fw-remove-selected-btn" class="small danger hidden">Remove selected</button>
           <button type="button" id="add-firewall-btn" class="small">Manually add a firewall</button>
           <button type="button" id="discover-firewalls-btn" class="small">Discover firewalls</button>
           <button type="button" id="fw-refresh-all-btn" class="small">Refresh all</button>
@@ -1081,7 +1084,39 @@
     </table>
     <div class="cred-modal-actions">
       <button type="button" id="discover-firewalls-import" disabled>Import selected</button>
+      <!-- Shown only once the post-import credential test has left at least one
+           row offering its own Bootstrap button (app.js). -->
+      <button type="button" id="discover-firewalls-bootstrap-all" class="hidden">Bootstrap all</button>
       <button type="button" id="discover-firewalls-cancel" class="secondary">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ====== Bootstrap-all confirmation (Discover firewalls modal) ============ -->
+<!-- One confirmation covering every firewall whose post-import credential test
+     failed on authentication, instead of stepping through each row's own
+     confirm. The server still re-checks confirmation per firewall (app.py's
+     ConfirmRequest) — this sends it for each, having asked once here. Spark
+     firewalls cannot be pushed to at all (services/gateway_bootstrap.py), so
+     they are listed separately and their commands are shown to paste after the
+     pushable ones finish. -->
+<div id="disc-bootstrap-all-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="disc-bootstrap-all-title">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2 id="disc-bootstrap-all-title">Bootstrap credentials</h2>
+      <button id="disc-bootstrap-all-close" class="small" title="Close">&#10005;</button>
+    </div>
+    <p class="hint">
+      Pushes each firewall's assigned credential set onto the device itself via the
+      Management API. This rewrites the local admin account on every gateway listed —
+      the same action as each row's own Bootstrap credentials button, run once per
+      firewall.
+    </p>
+    <ul id="disc-bootstrap-all-list" class="disc-bootstrap-all-list"></ul>
+    <p class="hint warn hidden" id="disc-bootstrap-all-spark"></p>
+    <div class="cred-modal-actions">
+      <button type="button" id="disc-bootstrap-all-run" class="danger">Bootstrap all</button>
+      <button type="button" id="disc-bootstrap-all-cancel" class="secondary">Cancel</button>
     </div>
   </div>
 </div>
