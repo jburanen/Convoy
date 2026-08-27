@@ -53,17 +53,7 @@ GA releases (beginning v1.0.0) will be a simple docker-compose.yml deployment mo
 > ** FOR DEVELOPMENT DEPLOYMENTS**  
 > Run `./scripts/deploy.sh`, which sets `DEPLOY_UID`/`DEPLOY_GID` for you (and pulls, rebuilds, and health-checks). `./scripts/deploy.sh --reset` (dev only) wipes `./data` and `.env` first — every environment, server, firewall, credential, package, and job history entry, plus every runtime setting back to its built-in default — then deploys clean. Prompts for confirmation unless you also pass `-y`/`--yes`.
 
-> **Upgrading an install that predates the rename?** This project was called
-> `chkp-cpuse-orch`. Nothing is required of you: the `CHKP_CPUSE_*` environment
-> variables still work (each logs a warning naming its `CONVOY_*` replacement, and
-> an explicit `CONVOY_*` value wins), and the credential store, database and
-> package volume are untouched. Two visible effects: the container is now named
-> `convoy` rather than `chkp-cpuse-orch`, and everyone is signed out once because
-> the session cookie was renamed.
-
-First run seeds environments from `config.yaml` (+ any inventory files) into the
-database; after that the database is authoritative and environments are managed in
-the UI. On an empty inventory the UI opens on the **Provisioning** tab.
+First run seeds environments from `config.yaml` (+ any inventory files) into the database; after that the database is authoritative and environments are managed in the UI. On an empty inventory the UI opens on the **Provisioning** tab.  
 
 ## 🛡️ Safety model
 
@@ -82,15 +72,10 @@ This tool has the capability to alter or negatively impact your management serve
 
 ## 🎯 Status and Milestones
 
-**Working, pre-production.** The web UI, service core, SSH transport, CPUSE and CDT
-wrappers, credential/package stores, environments, and the background job runner are
-implemented and unit-tested. Caveats:
+**Working, pre-production.** The web UI, service core, SSH transport, CPUSE and CDT wrappers, credential/package stores, environments, and the background job runner are implemented and unit-tested. Caveats:  
 
-- CPUSE/CDT output parsers are built tolerant but **not yet validated against live
-  Gaia hardware** — expect to tune them on first real connection.
-- The secondary **CLI** does inventory validation and dry-run planning; its
-  fleet-`--execute` path and the health-check gating (`checks.py`) are still typed
-  stubs.
+- CPUSE/CDT output parsers are built tolerant but **not yet validated against live Gaia hardware** — expect to tune them on first real connection.  
+- The secondary **CLI** does inventory validation and dry-run planning; its fleet-`--execute` path and the health-check gating (`checks.py`) are still typed stubs.  
 
 ### Milestones to reach v1 / Initial Release
 These gates define the major version releases - the milestones may change in the future but they will remain documented here. A milestone is not marked complete until it is tested and confirmed working by a human. There will not be a packaged release until v1.
@@ -118,13 +103,10 @@ These gates define the major version releases - the milestones may change in the
 ✨ Add logic to display a warning on mobile devices that the UI of this tool does not scale down well (by design) and you should use it on a larger display.   
 🤞 RADIUS auth option  
 🤞 Timed/scheduled install actions  
-⏫ Improve the initial management naming modal to include all the checkboxes from the manage environments modal  
 
 #### Provisioning
 ✨ Handle S1C API endpoint URL  
-🤞 API creds should not be required for 
 ✨ Separate bootstrapping flow for API-only scenarios  
-✨ Are there any character limitations for passwords?
 
 #### Packages
 🤞 Add a percentage progress display for package upload  
@@ -143,9 +125,8 @@ These gates define the major version releases - the milestones may change in the
 ✨ Affirm in a push_to_repo job output that the temp storage was cleaned up  
 ✨ On jobs with error output, never let the error output spill outside the table boundary - direct the user to view details in the output box or something like that  
 
-Shipped fixes have moved to [CHANGELOG.md](CHANGELOG.md) — an item closed here
-moves into that file in the same commit as the fix and its version bump.
+Shipped fixes are documented in [CHANGELOG.md](CHANGELOG.md) — an item closed here moves into that file under the version that resolves it.  
 
 > Not affiliated with or endorsed by Check Point Software Technologies. "Check Point", "CDT", and "CPUSE" refer to their products. Use only on infrastructure you are authorized to maintain.  
 >  
-> Written by Claude under the direction of humans. Deploy, <u>test</u>, and use this tool with appropriate caution. No guarantees or assurance of safety is made by the developers. Even with a whole bunch of robots doing the work, we still manage to introduce human error. 🤖
+> Written by Claude under the direction of humans. Deploy, <u>test</u>, and use this tool with appropriate caution. No guarantees or assurance of safety is made by the developers. Even with a whole bunch of robots doing the work, we still manage to introduce human error. 🤖  

@@ -505,36 +505,6 @@
   </div>
 </div>
 
-<!-- ============ First-run welcome modal ===================================== -->
-<!-- Shown on a brand-new deployment: exactly one environment ("default")
-     with no servers, credentials, or packages yet. Offers renaming the default
-     environment before any data is attached to its name. Only an explicit
-     choice (Rename / Keep) is remembered per browser (localStorage); closing
-     via ✕/backdrop/Escape shows it again on the next load. -->
-<div id="welcome-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
-  <div class="modal-card narrow">
-    <div class="modal-head">
-      <h2 id="welcome-title">New deployment</h2>
-      <button id="welcome-close" class="small" title="Close">✕</button>
-    </div>
-    <p class="hint">
-      This looks like a new deployment, would you like to rename the default environment? 
-    </p>
-    <form id="welcome-form">
-      <input type="text" id="welcome-name" placeholder="new name (e.g. Corp HQ)">
-      <button type="submit">Rename</button>
-      <button type="button" id="welcome-keep" class="secondary">Keep “default”</button>
-    </form>
-    <p class="hint"> 
-      Environments are analogous to your Check Point management systems. Each related 
-      group of management servers should have an environment defined here. That means any 
-      primary management server and related SmartEvent and backup/HA servers. If you are 
-      connecting to Multi-Domain, you should create one environment for the whole MDS 
-      system, not one per domain.
-    </p>
-  </div>
-</div>
-
 <!-- ============ Manage Environments modal (opened from the picker) ========== -->
 <!-- Create + rename only: a rename moves the environment's servers, credentials,
      and job history to the new name atomically. Server add/remove, deletion, and
@@ -563,10 +533,17 @@
       Environments are independent management estates — each has its own inventory
       of management servers and its own credentials. Edit a name and click
       <strong>Rename</strong>: servers, credentials, and job history move with it.
-      Servers and deletion are managed on the <strong>Provisioning</strong> tab. An
-      environment is always entirely an SMS estate or entirely a Multi-Domain
-      (MDS) one — never a mix — so discovery and other commands know which
-      variant to use.
+      Servers and deletion are managed on the <strong>Provisioning</strong> tab.
+      An environment is entirely one <strong>type</strong> — never a mix — so
+      discovery and every other command knows which variant to run.
+    </p>
+    <p class="hint hidden" id="env-first-run-hint">
+      This looks like a new deployment. Environments are analogous to your Check
+      Point management systems: each related group of management servers should
+      have one environment here — a primary management server together with its
+      SmartEvent and backup/HA servers. For Multi-Domain, create <em>one</em>
+      environment for the whole MDS system, not one per domain. Rename
+      “default” below and set its type before attaching anything to it.
     </p>
     <ul id="env-manage-list"><!-- tpl-env-manage-row instances --></ul>
     <form id="env-add-form">
@@ -1464,25 +1441,15 @@
   <li class="env-manage-row">
     <div class="env-manage-name">
       <input type="text" class="env-rename-input">
+      <select class="env-type-select" title="What kind of management estate this environment is">
+        <option value="sms">SmartCenter (SMS)</option>
+        <option value="mds">Multi-Domain (MDS)</option>
+        <option value="s1c">Smart-1 Cloud</option>
+      </select>
       <button class="env-rename-btn small">Rename</button>
       <button class="env-delete-btn small danger" title="Delete this environment — removes its servers and stored credentials">Delete</button>
     </div>
-    <label class="env-storage-toggle">
-      <input type="checkbox" class="env-mds-input">
-      Multi-Domain (MDS) environment
-    </label>
-    <label class="env-storage-toggle">
-      <input type="checkbox" class="env-api-only-input">
-      <span class="env-storage-main">
-        API-only (ie: Smart-1 Cloud)
-        <span class="hint">
-          No SSH/SCP to the management server(s) at all — only an operator-
-          supplied Management API key. Hides Bootstrap, Connect to Primary,
-          CPUSE patching of management servers, and Upload to Mgmt; firewall
-          patching is unaffected.
-        </span>
-      </span>
-    </label>
+    <p class="hint env-type-note"></p>
     <label class="env-storage-toggle">
       <input type="checkbox" class="env-storage-input">
       <span class="env-storage-main">

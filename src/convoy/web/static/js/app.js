@@ -553,17 +553,22 @@ document.getElementById("env-picker").addEventListener("change", async (ev) => {
   await selectEnvironment(ev.target.value);
 });
 
-/* ---------- 1a-welcome. first-run dialog ---------- */
+/* ---------- 1a-welcome. first run ---------- */
 
 // On a brand-new deployment — exactly one environment named "default" with no
-// servers, and no credentials or packages anywhere — offer renaming the default
-// environment before any data gets attached to its name (uses the real rename
-// endpoint, same as the Manage Environments modal).
+// servers, and no credentials or packages anywhere — open the Manage
+// Environments modal with an extra first-run note.
 //
-// Only an EXPLICIT choice (Rename / Keep "default") is remembered in
-// localStorage; closing via ✕, backdrop, or Escape merely hides the dialog for
-// this page load, so an accidental click can't suppress it forever.
-const WELCOME_KEY = "welcomeChoiceMade"; // new key: old accidental "welcomeDismissed" flags are ignored
+// This used to be its own dialog offering only a rename, which meant the very
+// first thing an operator configured was the one environment setting presented
+// out of context, with type and credential storage discovered later. Same modal
+// now (operator-directed 2026-08-27), so every option for the environment is in
+// front of them while they are naming it.
+//
+// Remembered per browser only once the operator closes the modal — they have
+// seen the options by then. It is always reachable again from the picker.
+const WELCOME_KEY = "welcomeChoiceMade"; // old accidental "welcomeDismissed" flags are ignored
+let envModalIsFirstRun = false;
 
 async function maybeShowWelcome(envs) {
   if (localStorage.getItem(WELCOME_KEY)) return;
@@ -572,52 +577,57 @@ async function maybeShowWelcome(envs) {
     if ((await api("/api/packages")).length) return;
     if ((await api("/api/env/default/credentials")).length) return;
   } catch { /* locked credential store — still clearly a fresh deployment */ }
-  document.getElementById("welcome-modal").classList.remove("hidden");
-  document.getElementById("welcome-name").focus();
+  envModalIsFirstRun = true;
+  await openEnvModal();
 }
-
-function hideWelcome() {
-  // Soft close: shows again on the next load while the deployment stays fresh.
-  document.getElementById("welcome-modal").classList.add("hidden");
-}
-
-function dismissWelcome() {
-  // Explicit choice made: never prompt this browser again.
-  localStorage.setItem(WELCOME_KEY, "1");
-  hideWelcome();
-}
-
-document.getElementById("welcome-form").addEventListener("submit", async (ev) => {
-  ev.preventDefault();
-  const name = document.getElementById("welcome-name").value.trim();
-  if (!name || name === "default") { dismissWelcome(); return; }
-  try {
-    const renamed = await api("/api/environments/default/rename", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
-    });
-    dismissWelcome();
-    await loadEnvironments();
-    await selectEnvironment(renamed.name);
-  } catch (e) { toast("Rename failed: " + e.message); }
-});
-document.getElementById("welcome-keep").addEventListener("click", dismissWelcome);
-document.getElementById("welcome-close").addEventListener("click", hideWelcome);
-onBackdropClick("welcome-modal", () => hideWelcome()); // backdrop click
 
 /* ---------- 1a-modal. manage environments (create + rename) ---------- */
+
+// The three estate types, as the flags the API stores. is_mds decides which
+// command variants run (discovery, and anything else SMS-vs-MDS specific);
+// api_only decides whether SSH to management-plane hosts is allowed at all.
+// Smart-1 Cloud is the API-only one: Check Point runs the management server,
+// so there is no SSH service account on it to reach.
+const ENV_TYPE_FLAGS = {
+  sms: { is_mds: false, api_only: false },
+  mds: { is_mds: true, api_only: false },
+  s1c: { is_mds: false, api_only: true },
+};
+const ENV_TYPE_NOTES = {
+  sms: "A single Security Management Server estate, reached over SSH and the Management API.",
+  mds: "One environment for the whole Multi-Domain system — not one per domain. Discovery and " +
+    "other commands use their MDS variants against every server in it.",
+  s1c: "No SSH or SCP to the management server at all — only an operator-supplied Management " +
+    "API key. Hides Bootstrap, Connect to Primary, CPUSE patching of management servers and " +
+    "Upload to Mgmt. Firewall patching is unaffected: those are still reached over SSH.",
+};
+
 
 // The modal creates and renames environments; servers and deletion are managed
 // on the Provisioning tab (section 1a-prov below), scoped to the picker's
 // selection. A rename moves servers, credentials, and job history atomically.
 
-function openEnvModal() {
+async function openEnvModal() {
+  document.getElementById("env-first-run-hint").classList.toggle("hidden", !envModalIsFirstRun);
   document.getElementById("env-modal").classList.remove("hidden");
-  renderEnvManageList();
+  await renderEnvManageList();
 }
 function closeEnvModal() {
+  // Soft close: the first-run note returns on the next load while the
+  // deployment is still untouched. Carried over from the dialog this replaced —
+  // only an explicit choice was ever remembered there, so a stray Escape or
+  // backdrop click can't suppress the guidance permanently.
   document.getElementById("env-modal").classList.add("hidden");
+}
+
+// ...and an explicit choice is configuring the environment: renaming it or
+// setting its type. Either means the operator engaged with the options rather
+// than dismissing them, so the note is not shown again on this browser.
+function noteFirstRunChoice() {
+  if (!envModalIsFirstRun) return;
+  localStorage.setItem(WELCOME_KEY, "1");
+  envModalIsFirstRun = false;
+  document.getElementById("env-first-run-hint").classList.add("hidden");
 }
 
 async function renderEnvManageList() {
@@ -638,6 +648,7 @@ async function renderEnvManageList() {
           body: JSON.stringify({ name: newName }),
         });
         cacheClearCreds(); // env name changed — cached keys are now stale
+        noteFirstRunChoice();
         const wasCurrent = currentEnv === env.name;
         await loadEnvironments();
         if (wasCurrent) await selectEnvironment(resp.name); // refresh env-scoped views
@@ -670,41 +681,30 @@ async function renderEnvManageList() {
       } catch (e) { toast("Delete failed: " + e.message); }
     });
 
-    // MDS-kind toggle. An environment is always entirely SMS or entirely
-    // Multi-Domain — this decides which command variants (discovery, etc.) run
-    // against every server in it, instead of guessing per-request.
-    const mdsToggle = row.querySelector(".env-mds-input");
-    mdsToggle.checked = env.is_mds;
-    mdsToggle.addEventListener("change", async () => {
-      const isMds = mdsToggle.checked;
+    // Environment type. One picker over what used to be two independent
+    // checkboxes (MDS, API-only), because they were never really independent:
+    // the three combinations an operator actually deploys are SMS, MDS and
+    // Smart-1 Cloud, and a checkbox pair also offers "MDS + API-only", which
+    // nothing here is built to drive. Applied through /type so both flags move
+    // together — two sequential calls could leave an environment in exactly the
+    // combination the picker exists to prevent.
+    const typeSelect = row.querySelector(".env-type-select");
+    const typeNote = row.querySelector(".env-type-note");
+    // api_only wins on read: it is what actually changes behaviour, so a legacy
+    // row carrying both flags reads as Smart-1 Cloud and is normalized to that
+    // pair the next time the picker is touched.
+    const currentType = env.api_only ? "s1c" : env.is_mds ? "mds" : "sms";
+    typeSelect.value = currentType;
+    typeNote.textContent = ENV_TYPE_NOTES[currentType];
+    typeSelect.addEventListener("change", async () => {
+      const chosen = typeSelect.value;
       try {
-        await api(`/api/environments/${encodeURIComponent(env.name)}/kind`, {
+        await api(`/api/environments/${encodeURIComponent(env.name)}/type`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ is_mds: isMds }),
+          body: JSON.stringify(ENV_TYPE_FLAGS[chosen]),
         });
-        await loadEnvironments();
-        await renderEnvManageList();
-      } catch (e) {
-        mdsToggle.checked = !isMds; // revert on failure
-        toast("Could not change environment kind: " + e.message);
-      }
-    });
-
-    // API-only toggle. When set, this environment's management server(s)
-    // have no SSH service account at all — only reachable via the
-    // Management API with an operator-supplied key. Orthogonal to the MDS
-    // toggle above.
-    const apiOnlyToggle = row.querySelector(".env-api-only-input");
-    apiOnlyToggle.checked = env.api_only;
-    apiOnlyToggle.addEventListener("change", async () => {
-      const isApiOnly = apiOnlyToggle.checked;
-      try {
-        await api(`/api/environments/${encodeURIComponent(env.name)}/access`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ api_only: isApiOnly }),
-        });
+        noteFirstRunChoice();
         await loadEnvironments();
         if (env.name === currentEnv) {
           updateProvisionCollapse();
@@ -712,8 +712,8 @@ async function renderEnvManageList() {
         }
         await renderEnvManageList();
       } catch (e) {
-        apiOnlyToggle.checked = !isApiOnly; // revert on failure
-        toast("Could not change environment access mode: " + e.message);
+        typeSelect.value = currentType; // revert on failure
+        toast("Could not change environment type: " + e.message);
       }
     });
 
@@ -796,7 +796,6 @@ document.addEventListener("keydown", (ev) => {
   closeServerModal();
   closeUninstallModal();
   closeSparkMajorVersionModal(false);
-  hideWelcome(); // soft close — the welcome dialog returns next load if still fresh
 });
 
 document.getElementById("env-add-form").addEventListener("submit", async (ev) => {
