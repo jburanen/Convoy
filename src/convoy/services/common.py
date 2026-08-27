@@ -23,6 +23,7 @@ from ..credentials import (
 from ..errors import CredentialError, InventoryError, JobError, TransportError
 from ..inventory import FIREWALL_ROLES, MANAGEMENT_PLANE_ROLES, Host, Inventory, Role
 from ..jobs import JobContext, JobRunner
+from ..reporting import get_logger
 from ..store import JobRecord, JobStatus, Store, new_id
 from ..transport.ssh import CommandResult, GaiaSession, GaiaShell
 
@@ -61,6 +62,9 @@ class Transport(Protocol):
     def close(self) -> None: ...
 
 
+logger = get_logger(__name__)
+
+
 ClientFactory = Callable[[Host, dict[CredentialKind, Credential]], Transport]
 
 
@@ -76,9 +80,21 @@ def default_client_factory(host: Host, creds: dict[CredentialKind, Credential]) 
     # this used to always use host.ssh_user, which could silently diverge
     # from whichever credential set was actually assigned.
     cred = password or key
+    resolved = cred.username if cred and cred.username else None
+    # Logged on every connection because the fallback is invisible from the
+    # outside: a set with no ssh_username authenticates as whatever stale value
+    # sits in Host.ssh_user, and the only evidence is a rejected login in the
+    # DEVICE's auth log naming an account the operator never chose. One line
+    # here turns "why is it trying admin?" into a lookup.
+    logger.info(
+        "ssh username resolved",
+        host=host.name,
+        username=resolved or host.ssh_user,
+        source="credential set" if resolved else "host.ssh_user (credential set has none)",
+    )
     return GaiaSession(
         host,
-        username=cred.username if cred and cred.username else None,
+        username=resolved,
         password=password.reveal() if password else None,
         private_key=key.reveal() if key else None,
         expert_password=expert.reveal() if expert else None,

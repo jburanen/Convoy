@@ -9,6 +9,10 @@ Known issues and planned work live under Roadmap / Punch List in
 [README.md](README.md); a fix that closes an item there moves it into this file
 in the same commit as the fix and the version bump.
 
+## v0.79.6
+
+Says which account it is logging in as. A credential set with no `ssh_username` authenticates as whatever stale value sits in the host's own `Host.ssh_user`, and the only evidence was a rejected login in the *device's* auth log naming an account the operator never chose - real report 2026-08-27, an SG1800 refusing `admin` while its assigned set named a different user. v0.79.3 made a username mandatory on new saves, but rows predating that rule still carry none, and nothing in the tool ever said which name it had resolved. `spark.testcred` now logs `connecting over SSH to <host> as '<user>' (credential set)` before connecting, or a warning naming the fallback and where it came from when the set is silent; every connection also logs the resolved username and its source to the server log, so this is answerable for any job. The resolution itself is unchanged and was verified end-to-end against the real factory: the credential set wins whenever it names anyone
+
 ## v0.79.5
 
 `scripts/deploy.sh` now seeds `data/config.yaml` from `examples/config.example.yaml` when it is missing. `Config.load()` treats a missing `/data/config.yaml` as fatal, so a first deploy from a fresh checkout built and started a container that then died on boot - surfacing as an unexplained health-check timeout rather than as "you have no config". The seed only ever creates what is absent; an existing config.yaml is operator-edited state and is never overwritten, which is what makes it safe on every deploy. The `--reset` branch's own copy of that step is gone: it ran *before* `git pull`, so a reset restored the example as it stood before the pull, and reset deletes config.yaml anyway - so the seed picks it up like any other first deploy. One code path instead of two

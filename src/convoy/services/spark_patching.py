@@ -71,7 +71,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol, cast
 
-from ..credentials import CredentialBundle, JobCredentialVault
+from ..credentials import CredentialBundle, CredentialKind, JobCredentialVault
 from ..errors import (
     ExpertModeError,
     JobError,
@@ -515,7 +515,25 @@ class SparkPatchingService:
         bundle = self._resolve_bundle(connector, host, ctx)
         expert_password = require_expert_password(bundle, host)  # no SSH before this
 
-        ctx.log(f"connecting over SSH to {host.name}")
+        ssh_cred = bundle.get(CredentialKind.SSH_PASSWORD) or bundle.get(
+            CredentialKind.SSH_PRIVATE_KEY
+        )
+        set_username = ssh_cred.username if ssh_cred else None
+        if set_username:
+            ctx.log(f"connecting over SSH to {host.name} as {set_username!r} (credential set)")
+        else:
+            # The credential set names no account, so the login falls back to
+            # the host's own SSH user -- a field the UI hides once credential
+            # storage is enabled, so it holds whatever was last written there.
+            # Naming it here is the difference between this and a bare
+            # "authentication failure" the operator has to go read the device's
+            # own auth log to explain.
+            ctx.log(
+                f"the credential set assigned to {host.name} has no SSH username — "
+                f"falling back to this firewall's stored SSH user {host.ssh_user!r}. "
+                "Set a username on the credential set; that is what should log in.",
+                level="warning",
+            )
         client = self._connect(connector, host, bundle)
         try:
             ctx.log("SSH login succeeded")
