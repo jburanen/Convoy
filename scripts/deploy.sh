@@ -3,12 +3,16 @@
 # Run this ON the host from inside the checkout:  ./scripts/deploy.sh
 # (Claude invokes it over SSH so no manual git pull is needed.)
 #
-# --reset (dev only): full wipe before deploying — everything the app persists
-# (`./data`, i.e. config.yaml, the DB [environments, servers, firewalls,
-# credentials, sessions, jobs/job history], and uploaded package files) plus
-# `.env` (so every runtime setting, including a changed basic-auth password
-# or LDAP config, reverts to its built-in default). Irreversible: prompts for
-# confirmation unless -y/--yes is also given.
+# --reset (dev only): wipe the app's own state before deploying — ./data's
+# config.yaml, the DB (environments, servers, firewalls, credentials,
+# sessions, jobs/job history) and uploaded packages. ./data/certs and .env are
+# deliberately KEPT: a TLS private key and the master key/LDAP settings are
+# host infrastructure rather than application data, and a redeploy that
+# silently destroyed them would leave the app reachable only over plain HTTP
+# with no way for the deploying account to put the certificate back.
+# --reset-all (dev only): the above PLUS ./data/certs and .env — a genuine
+# back-to-built-in-defaults wipe (no TLS, no LDAP, basic auth admin/admin).
+# Both are irreversible and prompt for confirmation unless -y/--yes is given.
 set -euo pipefail
 
 # Refuse to run as root. DEPLOY_UID below is taken from `id -u` and becomes the
@@ -26,22 +30,34 @@ fi
 cd "$(dirname "$0")/.."
 
 RESET=0
+RESET_ALL=0
 CONFIRMED=0
 for arg in "$@"; do
   case "$arg" in
     --reset|-reset) RESET=1 ;;
+    --reset-all|-reset-all) RESET=1; RESET_ALL=1 ;;
     -y|--yes) CONFIRMED=1 ;;
     *)
-      echo "usage: $0 [--reset [-y|--yes]]" >&2
+      echo "usage: $0 [--reset | --reset-all] [-y|--yes]" >&2
       exit 1
       ;;
   esac
 done
 
 if [ "$RESET" = "1" ]; then
-  echo "!! --reset: this PERMANENTLY deletes ./data (config, database — every"
-  echo "!! environment/server/firewall/credential/job/session) and .env (every"
-  echo "!! runtime setting, back to built-in defaults). Dev use only."
+  if [ "$RESET_ALL" = "1" ]; then
+    echo "!! --reset-all: this PERMANENTLY deletes ./data IN FULL (config, database"
+    echo "!! — every environment/server/firewall/credential/job/session — uploaded"
+    echo "!! packages, AND ./data/certs, i.e. any TLS certificate and private key"
+    echo "!! kept there) plus .env (master key, LDAP, TLS paths — every runtime"
+    echo "!! setting, back to built-in defaults). Dev use only."
+  else
+    echo "!! --reset: this PERMANENTLY deletes the application's state in ./data —"
+    echo "!! config.yaml, the database (every environment/server/firewall/credential/"
+    echo "!! job/session) and uploaded packages. ./data/certs and .env are KEPT, so"
+    echo "!! TLS, the master key and LDAP settings survive — use --reset-all to wipe"
+    echo "!! those too. Dev use only."
+  fi
   if [ "$CONFIRMED" != "1" ]; then
     read -r -p "Type RESET to confirm: " reply
     if [ "$reply" != "RESET" ]; then
@@ -50,12 +66,37 @@ if [ "$RESET" = "1" ]; then
     fi
   fi
 
+  # Pre-flight, BEFORE the stack is stopped. A directory under ./data this
+  # account cannot write is one whose contents it cannot delete, and under
+  # `set -e` that aborts the wipe half-done: stack down, data partly gone,
+  # nothing redeployed. Only --reset-all can hit this, since --reset never
+  # descends into the one directory (certs) that is typically owned by
+  # someone else.
+  if [ "$RESET_ALL" = "1" ] && [ -d ./data ]; then
+    blocked="$(find ./data -mindepth 1 -type d ! -writable -print 2>/dev/null || true)"
+    if [ -n "$blocked" ]; then
+      echo "!! cannot delete these directories as $(id -un):" >&2
+      echo "$blocked" >&2
+      echo "!! re-run as their owner, or use --reset (which keeps ./data/certs)." >&2
+      exit 1
+    fi
+  fi
+
   echo ">> stopping the stack (so nothing has ./data open while it's wiped)"
   docker compose down || true
 
-  echo ">> wiping ./data and .env"
-  rm -rf ./data
-  rm -f ./.env
+  if [ "$RESET_ALL" = "1" ]; then
+    echo ">> wiping ./data in full (certs included) and .env"
+    rm -rf ./data
+    rm -f ./.env
+  else
+    echo ">> wiping ./data except certs (.env kept)"
+    # Delete ./data's CONTENTS rather than ./data itself, so `certs` survives
+    # untouched — including when this account cannot write inside it.
+    if [ -d ./data ]; then
+      find ./data -mindepth 1 -maxdepth 1 ! -name certs -exec rm -rf {} +
+    fi
+  fi
 
   echo ">> restoring default config.yaml"
   mkdir -p data
