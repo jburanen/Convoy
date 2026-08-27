@@ -1,0 +1,73 @@
+# Convoy — test/dev deployment, built from this checkout.
+#
+# Brought up on the test host by scripts/deploy.sh (git pull + up --build), which
+# passes `-f docker-compose.dev.yml` on every compose call. Use this when you are
+# testing the source; docker-compose.yml is the file end users run, and pulls a
+# published image instead of building one.
+services:
+  web:
+    build: .
+    image: convoy:dev
+    container_name: convoy
+    # Run as whichever host account ran the deploy (scripts/deploy.sh exports
+    # DEPLOY_UID/DEPLOY_GID via `id -u`/`id -g`), so the bind-mounted ./data
+    # below — created owned by whoever ran the script — is always writable by
+    # the container too, on any host, without a manual chown. Hardcoding a
+    # specific account's uid/gid here broke on the first host whose deploying
+    # user wasn't that exact uid (observed 2026-07-25: `mkdir -p data` on a
+    # fresh host created a directory owned by whoever ran it, not 1001, and
+    # the container — always uid 1001 — got Permission denied). Defaults to
+    # 1001:1001 (devuser on the original dev host) if run without deploy.sh's
+    # exports, e.g. a bare `docker compose -f docker-compose.dev.yml up`.
+    user: "${DEPLOY_UID:-1001}:${DEPLOY_GID:-1001}"
+    ports:
+      - "8080:8080"
+    env_file:
+      # Runtime secrets/config, git-ignored, next to this compose file. Holds the
+      # credential-store master key (CONVOY_MASTER_KEY) and — when the web UI's
+      # LDAP authentication is enabled — the CONVOY_LDAP_* settings (see
+      # .env.example). NEVER commit .env. required:false so the stack still builds
+      # on a host that hasn't created one yet (auth stays off, storage disabled).
+      - path: .env
+        required: false
+    environment:
+      # Config/inventory are read from the mounted data dir at runtime. The image
+      # seeds config.yaml from its packaged example on first run — see
+      # docker-entrypoint.sh.
+      CONVOY_CONFIG: /data/config.yaml
+      # Fallback for supplying the master key via the shell env instead of .env;
+      # a value in .env (loaded above) is used when this is empty.
+      CONVOY_MASTER_KEY: ${CONVOY_MASTER_KEY:-}
+    volumes:
+      # A bind mount here, unlike the named volume the published compose file
+      # uses: on a dev host the point is to be able to read the DB, the job
+      # archive and uploaded packages directly, and `user:` above already makes
+      # the ownership work out.
+      - ./data:/data:rw
+    restart: unless-stopped
+    # Container hardening. This service holds the credential store and can drive
+    # root-level change across a firewall fleet, so it should hold no capability
+    # it does not use — it opens outbound SSH/HTTPS and listens on one port, none
+    # of which needs a Linux capability once the port is >1024.
+    cap_drop:
+      - ALL
+    security_opt:
+      # Blocks setuid/setcap escalation inside the container even if something
+      # in the image is (or becomes) setuid.
+      - no-new-privileges:true
+    # Bounds a runaway job/upload: without these, an unbounded package upload or
+    # a fork loop takes the whole host down, not just this service.
+    mem_limit: 2g
+    pids_limit: 512
+    # NOT set here, deliberately:
+    #   read_only: true  — the app writes to /data (SQLite WAL, packages, the job
+    #     archive) and mgmt_cli/CDT staging expects a writable /tmp; a read-only
+    #     rootfs needs both carved out as tmpfs and has not been tested.
+    #   ports: "127.0.0.1:8080:8080" — the UI is reached from operators' browsers
+    #     over the network and there is no reverse proxy in this stack, so
+    #     binding to loopback would simply make it unreachable.
+    # No healthcheck override here — the Dockerfile's own HEALTHCHECK already
+    # covers this (and follows CONVOY_SSL_CERTFILE to probe https:// when
+    # native TLS is on). A duplicate here previously went stale and always
+    # probed plain http://, so a TLS-enabled deploy showed "unhealthy" even
+    # though the app was serving fine over https.

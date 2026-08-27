@@ -51,12 +51,24 @@ Supporting features, all in the UI:
 
 ## 🚀 Run it (Docker Compose)
 
-GA releases (beginning v1.0.0) will be a simple docker-compose.yml deployment model plus some environment variables. This project is currently under active early development and for now all deployments need to start with a git clone and the development deployment instructions:  
+No clone and no build. Take the compose file and start it:
 
-> ** FOR DEVELOPMENT DEPLOYMENTS**  
-> Run `./scripts/deploy.sh`, which sets `DEPLOY_UID`/`DEPLOY_GID` for you (and pulls, rebuilds, and health-checks). `./scripts/deploy.sh --reset` (dev only) wipes `./data` and `.env` first — every environment, server, firewall, credential, package, and job history entry, plus every runtime setting back to its built-in default — then deploys clean. Prompts for confirmation unless you also pass `-y`/`--yes`.
+```bash
+curl -O https://raw.githubusercontent.com/jburanen/Convoy/main/docker-compose.yml
+docker compose up -d
+```
 
-First run seeds environments from `config.yaml` (+ any inventory files) into the database; after that the database is authoritative and environments are managed in the UI. On an empty inventory the UI opens on the **Provisioning** tab.  
+That pulls `ghcr.io/jburanen/convoy:latest` and serves the UI on **http://localhost:8080**, with a default login of `admin` / `admin` that you should change immediately. Application state lives in a Docker named volume (`convoy-data`) — the compose file's comments cover pinning a release with `CONVOY_TAG`, using a bind mount instead, and backing the volume up.
+
+Two settings are worth adding before you store anything real. Put them in a `.env` file next to `docker-compose.yml` (see [.env.example](.env.example) for the full list):
+
+- **`CONVOY_MASTER_KEY`** — encrypts the credential store. Without it, credentials cannot be stored at all and every action prompts for them instead. Generate one with `openssl rand -base64 48`, and keep a copy: **lose it and every stored credential is unrecoverable.**
+- **`CONVOY_LDAP_*`** — LDAP/AD authentication. Credential storage requires an authentication gate, so basic auth alone leaves storage off.
+
+First run seeds `config.yaml` into the volume, then seeds environments from it (plus any inventory files) into the database; after that the database is authoritative and environments are managed in the UI. On an empty inventory the UI opens on the **Provisioning** tab.
+
+> **FOR DEVELOPMENT DEPLOYMENTS**  
+> To run from a checkout instead, `./scripts/deploy.sh` builds the image from source via `docker-compose.dev.yml` (bind-mounting `./data`), sets `DEPLOY_UID`/`DEPLOY_GID` for you, then pulls, rebuilds and health-checks. `./scripts/deploy.sh --reset` (dev only) wipes `./data` and `.env` first — every environment, server, firewall, credential, package, and job history entry, plus every runtime setting back to its built-in default — then deploys clean. Prompts for confirmation unless you also pass `-y`/`--yes`.
 
 ## 🛡️ Safety model
 

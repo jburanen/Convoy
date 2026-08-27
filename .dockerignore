@@ -18,7 +18,8 @@ htmlcov
 dist
 build
 tests
-examples
+# examples/ IS shipped: the image seeds /data/config.yaml from it on first
+# run (docker-entrypoint.sh). Only *.example.* templates live there.
 data
 # Never ship env/secret material into an image layer.
 .env
