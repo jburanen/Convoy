@@ -40,6 +40,7 @@ class FakeTransport:
         expert_drop_on: str | None = None,
         expert_timeout_on: str | None = None,
         expert_reboot_closes: bool = True,
+        expert_already_expert: bool = False,
     ) -> None:
         self.responses = responses or {}
         self.fail_rc = fail_rc  # set non-zero to make every command fail
@@ -72,6 +73,9 @@ class FakeTransport:
         # simulates the scheduled reboot closing the session promptly; False
         # simulates it never closing (script failed without scheduling one).
         self.expert_reboot_closes = expert_reboot_closes
+        # True models a device configured `bashUser on`, whose login lands
+        # directly at the expert prompt with nothing to escalate.
+        self.expert_already_expert = expert_already_expert
         self.interactive_shells: list[FakeInteractiveShell] = []
 
     def run(self, command: str, *, timeout: float | None = None) -> CommandResult:
@@ -143,6 +147,7 @@ class FakeTransport:
             drop_on=self.expert_drop_on,
             timeout_on=self.expert_timeout_on,
             reboot_closes=self.expert_reboot_closes,
+            already_expert=self.expert_already_expert,
         )
         self.interactive_shells.append(shell)
         return shell
@@ -167,6 +172,7 @@ class FakeInteractiveShell:
         timeout_on: str | None = None,
         reboot_closes: bool = True,
         password_needs_nudge: bool = False,
+        already_expert: bool = False,
     ) -> None:
         self._expert_password = expert_password
         self._wrong_password = wrong_password
@@ -178,6 +184,9 @@ class FakeInteractiveShell:
         # send_secret() already sent and only acts once a FURTHER newline
         # arrives as its own write (see GaiaExpertSession.enter_expert).
         self._password_needs_nudge = password_needs_nudge
+        # A Spark gateway configured `bashUser on` greets a login with the
+        # expert prompt itself -- there is no clish prompt to escalate from.
+        self._already_expert = already_expert
         self._awaiting_nudge = False
         self._last = ""
         self._last_secret: str | None = None
@@ -193,6 +202,12 @@ class FakeInteractiveShell:
         self._last_secret = text
 
     def expect(self, pattern: str, *, timeout: float | None = None) -> str:
+        if not self.sent:
+            # Nothing sent yet, so this is enter_expert reading the greeting the
+            # device prints at login to decide whether elevating is needed at
+            # all. Every real device prints one; the fake used to print nothing,
+            # which no device does.
+            return "[Expert@host]# " if self._already_expert else "host> "
         if self._drop_on is not None and self._drop_on in self._last:
             raise TransportError(f"fake: connection dropped while waiting for {pattern!r}")
         if self._timeout_on is not None and self._timeout_on in self._last:

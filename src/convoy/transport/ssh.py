@@ -613,11 +613,14 @@ class GaiaExpertSession:
     send ``expert``, answer the password prompt, land at the expert prompt
     (or fail if rejected), run commands, ``exit`` back to the login shell.
 
-    This is the ONLY place that encodes Gaia's actual prompt text. The
-    regexes below are a first guess — **unvalidated against real Spark
-    (Gaia Embedded) hardware**, see .claude/memory/spark-firmware-patching.md.
-    Isolating them here means a wrong guess is a contained fix, not a change
-    to any job's sequencing or logging.
+    This is the ONLY place that encodes Gaia's actual prompt text, and the
+    regexes below have proven to be **device-dependent**: one live Spark
+    matched all three cleanly (2026-08-19), while an SG1800 never returns a
+    login prompt from ``exit`` at all (2026-08-27). See
+    .claude/memory/spark-firmware-patching.md. Isolating them here means a
+    wrong guess is a contained fix, not a change to any job's sequencing or
+    logging — and it is why both ``enter_expert`` and ``exit_expert`` treat
+    an unrecognised or absent prompt as "carry on" rather than as failure.
     """
 
     _PASSWORD_PROMPT = r"[Pp]assword\s*:\s*$"
@@ -636,13 +639,53 @@ class GaiaExpertSession:
     # at all -- this is dead time on every affected escalation.
     _SUBMIT_NUDGE_AFTER = 10.0
 
-    def enter_expert(self, expert_password: str, *, timeout: float = 20.0) -> None:
+    # How long to wait for the prompt the device sends at login, before
+    # deciding whether this session needs elevating at all (see enter_expert).
+    # Short: in the healthy case it is already sitting in the channel buffer,
+    # and the fallback when it never arrives is simply the behaviour that
+    # existed before this check, so the wait is dead time only on a device
+    # that greets us with silence.
+    _LOGIN_GREETING_TIMEOUT = 10.0
+
+    def enter_expert(self, expert_password: str, *, timeout: float = 20.0) -> bool:
+        """Escalate this session to expert mode.
+
+        Returns True if it actually elevated, False if the session was already
+        at an expert prompt when we arrived and there was nothing to do.
+
+        A Spark gateway whose user is configured ``bashUser on`` lands you
+        directly in expert at login, with no clish prompt in between, so read
+        the greeting the device sends before assuming an escalation is needed
+        (operator-specified 2026-08-27). Sending ``expert`` into a shell that
+        is already expert asks for a password this session does not need, and
+        leaves either a not-found error or a pointless nested shell behind in
+        the device's own history.
+
+        If no recognisable prompt arrives in time, fall through and send
+        ``expert`` anyway: that is exactly what this did before the check
+        existed, and a device that greets us with silence is not evidence of
+        being elevated. TransportTimeoutError is caught by the same clause on
+        purpose -- it subclasses TransportError, and here both mean the same
+        thing, "no greeting to read anything into".
+        """
+        try:
+            greeting = self._shell.expect(
+                f"(?:{self._EXPERT_PROMPT})|(?:{self._LOGIN_PROMPT})",
+                timeout=min(timeout, self._LOGIN_GREETING_TIMEOUT),
+            )
+        except TransportError:
+            greeting = ""
+        if re.search(self._EXPERT_PROMPT, greeting):
+            return False
         self._shell.send_line("expert")
         first = self._shell.expect(
             f"(?:{self._PASSWORD_PROMPT})|(?:{self._EXPERT_PROMPT})", timeout=timeout
         )
         if re.search(self._EXPERT_PROMPT, first):
-            return  # already in expert mode
+            # Already expert, but without having announced it in the greeting
+            # above -- keep honouring that, it costs nothing and the greeting
+            # read is allowed to come up empty.
+            return False
         self._shell.send_secret(expert_password)
         want = f"(?:{self._EXPERT_PROMPT})|(?:{self._PASSWORD_PROMPT})"
         try:
@@ -664,7 +707,7 @@ class GaiaExpertSession:
             self._shell.send_line("")
             result = self._shell.expect(want, timeout=timeout)
         if re.search(self._EXPERT_PROMPT, result):
-            return
+            return True
         detail = "wrong password" if self._WRONG_PASSWORD_RE.search(result) else "unexpected prompt"
         raise ExpertModeError(
             f"expert-mode escalation failed ({detail}) — check the credential set's "
