@@ -713,8 +713,29 @@ class GaiaExpertSession:
         )
 
     def exit_expert(self, *, timeout: float = 15.0) -> None:
+        """Leave expert mode, back to the login (clish) prompt.
+
+        The remote end hanging up counts as success. ``exit`` is the command
+        that ends a shell, and not every device treats expert as a nested one
+        to pop out of -- a Spark SG1800 answered ``exit\\r\\nlogout\\r\\n`` and
+        closed the channel (real hardware, 2026-08-27: a spark.testcred job
+        that had already logged in and escalated fine, then failed here, on
+        teardown, after the thing it set out to prove had been proven). Every
+        caller closes the shell immediately after this returns, so the device
+        closing it first is the same destination reached sooner, not a
+        failure to report.
+
+        A timeout with the channel still open stays an error: that one means
+        the device neither came back to a prompt nor let go, which is a stuck
+        session rather than a finished one.
+        """
         self._shell.send_line("exit")
-        self._shell.expect(self._LOGIN_PROMPT, timeout=timeout)
+        try:
+            self._shell.expect(self._LOGIN_PROMPT, timeout=timeout)
+        except TransportTimeoutError:
+            raise
+        except TransportError:
+            return
 
 
 # Gaia refuses a clish config change while the config database is locked, and

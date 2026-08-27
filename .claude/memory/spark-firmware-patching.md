@@ -63,6 +63,20 @@ of the job's sequencing:
    clean match on `_EXPERT_PROMPT`, then `exit_expert()` matched
    `_LOGIN_PROMPT` cleanly too. No mutating command was run.
 
+   **But `_LOGIN_PROMPT` is device-dependent — 2026-08-27, SG1800.** The same
+   `exit_expert()` never got a login prompt back there: the device answered
+   `exit` / `logout` and closed the channel outright, i.e. `exit` from expert
+   ends the *session* rather than dropping back to clish. That failed a
+   `spark.testcred` job on teardown, after login and escalation had both
+   already succeeded. `exit_expert()` now treats a closed channel as a
+   successful exit (all three callers close the shell on the next line
+   anyway), while still raising on `TransportTimeoutError` — channel open, no
+   prompt — which is a stuck session rather than a finished one. So: the
+   2026-08-19 confirmation above holds for the device it was run against, and
+   is not general. Assume any of these three regexes can differ by model or
+   build; prefer "did the session end?" over "did the expected prompt appear?"
+   wherever both answer the question.
+
 Both are called out in code comments at their definition site.
 
 ## The three jobs
