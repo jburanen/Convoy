@@ -1339,3 +1339,103 @@ def test_set_in_other_environment_does_not_satisfy_unassigned_server(
     )
     with pytest.raises(CredentialError, match="no credential assigned"):
         service.detect("default", "mgmt-02")
+
+
+# ---- CPUSE display name -> file name resolution -----------------------------
+# All names below are verbatim from clockwerks, 2026-08-27.
+
+# What `show installer packages imported` actually returns for a cloud-imported
+# Jumbo: a friendly display name, not a file name. clish splits on whitespace
+# and rejects it ("Could not find package R82.10") even fully double-quoted.
+JHF_DISPLAY_NAME = "R82.10 Jumbo Hotfix Accumulator Recommended Jumbo Take 40"
+JHF_FILENAME = "Check_Point_R82_10_JUMBO_HF_MAIN_Bundle_T40_FULL.tgz"
+
+
+def _import_job(package: str, *, host: str = "clockwerks", env: str = "Table15-Prod"):
+    from convoy.services.patching import JOB_IMPORT
+    from convoy.store import JobRecord, JobStatus
+
+    return JobRecord(
+        kind=JOB_IMPORT,
+        target=host,
+        environment=env,
+        params={"package": package},
+        status=JobStatus.SUCCEEDED,
+    )
+
+
+class _JobStore:
+    """Just the list_jobs slice resolve_cpuse_handle reads."""
+
+    def __init__(self, jobs: list) -> None:
+        self._jobs = jobs
+
+    def list_jobs(self, **_kwargs):
+        return self._jobs
+
+
+def test_handle_passes_through_a_filename_identifier() -> None:
+    """A display name with no spaces IS the file name — that is why locally
+    imported packages have always installed fine, and it must not be touched."""
+    from convoy.services.patching import resolve_cpuse_handle
+
+    store = _JobStore([])
+    name = "Check_Point_R82_10_ga_time_fix_main_Bundle_T9_FULL.tgz"
+    assert resolve_cpuse_handle(store, "Table15-Prod", "clockwerks", name) == name
+
+
+def test_handle_resolves_a_display_name_to_the_imported_filename() -> None:
+    from convoy.services.patching import resolve_cpuse_handle
+
+    store = _JobStore([_import_job(JHF_FILENAME)])
+    assert (
+        resolve_cpuse_handle(store, "Table15-Prod", "clockwerks", JHF_DISPLAY_NAME)
+        == JHF_FILENAME
+    )
+
+
+def test_handle_matches_on_version_and_take_not_just_substring() -> None:
+    """The display name shares no substring with the file name — "Take 40" vs
+    "_T40_" — so the match has to come from version+take."""
+    from convoy.services.patching import resolve_cpuse_handle
+
+    store = _JobStore([_import_job(JHF_FILENAME)])
+    handle = resolve_cpuse_handle(store, "Table15-Prod", "clockwerks", JHF_DISPLAY_NAME)
+    assert handle == JHF_FILENAME
+    assert JHF_FILENAME.rsplit(".", 1)[0] not in JHF_DISPLAY_NAME  # no substring overlap
+
+
+def test_handle_does_not_match_a_different_take() -> None:
+    """Take 24 and Take 40 were both imported on this host — picking the wrong
+    one would install a package the operator did not choose."""
+    from convoy.cpuse import CPUSEError
+    from convoy.services.patching import resolve_cpuse_handle
+
+    store = _JobStore([_import_job("Check_Point_R82_10_JUMBO_HF_MAIN_Bundle_T24_FULL.tgz")])
+    with pytest.raises(CPUSEError, match="display name"):
+        resolve_cpuse_handle(store, "Table15-Prod", "clockwerks", JHF_DISPLAY_NAME)
+
+
+def test_handle_picks_the_matching_take_among_several_imports() -> None:
+    from convoy.services.patching import resolve_cpuse_handle
+
+    store = _JobStore([
+        _import_job("Check_Point_R82_10_JUMBO_HF_MAIN_Bundle_T24_FULL.tgz"),
+        _import_job(JHF_FILENAME),
+        _import_job("Check_Point_R82_10_ga_time_fix_main_Bundle_T9_FULL.tgz"),
+    ])
+    assert (
+        resolve_cpuse_handle(store, "Table15-Prod", "clockwerks", JHF_DISPLAY_NAME)
+        == JHF_FILENAME
+    )
+
+
+def test_handle_raises_actionably_when_nothing_was_imported_here() -> None:
+    """A package imported outside this tool leaves no file name to resolve to;
+    failing before the command runs beats a CLINFR0329 from the box."""
+    from convoy.cpuse import CPUSEError
+    from convoy.services.patching import resolve_cpuse_handle
+
+    store = _JobStore([])
+    with pytest.raises(CPUSEError, match="no usable identifier"):
+        resolve_cpuse_handle(store, "Table15-Prod", "clockwerks", JHF_DISPLAY_NAME)
