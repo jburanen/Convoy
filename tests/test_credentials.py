@@ -108,17 +108,81 @@ def test_expert_password_required(creds: CredentialStore) -> None:
         creds.put_set("default", "noexpert", ssh_password="pw")
 
 
-def test_api_only_set_needs_only_an_api_key(creds: CredentialStore, store: Store) -> None:
-    creds.put_set("default", "api-set", api_key="abc123", api_only=True)
+def test_api_key_alone_is_a_valid_set(creds: CredentialStore, store: Store) -> None:
+    """No SSH secret means nothing that can log in over SSH, so there is
+    nothing to escalate and no expert password to demand."""
+    creds.put_set("default", "api-set", api_key="abc123")
     bundle = creds.get_set_bundle(_set_id(store, "api-set"), "mgmt-01")
     assert bundle[CredentialKind.API_KEY].reveal() == "abc123"
     assert CredentialKind.SSH_PASSWORD not in bundle
     assert CredentialKind.EXPERT_PASSWORD not in bundle
 
 
-def test_api_only_set_rejects_missing_api_key(creds: CredentialStore) -> None:
-    with pytest.raises(CredentialError, match="API-only environment"):
-        creds.put_set("default", "no-key", ssh_password="pw", api_only=True)
+def test_ssh_only_set_is_valid_without_an_api_key(creds: CredentialStore, store: Store) -> None:
+    """The mirror image, and the case that used to be rejected in an API-only
+    environment: those environments still patch their firewalls over SSH, so a
+    set with SSH credentials and no API key has to be storable there
+    (operator-specified 2026-08-27)."""
+    creds.put_set("default", "ssh-set", ssh_password="pw", expert_password="expert-pw")
+    bundle = creds.get_set_bundle(_set_id(store, "ssh-set"), "mgmt-01")
+    assert bundle[CredentialKind.SSH_PASSWORD].reveal() == "pw"
+    assert CredentialKind.API_KEY not in bundle
+
+
+def test_set_with_nothing_in_it_is_rejected(creds: CredentialStore) -> None:
+    with pytest.raises(CredentialError, match="or an API key"):
+        creds.put_set("default", "empty", ssh_username="admin")
+
+
+def test_api_key_only_set_can_be_edited_without_growing_ssh_credentials(
+    creds: CredentialStore, store: Store
+) -> None:
+    """Validation keys off what the SET carries, not the environment's access
+    mode — so rotating the API key on an API-key-only set doesn't demand an SSH
+    secret the set was never meant to have. That demand was reachable simply by
+    toggling the environment off API-only after the set was stored."""
+    creds.put_set("default", "api-set", api_key="first")
+    creds.put_set("default", "api-set", api_key="second")
+    bundle = creds.get_set_bundle(_set_id(store, "api-set"), "mgmt-01")
+    assert bundle[CredentialKind.API_KEY].reveal() == "second"
+
+
+def test_editing_one_secret_leaves_every_other_untouched(
+    creds: CredentialStore, store: Store
+) -> None:
+    """The whole point of omitted-means-unchanged: change the API key alone and
+    the SSH and expert passwords survive verbatim."""
+    creds.put_set(
+        "default",
+        "full",
+        ssh_username="admin",
+        ssh_password="ssh-pw",
+        expert_password="expert-pw",
+        api_key="old-key",
+    )
+    creds.put_set("default", "full", api_key="new-key")
+    bundle = creds.get_set_bundle(_set_id(store, "full"), "mgmt-01")
+    assert bundle[CredentialKind.API_KEY].reveal() == "new-key"
+    assert bundle[CredentialKind.SSH_PASSWORD].reveal() == "ssh-pw"
+    assert bundle[CredentialKind.EXPERT_PASSWORD].reveal() == "expert-pw"
+
+
+def test_supplying_a_private_key_replaces_a_stored_ssh_password(
+    creds: CredentialStore, store: Store
+) -> None:
+    """The two SSH secrets are mutually exclusive, so keeping the omitted one
+    would carry both and fail the not-both check — leaving nothing the operator
+    could type to switch a set from a password to a key."""
+    creds.put_set("default", "swap", ssh_password="ssh-pw", expert_password="expert-pw")
+    creds.put_set("default", "swap", ssh_private_key="KEY-MATERIAL")
+    bundle = creds.get_set_bundle(_set_id(store, "swap"), "mgmt-01")
+    assert bundle[CredentialKind.SSH_PRIVATE_KEY].reveal() == "KEY-MATERIAL"
+    assert CredentialKind.SSH_PASSWORD not in bundle
+    # and back the other way
+    creds.put_set("default", "swap", ssh_password="ssh-pw-2")
+    bundle = creds.get_set_bundle(_set_id(store, "swap"), "mgmt-01")
+    assert bundle[CredentialKind.SSH_PASSWORD].reveal() == "ssh-pw-2"
+    assert CredentialKind.SSH_PRIVATE_KEY not in bundle
 
 
 def test_expert_password_kept_across_an_edit_that_omits_it(

@@ -200,15 +200,17 @@ async def _reap_idle_sessions(
 
 
 class CredentialSetIn(BaseModel):
-    """Create/replace a named login set. Exactly one SSH secret (password or
-    private key) is expected; an expert-mode password is required too — every
-    stored host is a management server or a firewall, either of which may
-    need to escalate to expert mode (see .claude/memory/gaia-shell-posture.md)
-    — enforced in ``CredentialStore.put_set``. API key stays optional.
+    """Create/replace a named login set. A set needs an SSH secret or an API
+    key; a set carrying an SSH secret needs exactly one (password or private
+    key) plus an expert-mode password, since every stored host is a management
+    server or a firewall and either may need to escalate (see
+    .claude/memory/gaia-shell-posture.md). All enforced in
+    ``CredentialStore.put_set``, which keys the rules off what the set carries
+    rather than off the environment's access mode.
 
-    An API-only environment (``HostConnector.api_only``) relaxes all of the
-    above: its sets need only an API key, since there's no SSH service
-    account to reach at all — see ``put_set``'s ``api_only`` parameter."""
+    Every secret field is optional on the wire: on an update, omitting one
+    keeps the stored value, which is what lets an operator change just the API
+    key without re-entering the SSH secret."""
 
     name: str = Field(min_length=1)
     ssh_username: str | None = None
@@ -2147,7 +2149,6 @@ def _register_routes(app: FastAPI) -> None:
                 expert_password=_reveal(body.expert_password),
                 api_key=_reveal(body.api_key),
                 default_if_none=body.default_if_none,
-                api_only=_registry(request).get(env).api_only,
                 triggered_by=_current_user(request),
             )
         except OrchestratorError as exc:

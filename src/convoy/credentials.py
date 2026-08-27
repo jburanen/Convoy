@@ -150,21 +150,32 @@ class CredentialStore:
         ssh_private_key: str | None = None,
         expert_password: str | None = None,
         api_key: str | None = None,
-        api_only: bool = False,
     ) -> CredentialSetInfo:
         """Create a named login set, or update an existing one by name.
 
         On an **update** (a set with this name already exists), any argument left
         as ``None`` keeps the set's current value — so an operator can add just the
-        API key to a bootstrap entry without re-typing the SSH secret. The effective
-        row must still carry exactly one SSH secret (password or private key). The
-        set's id is preserved, so server assignments to it survive. Secrets are
+        API key to a bootstrap entry without re-typing the SSH secret. The set's
+        id is preserved, so server assignments to it survive. Secrets are
         encrypted here and never leave this process in plaintext.
 
-        ``api_only`` is the assigning environment's access mode (see
-        HostConnector.api_only): such an environment's management servers have
-        no SSH service account at all, so its sets need only an API key —
-        the SSH/expert requirements below are skipped in favor of that one."""
+        What a set must contain is decided by **what it carries**, not by the
+        access mode of the environment holding it (operator-specified
+        2026-08-27, and it used to take an ``api_only`` flag for exactly that).
+        Keying it off the environment was wrong in both directions: an API-only
+        environment still patches its *firewalls* over SSH (``api_only`` only
+        ever governed management-plane hosts — see
+        ``HostConnector._check_ssh_reachable``), so its sets need to be allowed
+        to carry SSH credentials and no API key; and an API-key-only set became
+        un-editable the moment its environment was toggled off API-only, since
+        every save then demanded an SSH secret the set was never meant to have.
+
+        So: a set needs an SSH secret or an API key. Whichever SSH secret it
+        carries must be one, not both, and any set carrying one also needs an
+        expert-mode password — every stored host is a management server or a
+        firewall, either of which may need to escalate (see
+        .claude/memory/gaia-shell-posture.md). A set that is only an API key
+        needs neither."""
         existing = self._store.get_credential_set_by_name(environment, name)
 
         def _keep(new_plain: str | None, current_ct: bytes | None) -> bytes | None:
@@ -177,33 +188,41 @@ class CredentialStore:
             ssh_private_key_ct = _keep(ssh_private_key, existing.ssh_private_key_ct)
             expert_password_ct = _keep(expert_password, existing.expert_password_ct)
             api_key_ct = _keep(api_key, existing.api_key_ct)
+            # The two SSH secrets are mutually exclusive, so "omitted keeps the
+            # current value" cannot apply to both at once — supplying one has to
+            # displace the other. Without this, a set stored with a password
+            # could never be switched to a key: the merge would carry both, fail
+            # the not-both check below, and there would be nothing the operator
+            # could type to fix it. Only an explicitly supplied secret displaces;
+            # omitting both still keeps whichever is stored.
+            if ssh_password:
+                ssh_private_key_ct = None
+            elif ssh_private_key:
+                ssh_password_ct = None
         else:
             ssh_password_ct = self._enc(ssh_password)
             ssh_private_key_ct = self._enc(ssh_private_key)
             expert_password_ct = self._enc(expert_password)
             api_key_ct = self._enc(api_key)
 
-        if api_only:
-            # No SSH service account exists on an API-only environment's
-            # management servers at all — the SSH/expert requirements below
-            # are meaningless there, and the API key is the only thing that
-            # matters. SSH fields are simply ignored if supplied (the UI
-            # never offers them for such an environment).
-            if api_key_ct is None:
-                raise CredentialError("an API-only environment's credential set needs an API key")
-        else:
-            if ssh_password_ct is not None and ssh_private_key_ct is not None:
-                raise CredentialError("provide an SSH password or a private key, not both")
-            if ssh_password_ct is None and ssh_private_key_ct is None:
-                raise CredentialError("a credential set needs an SSH password or private key")
+        if ssh_password_ct is not None and ssh_private_key_ct is not None:
+            raise CredentialError("provide an SSH password or a private key, not both")
+        has_ssh_secret = ssh_password_ct is not None or ssh_private_key_ct is not None
+        if has_ssh_secret and expert_password_ct is None:
             # Every stored host is a management server or a firewall (see
             # inventory.py's Role enum) — under the clish-login-plus-on-demand-
             # expert posture (.claude/memory/gaia-shell-posture.md), any of them
-            # may need to escalate to expert mode. Required flat across every
-            # set, not conditionally per host/role: simpler, and there is no
-            # other kind of host to exempt.
-            if expert_password_ct is None:
-                raise CredentialError("a credential set needs an expert-mode password")
+            # may need to escalate to expert mode. Required flat across every set
+            # that can log in over SSH at all, not conditionally per host/role:
+            # simpler, and there is no other kind of host to exempt.
+            raise CredentialError("a credential set needs an expert-mode password")
+        if not has_ssh_secret and api_key_ct is None:
+            # Nothing at all in the set. A set carrying only an API key is
+            # allowed and useful (an API-only environment's management servers,
+            # or a Management API user alongside SSH sets for the firewalls).
+            raise CredentialError(
+                "a credential set needs an SSH password or private key, or an API key"
+            )
 
         row = CredentialSetRow(
             environment=environment,
