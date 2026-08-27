@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from convoy.errors import ExpertModeError, TransportError
+from convoy.errors import ExpertModeError, TransportError, TransportTimeoutError
 from convoy.transport.ssh import GaiaExpertSession, InteractiveShell
 
 from .fakes import FakeInteractiveShell
@@ -110,6 +110,28 @@ def test_exit_expert_returns_to_login_prompt() -> None:
     session = GaiaExpertSession(InteractiveShell(channel))
     session.exit_expert(timeout=1.0)  # must not raise
     assert channel.sent == [b"exit\n"]
+
+
+def test_exit_expert_treats_the_device_hanging_up_as_a_clean_exit() -> None:
+    """Real SG1800 behaviour (2026-08-27): `exit` from expert ends the whole
+    session rather than dropping back to clish -- the device echoes
+    `exit\\r\\nlogout\\r\\n` and closes the channel. That was failing
+    spark.testcred jobs on teardown, after the login and escalation they set
+    out to prove had already succeeded."""
+    channel = FakeChannel([b"exit\r\nlogout\r\n"], close_when_empty=True)
+    session = GaiaExpertSession(InteractiveShell(channel))
+    session.exit_expert(timeout=1.0)  # must not raise
+    assert channel.sent == [b"exit\n"]
+
+
+def test_exit_expert_still_raises_when_the_session_hangs_open() -> None:
+    """The narrower failure stays a failure: a channel that never closes and
+    never returns a prompt is a stuck session, not a finished one, and must
+    not be swallowed along with the hang-up above."""
+    channel = FakeChannel([b"...\n"])  # never closes, never prompts
+    session = GaiaExpertSession(InteractiveShell(channel))
+    with pytest.raises(TransportTimeoutError):
+        session.exit_expert(timeout=0.2)
 
 
 # -- run_expert_command (bash-native commands, real exit status) -----------------
