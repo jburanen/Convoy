@@ -1329,22 +1329,24 @@ document.getElementById("discover-modal").addEventListener("click", (ev) => {
   if (ev.target.id === "discover-modal") closeDiscoverModal(); // backdrop click closes
 });
 
-/* ---------- 1a-header. sticky header condense-on-scroll ---------- */
+/* ---------- 1a-header. sticky header scroll state ---------- */
 
-// <header> (identity row + tabs) is pinned via CSS position:sticky — this
-// just shrinks its vertical padding a few px into any scroll so the pinned
-// bar doesn't keep eating a full header's worth of whitespace for the rest
-// of the page. Purely cosmetic (CSS transition does the animating); nothing
-// ever hides. Threshold is deliberately tiny — the header is already stuck
-// to the top the instant you start scrolling, not just once you're deep
-// into the page.
-const HEADER_CONDENSE_THRESHOLD_PX = 8;
-function updateHeaderCondensed() {
+// <header> (identity row + tabs) is pinned via CSS position:sticky and keeps
+// its full size for the whole scroll — the tagline, logo and padding no
+// longer shrink or hide (operator-directed; the header used to "condense" a
+// few px into any scroll). All this class still drives is the fade strip
+// under the tab bar (header.scrolled::after in app.css), which stays
+// scroll-gated because at the top of the page there is nothing passing
+// beneath it to soften. Threshold is deliberately tiny — the header is stuck
+// to the top the instant you start scrolling, not just once you're deep into
+// the page.
+const HEADER_SCROLLED_THRESHOLD_PX = 8;
+function updateHeaderScrolled() {
   document.querySelector("header").classList.toggle(
-    "condensed", window.scrollY > HEADER_CONDENSE_THRESHOLD_PX
+    "scrolled", window.scrollY > HEADER_SCROLLED_THRESHOLD_PX
   );
 }
-window.addEventListener("scroll", updateHeaderCondensed, { passive: true });
+window.addEventListener("scroll", updateHeaderScrolled, { passive: true });
 
 /* ---------- 1b. tabs ---------- */
 
@@ -2788,7 +2790,10 @@ async function loadFirewalls() {
       .addEventListener("click", () => refreshFirewallState(fw.name, row, stateRow));
     stateRow
       .querySelector(".srv-bootstrap-creds-link")
-      .addEventListener("click", () => openBootstrapCredsConfirm(fw.name, stateRow));
+      .addEventListener("click", () => openBootstrapCredsConfirm(fw.name, {
+        setStatus: (text) => { stateRow.querySelector(".srv-summary").textContent = text; },
+        verify: () => refreshFirewallState(fw.name, stateRow.previousElementSibling, stateRow),
+      }));
     stateRow
       .querySelector(".srv-spark-bootstrap-link")
       .addEventListener("click", () => openSparkBootstrapModal(fw.name));
@@ -2901,12 +2906,16 @@ async function testSparkCredentials(name) {
 
 let fwBootstrapCredsCtx = null;
 
-async function openBootstrapCredsConfirm(name, stateRow) {
+// `handlers` decouples this from the Firewalls table's own row DOM so the
+// Discover Firewalls modal can drive the same confirm-gated push against its
+// own status cell: { setStatus(text), verify() } — verify re-runs whatever
+// credential check surfaced the failure, to confirm the fix landed.
+async function openBootstrapCredsConfirm(name, handlers) {
   try {
     const preview = await api(
       envUrl(`/firewalls/${encodeURIComponent(name)}/bootstrap-credentials/preview`),
     );
-    fwBootstrapCredsCtx = { name, stateRow };
+    fwBootstrapCredsCtx = { name, handlers };
     document.getElementById("fw-bootstrap-creds-confirm-target").textContent = name;
     document.getElementById("fw-bootstrap-creds-confirm-output").textContent =
       preview.commands.join("\n");
@@ -2932,10 +2941,9 @@ document.getElementById("fw-bootstrap-creds-confirm-modal").addEventListener("cl
 
 document.getElementById("fw-bootstrap-creds-confirm-run").addEventListener("click", async () => {
   if (!fwBootstrapCredsCtx) return;
-  const { name, stateRow } = fwBootstrapCredsCtx;
+  const { name, handlers } = fwBootstrapCredsCtx;
   closeBootstrapCredsConfirmModal();
-  const summary = stateRow.querySelector(".srv-summary");
-  summary.textContent = "bootstrapping credentials…";
+  handlers.setStatus("bootstrapping credentials…");
   try {
     const job = await api(envUrl(`/firewalls/${encodeURIComponent(name)}/bootstrap-credentials`), {
       method: "POST",
@@ -2947,19 +2955,20 @@ document.getElementById("fw-bootstrap-creds-confirm-run").addEventListener("clic
     await loadJobs();
     const finished = await waitForJobDone(job.id, { timeoutMs: 30000 });
     if (!finished) {
-      summary.textContent = "Still running — check the Jobs tab for progress.";
+      handlers.setStatus("Still running — check the Jobs tab for progress.");
       return;
     }
     await loadJobs();
     if (finished.status !== "succeeded") {
-      summary.textContent = `Bootstrap failed: ${finished.error || "see the Jobs tab for details"}`;
+      handlers.setStatus(
+        `Bootstrap failed: ${finished.error || "see the Jobs tab for details"}`,
+      );
       return;
     }
-    // Confirm the fix worked by re-running the same refresh that surfaced the failure.
-    const row = stateRow.previousElementSibling;
-    await refreshFirewallState(name, row, stateRow);
+    // Confirm the fix worked by re-running whatever check surfaced the failure.
+    await handlers.verify();
   } catch (e) {
-    summary.textContent = "Bootstrap failed to start: " + e.message;
+    handlers.setStatus("Bootstrap failed to start: " + e.message);
   }
 });
 
@@ -3672,8 +3681,21 @@ async function openDiscoverFirewallsModal() {
   document.getElementById("discover-firewalls-modal").classList.remove("hidden");
 }
 
+// Credential sets available to the Discover Firewalls modal, refreshed per
+// scan so the row/bulk pickers can't offer a set that was deleted meanwhile.
+let discoverFwCredSets = [];
+
+// Fill one row's credential <select>. "" is a real choice (assign later), so
+// the placeholder carries an empty value rather than being a disabled prompt.
+function fillDiscoverCredSelect(select, selected) {
+  select.replaceChildren(new Option("— assign later —", ""));
+  for (const set of discoverFwCredSets) select.appendChild(new Option(set.name, set.name));
+  select.value = discoverFwCredSets.some((c) => c.name === selected) ? selected : "";
+}
+
 function resetDiscoverFirewallsResults() {
   document.getElementById("discover-firewalls-status").textContent = "";
+  document.getElementById("discover-firewalls-cred-row").classList.add("hidden");
   const warn = document.getElementById("discover-firewalls-warnings");
   warn.classList.add("hidden");
   warn.replaceChildren();
@@ -3709,6 +3731,7 @@ document.getElementById("discover-firewalls-form").addEventListener("submit", as
       const match = srvs.find((s) => s.name === primarySrv.name);
       discoverFwPrimaryCredSet = match ? match.credential_set : null;
     }
+    discoverFwCredSets = await fetchCredentialSets();
     const result = await api(`/api/environments/${encodeURIComponent(currentEnv)}/discover-firewalls`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -3750,7 +3773,9 @@ function renderDiscoverFirewallsResults(result) {
     const name = row.querySelector(".disc-name");
     const address = row.querySelector(".disc-address");
     const roleSel = row.querySelector(".disc-role");
-    const note = row.querySelector(".disc-note");
+    const credSel = row.querySelector(".disc-cred");
+    const note = row.querySelector(".disc-note-text");
+    fillDiscoverCredSelect(credSel, discoverFwPrimaryCredSet);
     name.value = s.name;
     address.value = s.address;
     roleSel.value = s.role;
@@ -3767,6 +3792,7 @@ function renderDiscoverFirewallsResults(result) {
       noteText = "already in inventory";
       pick.checked = false;
       pick.disabled = name.disabled = address.disabled = roleSel.disabled = true;
+      credSel.disabled = true;
       row.classList.add("disc-existing");
     } else {
       pick.checked = true;
@@ -3778,10 +3804,31 @@ function renderDiscoverFirewallsResults(result) {
     note.textContent = noteText;
     tbody.appendChild(row);
   }
+  // Credential pickers only mean anything where sets exist to pick.
+  const showCreds = storageEnabled() && discoverFwCredSets.length > 0;
+  for (const cell of table.querySelectorAll(".disc-cred-col")) {
+    cell.classList.toggle("hidden", !showCreds);
+  }
+  const bulkRow = document.getElementById("discover-firewalls-cred-row");
+  bulkRow.classList.toggle("hidden", !showCreds);
+  if (showCreds) {
+    fillDiscoverCredSelect(
+      document.getElementById("discover-firewalls-cred-all"), discoverFwPrimaryCredSet,
+    );
+  }
   table.classList.remove("hidden");
   document.getElementById("discover-firewalls-import").disabled =
     servers.length === already; // nothing new to import
 }
+
+// Bulk picker: stamp its value onto every row that can still be edited. Rows
+// already in inventory are left alone — their select is disabled and nothing
+// about them is being imported.
+document.getElementById("discover-firewalls-cred-all").addEventListener("change", (ev) => {
+  for (const sel of document.querySelectorAll("#discover-firewalls-table tbody .disc-cred")) {
+    if (!sel.disabled) sel.value = ev.target.value;
+  }
+});
 
 document.getElementById("discover-firewalls-import").addEventListener("click", async () => {
   const rows = [...document.querySelectorAll("#discover-firewalls-table tbody tr")];
@@ -3794,20 +3841,25 @@ document.getElementById("discover-firewalls-import").addEventListener("click", a
   importBtn.disabled = true;
   let ok = 0;
   const failed = [];
+  const imported = []; // fed to the credential test pass below
   for (const r of picks) {
     const name = r.querySelector(".disc-name").value.trim();
     const address = r.querySelector(".disc-address").value.trim();
     const role = r.querySelector(".disc-role").value;
     if (!name || !address) { failed.push(name || address || "(unnamed)"); continue; }
-    // Every other imported firewall silently inherits the primary's credential
-    // set; Spark firewalls get their own scenario+credential prompt instead
-    // (see #fw-spark-cred-modal) since Spark needs an expert password the
-    // primary's set likely doesn't carry, and often ships with a distinct
-    // per-device admin password anyway. Cancelling leaves the row unassigned
-    // ("assign later") rather than blocking the rest of the batch.
-    let credentialSet = (storageEnabled() && discoverFwPrimaryCredSet) || undefined;
+    // Whatever this row's own picker ended up on — preselected to the primary's
+    // set, restamped by the bulk picker above, individually overridable.
+    const chosen = (storageEnabled() && r.querySelector(".disc-cred").value) || "";
+    let credentialSet = chosen || undefined;
     let bootstrapAfter = false;
-    if (role === "spark_firewall" && storageEnabled()) {
+    // Spark still gets its own scenario+credential prompt (#fw-spark-cred-modal)
+    // when the chosen set cannot serve it: Spark patching needs an expert
+    // password, and a set without one fails later at use rather than here at
+    // assignment. An explicit pick that DOES carry one is honoured as-is, no
+    // prompt. Cancelling leaves the row unassigned ("assign later") rather than
+    // blocking the rest of the batch.
+    const chosenSet = discoverFwCredSets.find((c) => c.name === chosen);
+    if (role === "spark_firewall" && storageEnabled() && !chosenSet?.has_expert) {
       const result = await resolveSparkFirewallCredentials(name);
       credentialSet = result ? result.credentialSetName : undefined;
       bootstrapAfter = result ? result.scenario === "bootstrap" : false;
@@ -3839,6 +3891,12 @@ document.getElementById("discover-firewalls-import").addEventListener("click", a
       lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if another tab is watching
       if (job.status === "succeeded") {
         ok++;
+        imported.push({ name, row: r, role });
+        // Locked like an already-in-inventory row: the modal now stays open for
+        // the credential test, so nothing should let a second Import-selected
+        // click resubmit a name that already exists.
+        for (const f of r.querySelectorAll("input, select")) f.disabled = true;
+        r.classList.add("disc-existing");
         // Awaited so the operator can copy this row's commands before the
         // next Spark row's prompt/preview overwrites the same modal.
         if (bootstrapAfter) await openSparkBootstrapModal(name);
@@ -3848,13 +3906,84 @@ document.getElementById("discover-firewalls-import").addEventListener("click", a
     } catch (e) { failed.push(`${name}: ${e.message}`); }
   }
   await Promise.all([loadJobs(), loadFirewalls()]);
-  if (failed.length) {
-    toast(`Imported ${ok}. Failed: ${failed.join("; ")}`);
-    importBtn.disabled = false;
-  } else {
-    closeDiscoverFirewallsModal();
-  }
+  if (failed.length) toast(`Imported ${ok}. Failed: ${failed.join("; ")}`);
+  // The modal deliberately no longer closes itself on success: the credential
+  // test below reports per row, and a row that fails on authentication grows
+  // its own Bootstrap button. The operator closes it when done.
+  await testImportedFirewallCredentials(imported);
+  importBtn.disabled = !document.querySelector(
+    "#discover-firewalls-table tbody .disc-pick:not(:disabled)",
+  );
 });
+
+// Post-import credential check: the same POST /firewalls/{name}/state the
+// Firewalls table's Refresh link uses, run once per imported row.
+async function testImportedFirewallCredentials(imported) {
+  if (!imported.length) return;
+  const status = document.getElementById("discover-firewalls-status");
+  const n = imported.length;
+  status.textContent = `Imported ${n} — testing credentials…`;
+  let passed = 0;
+  for (const { name, row, role } of imported) {
+    row.querySelector(".disc-note-text").textContent = "testing credentials…";
+    if (await runDiscoverCredentialTest(name, role, row)) passed++;
+  }
+  status.textContent =
+    `Imported ${n}, ${passed} authenticated` +
+    (passed === n
+      ? ". Close when you're done."
+      : ` — use Bootstrap credentials on the ${n - passed} that failed.`);
+}
+
+// One row's credential test; returns true when the firewall authenticated.
+// The host-key check comes first for the same reason it does in
+// refreshFirewallState: a changed host key fails BEFORE authentication is
+// attempted, so offering to bootstrap credentials there sends the operator
+// down the wrong path. Loose /auth/i match rather than a literal string —
+// paramiko's exact wording isn't a stable contract to pin one to.
+async function runDiscoverCredentialTest(name, role, row) {
+  const note = row.querySelector(".disc-note-text");
+  const btn = row.querySelector(".disc-bootstrap");
+  btn.classList.add("hidden");
+  const extra = await operationCredentials(name, "test credentials");
+  if (extra === null) { note.textContent = "credential prompt cancelled"; return false; }
+  try {
+    const state = await api(envUrl(`/firewalls/${encodeURIComponent(name)}/state`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(extra),
+    });
+    note.textContent = state.version ? `credentials OK — ${state.version}` : "credentials OK";
+    row.classList.remove("disc-review");
+    return true;
+  } catch (e) {
+    cacheEvictCreds(name); // a cached wrong/stale password re-prompts next time
+    note.textContent = "credential test failed: " + e.message;
+    if (HOST_KEY_CHANGED_RE.test(e.message)) {
+      note.textContent += " — accept the new host key from the Firewalls table";
+    } else if (/auth/i.test(e.message)) {
+      btn.classList.remove("hidden");
+      btn.onclick = () => startDiscoverBootstrap(name, role, row);
+    }
+    return false;
+  }
+}
+
+// Bootstrap from a discovery row. Full Gaia runs the same confirm-gated
+// Management-API push the Firewalls table uses and re-tests on success; Spark
+// has no push path at all (services/gateway_bootstrap.py), so it shows the
+// commands to paste and re-tests once that modal is closed.
+async function startDiscoverBootstrap(name, role, row) {
+  if (role === "spark_firewall") {
+    await openSparkBootstrapModal(name);
+    await runDiscoverCredentialTest(name, role, row);
+    return;
+  }
+  openBootstrapCredsConfirm(name, {
+    setStatus: (text) => { row.querySelector(".disc-note-text").textContent = text; },
+    verify: () => runDiscoverCredentialTest(name, role, row),
+  });
+}
 
 document.getElementById("discover-firewalls-btn").addEventListener("click", openDiscoverFirewallsModal);
 document.getElementById("discover-firewalls-close").addEventListener("click", closeDiscoverFirewallsModal);
@@ -5032,7 +5161,7 @@ async function pollJobs() {
 (async function init() {
   initTabs();
   renderPanelHelp();
-  updateHeaderCondensed(); // in case the page loads already scrolled (e.g. a #tab- deep link)
+  updateHeaderScrolled(); // in case the page loads already scrolled (e.g. a #tab- deep link)
   await initAuth(); // establish session state (logout control, idle timer) first
   const envs = await loadEnvironments(); // must resolve currentEnv before env-scoped loads
   await refreshStatus();
