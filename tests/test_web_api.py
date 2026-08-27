@@ -350,6 +350,7 @@ def test_bootstrap_credentials_become_the_default(client: TestClient) -> None:
         "/api/env/default/credentials",
         json={
             "name": "primary",
+            "ssh_username": "admin",
             "ssh_password": "pw",
             "expert_password": "expert-pw",
             "default_if_none": True,
@@ -366,6 +367,7 @@ def test_bootstrap_credentials_become_the_default(client: TestClient) -> None:
         "/api/env/default/credentials",
         json={
             "name": "backup",
+            "ssh_username": "admin",
             "ssh_password": "pw",
             "expert_password": "expert-pw",
             "default_if_none": True,

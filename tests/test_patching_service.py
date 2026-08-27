@@ -1390,7 +1390,13 @@ def test_set_in_other_environment_does_not_satisfy_unassigned_server(
     # A credential set in another environment must NOT satisfy an unassigned
     # server here — resolution is strictly per-server assignment.
     store.insert_environment("other")
-    creds.put_set("other", "primary", ssh_password="other-env-pw", expert_password="expert-pw")
+    creds.put_set(
+        "other",
+        "primary",
+        ssh_username="admin",
+        ssh_password="other-env-pw",
+        expert_password="expert-pw",
+    )
     registry = EnvironmentRegistry()
     registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
     service = PatchingService(

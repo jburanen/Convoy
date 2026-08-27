@@ -174,8 +174,11 @@ class CredentialStore:
         carries must be one, not both, and any set carrying one also needs an
         expert-mode password — every stored host is a management server or a
         firewall, either of which may need to escalate (see
-        .claude/memory/gaia-shell-posture.md). A set that is only an API key
-        needs neither."""
+        .claude/memory/gaia-shell-posture.md) — and an ``ssh_username``, since
+        that is the account it logs in as. A set that is only an API key needs
+        none of the three, which is what keeps an API-only environment's
+        management sets valid while its firewall sets (still SSH) are held to
+        the full requirement."""
         existing = self._store.get_credential_set_by_name(environment, name)
 
         def _keep(new_plain: str | None, current_ct: bytes | None) -> bytes | None:
@@ -216,6 +219,23 @@ class CredentialStore:
             # that can log in over SSH at all, not conditionally per host/role:
             # simpler, and there is no other kind of host to exempt.
             raise CredentialError("a credential set needs an expert-mode password")
+        if has_ssh_secret and not (ssh_username or "").strip():
+            # The set's username is what actually logs in (see
+            # services/common.py's default_client_factory), so a set carrying an
+            # SSH secret without one silently falls back to the host's own
+            # ``Host.ssh_user`` — a field the UI hides and stops maintaining the
+            # moment credential storage is enabled, so it holds whatever stale
+            # value happened to be there. That is the same drift
+            # .claude/memory/ssh-username-source-of-truth.md was written about,
+            # through the hole that fix left open: it made the set authoritative
+            # but left the set free to say nothing. Operator-specified
+            # 2026-08-27 after a Spark gateway kept logging in as `admin`
+            # despite its assigned set naming a different account.
+            raise CredentialError(
+                "a credential set with SSH credentials needs an SSH username — it is "
+                "what logs in, and leaving it blank falls back to the host's own stale "
+                "SSH user"
+            )
         if not has_ssh_secret and api_key_ct is None:
             # Nothing at all in the set. A set carrying only an API key is
             # allowed and useful (an API-only environment's management servers,
