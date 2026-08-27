@@ -19,6 +19,7 @@ Load this at the start of each session; read a linked file when its hook looks r
 - [Provisioning command order](provisioning-command-order.md) — RBA role assignment must precede the shell→bash switch
 - [MDS discovery command](mds-discovery-command.md) — locate MDSDIR via `/opt/CPmds-R*` glob, don't trust any pre-set env var over SSH exec; SmartEvent on MDS confirmed via API login domain="Global"
 - [Environment kind (SMS vs MDS)](environment-kind.md) — `environments.is_mds` flag, set via UI checkbox, drives command selection (not host role)
+- [Smart-1 Cloud](smart-1-cloud.md) — hosted management: three fields off one S1C screen, api-key login, stored as a normal management server row with the tenant UUID in `mgmt_api_context`
 - [Firewall discovery domain picker](firewall-discovery-domain-picker.md) — no source-server picker (one primary/env); MDS picks a Domain via `show-domains` (unverified against live gear)
 - [ClusterXL live state](clusterxl-live-state.md) — Firewalls panel: role is live (cphaprob, every refresh); cluster name is static, Mgmt-API-only + manual fallback, stored on FirewallRow
 - [No SSH for cluster name](no-ssh-for-cluster-name.md) — cluster object name is Mgmt-API-only, ever; manual entry is the only valid fallback, never SSH/CLI

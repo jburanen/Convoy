@@ -171,6 +171,8 @@ class EnvHostRow(BaseModel):
     notes: str | None = None
     # Assigned credential set (credential_sets.id), or None when unassigned.
     credential_set_id: str | None = None
+    # Smart-1 Cloud tenant UUID; None for on-prem servers. See migration v29.
+    mgmt_api_context: str | None = None
 
 
 class FirewallRow(BaseModel):
@@ -596,6 +598,15 @@ _MIGRATIONS: tuple[str, ...] = (
         last_failed_at  TEXT NOT NULL
     );
     """,
+    # v29: the Management API path segment a Smart-1 Cloud tenant is reached
+    # through (https://<prefix>.maas.checkpoint.com/<tenant-uuid>/web_api).
+    # NULL for every on-prem server, whose API answers on the host itself —
+    # which is why this is a nullable column on env_hosts rather than a separate
+    # S1C table: an S1C tenant IS the environment's management server as far as
+    # discovery, packages and every other API call are concerned.
+    """
+    ALTER TABLE env_hosts ADD COLUMN mgmt_api_context TEXT;
+    """,
 )
 
 
@@ -911,11 +922,11 @@ class Store:
         with self._connect() as conn:
             conn.execute(
                 "INSERT INTO env_hosts (id, environment, name, address, role, ssh_port,"
-                " ssh_user, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                " ssh_user, notes, mgmt_api_context) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (environment, name) DO UPDATE SET"
                 " address = excluded.address, role = excluded.role,"
                 " ssh_port = excluded.ssh_port, ssh_user = excluded.ssh_user,"
-                " notes = excluded.notes",
+                " notes = excluded.notes, mgmt_api_context = excluded.mgmt_api_context",
                 (
                     rec.id,
                     rec.environment,
@@ -925,6 +936,7 @@ class Store:
                     rec.ssh_port,
                     rec.ssh_user,
                     rec.notes,
+                    rec.mgmt_api_context,
                 ),
             )
 
@@ -1545,6 +1557,7 @@ def _env_host_from_row(row: sqlite3.Row) -> EnvHostRow:
         ssh_user=row["ssh_user"],
         notes=row["notes"],
         credential_set_id=row["credential_set_id"],
+        mgmt_api_context=row["mgmt_api_context"],
     )
 
 

@@ -79,6 +79,7 @@ from ..services.provisioning import (
     render_gaia_user_commands,
     render_mgmt_api_commands,
 )
+from ..services.s1c import Smart1CloudService
 from ..services.spark_patching import SparkPatchingService
 from ..store import JobEvent, JobRecord, JobStatus, PackageRecord, Store, utcnow
 from ..transport.ssh import forget_host_key, set_known_hosts_path
@@ -368,6 +369,17 @@ class EnvironmentTypeIn(BaseModel):
     api_only: bool
 
 
+class Smart1CloudConnectIn(BaseModel):
+    """The three facts an operator copies off one Smart-1 Cloud screen
+    (Settings → API & SmartConsole). See services/s1c.py."""
+
+    # Accepts the bare prefix, the full hostname, or the whole login URL the
+    # portal prints — normalize_maas_host sorts it out.
+    maas_prefix: str = Field(min_length=1)
+    tenant_uuid: str = Field(min_length=1)
+    api_key: SecretStr
+
+
 class SkipVerifyDefaultIn(BaseModel):
     skip_verify_by_default: bool
 
@@ -628,6 +640,14 @@ def create_app(
             runner=runner,
             store=store,
         )
+        smart1_cloud = Smart1CloudService(
+            registry=registry,
+            env_manager=env_manager,
+            credentials=credentials,
+            store=store,
+            # Same test-injection knob DiscoveryService uses below.
+            mgmt_client_factory=mgmt_client_factory,
+        )
         discovery = DiscoveryService(registry=registry, mgmt_client_factory=mgmt_client_factory)
         api_access = ApiAccessService(registry=registry, runner=runner)
         gateway_bootstrap = GatewayBootstrapService(registry=registry, store=store, runner=runner)
@@ -665,6 +685,7 @@ def create_app(
         app.state.cred_jobs = cred_jobs
         app.state.prov_jobs = prov_jobs
         app.state.primary_connect = primary_connect
+        app.state.smart1_cloud = smart1_cloud
         app.state.discovery = discovery
         app.state.api_access = api_access
         app.state.gateway_bootstrap = gateway_bootstrap
@@ -863,6 +884,11 @@ def _prov_jobs(request: Request) -> ProvisioningJobService:
 
 def _primary_connect(request: Request) -> PrimaryConnectService:
     service: PrimaryConnectService = request.app.state.primary_connect
+    return service
+
+
+def _smart1_cloud(request: Request) -> Smart1CloudService:
+    service: Smart1CloudService = request.app.state.smart1_cloud
     return service
 
 
@@ -1426,6 +1452,43 @@ def _register_routes(app: FastAPI) -> None:
                 job_id, requested_by=_current_user(request)
             )
         }
+
+    # -- Smart-1 Cloud (hosted management: Management API only, no SSH) -------
+
+    @app.get("/api/environments/{env}/smart1cloud")
+    def smart1cloud(env: str, request: Request) -> dict[str, Any] | None:
+        """The environment's stored tenant, or null before it has connected.
+        Secret-free — ``has_api_key`` says whether a key is stored, never what
+        it is."""
+        _require_env(request, env)
+        conn = _smart1_cloud(request).connection(env)
+        if conn is None:
+            return None
+        return {
+            "name": conn.name,
+            "maas_host": conn.maas_host,
+            "tenant_uuid": conn.tenant_uuid,
+            "credential_set": conn.credential_set,
+            "has_api_key": conn.has_api_key,
+            "login_url": conn.login_url,
+        }
+
+    @app.post("/api/environments/{env}/smart1cloud/connect")
+    def connect_smart1cloud(env: str, body: Smart1CloudConnectIn, request: Request) -> JobRecord:
+        """Verifies the tenant details by logging in, then stores them. Runs
+        synchronously (services/s1c.py) and returns the finished job — there is
+        no device to wait on, just one HTTPS round trip."""
+        _require_env(request, env)
+        try:
+            return _smart1_cloud(request).submit_connect(
+                env,
+                maas_prefix=body.maas_prefix,
+                tenant_uuid=body.tenant_uuid,
+                api_key=body.api_key.get_secret_value(),
+                triggered_by=_current_user(request),
+            )
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
 
     # -- Management API accessibility diagnose/repair (SSH) --------------------
     # Proactive follow-up to Connect to Primary above: the UI calls diagnose

@@ -281,6 +281,7 @@ class EnvironmentManager:
         ssh_user: str,
         ssh_port: int = 22,
         notes: str | None = None,
+        mgmt_api_context: str | None = None,
     ) -> None:
         """Add or update a management server. Validates via the Host model. A newly
         added server inherits the environment's default credential set (if one is
@@ -289,7 +290,12 @@ class EnvironmentManager:
         parsed_role = _parse_management_role(role)
         # Reuse Host for field validation (name/address non-empty, port range).
         host = Host(
-            name=name, address=address, role=parsed_role, ssh_port=ssh_port, ssh_user=ssh_user
+            name=name,
+            address=address,
+            role=parsed_role,
+            ssh_port=ssh_port,
+            ssh_user=ssh_user,
+            mgmt_api_context=mgmt_api_context,
         )
         is_new = self._store.get_env_host(environment, host.name) is None
         if is_new and self._store.get_firewall(environment, host.name) is not None:
@@ -306,6 +312,7 @@ class EnvironmentManager:
                 ssh_port=host.ssh_port,
                 ssh_user=host.ssh_user,
                 notes=notes,
+                mgmt_api_context=host.mgmt_api_context,
             )
         )
         if is_new:
@@ -340,6 +347,7 @@ def _row_from_host(environment: str, host: Host) -> EnvHostRow:
         ssh_port=host.ssh_port,
         ssh_user=host.ssh_user,
         notes=host.notes,
+        mgmt_api_context=host.mgmt_api_context,
     )
 
 
@@ -352,6 +360,9 @@ def _host_from_row(row: EnvHostRow | FirewallRow) -> Host:
         ssh_user=row.ssh_user,
         notes=row.notes,
         credential_set_id=row.credential_set_id,
+        # FirewallRow has no such column — only a management server can be an
+        # S1C tenant, and getattr keeps this one conversion serving both.
+        mgmt_api_context=getattr(row, "mgmt_api_context", None),
     )
 
 

@@ -246,6 +246,24 @@
       </table>
     </section>
 
+    <!-- ====== Smart-1 Cloud: REPLACES Management Servers above for an ======
+         environment whose type is Smart-1 Cloud (updateApiOnlyVisibility in
+         app.js shows exactly one of the two). Check Point hosts the management
+         server, so there is no SSH to it, nothing to bootstrap, no Connect to
+         Primary and no estate to discover — one tenant, reached by Management
+         API key, is the whole of this environment's management plane. -->
+    <section id="smart1cloud" class="hidden">
+      <div class="section-head">
+        <h2>Smart-1 Cloud</h2>
+        <div class="section-head-actions">
+          <button type="button" id="s1c-connect-btn" class="small">Connect to Smart-1 Cloud</button>
+          <button type="button" class="help-btn" data-help="smart1cloud" title="About this panel" aria-label="About this panel">?</button>
+        </div>
+      </div>
+      <p class="hint" id="hint-smart1cloud"></p>
+      <div id="s1c-status" class="prov-notes"></div>
+    </section>
+
   </div>
 
   <!-- ┌────────────────────────── TAB 2: Packages ──────────────────────────┐ -->
@@ -550,6 +568,38 @@
       <input type="text" id="env-add-name" placeholder="new environment name (e.g. Corp HQ)" required>
       <button type="submit">Create</button>
     </form>
+  </div>
+</div>
+
+<!-- ============ Connect to Smart-1 Cloud modal ============================= -->
+<!-- Collects the three facts printed on one Smart-1 Cloud screen (Settings →
+     API & SmartConsole). Connecting verifies them against the tenant before
+     anything is stored, so a mistyped UUID fails here rather than later as a
+     confusing 404 during discovery. See services/s1c.py. -->
+<div id="s1c-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="s1c-modal-title">
+  <div class="modal-card narrow">
+    <div class="modal-head">
+      <h2 id="s1c-modal-title">Connect to Smart-1 Cloud</h2>
+      <button id="s1c-modal-close" class="small" title="Close">✕</button>
+    </div>
+    <p class="hint">
+      All three come off one screen in Smart-1 Cloud — <strong>Settings → API &amp;
+      SmartConsole</strong>. The login request shown there reads
+      <code>https://&lt;prefix&gt;.maas.checkpoint.com/&lt;tenant UUID&gt;/web_api/login</code>:
+      the first two fields below are those two pieces (pasting the whole URL into
+      the prefix works too), and the third is the Management API key from the same
+      screen. The key is stored encrypted and never displayed again.
+    </p>
+    <form id="s1c-form" class="stacked">
+      <label>maas URL prefix<input type="text" id="s1c-prefix" placeholder="e.g. acme-a1b2c3d4" required></label>
+      <label>Tenant UUID<input type="text" id="s1c-tenant" placeholder="e.g. 00000000-1111-2222-3333-444444444444" required></label>
+      <label>Management API key<input type="password" id="s1c-key" autocomplete="new-password" required></label>
+      <div class="cred-modal-actions">
+        <button type="submit" id="s1c-submit">Connect</button>
+        <button type="button" id="s1c-cancel" class="secondary">Cancel</button>
+      </div>
+    </form>
+    <div id="s1c-modal-status" class="prov-notes hidden"></div>
   </div>
 </div>
 
