@@ -170,6 +170,22 @@ class EnvironmentManager:
             raise InventoryError(f"unknown environment: {name!r}")
         self.rebuild()
 
+    def set_environment_type(self, name: str, *, is_mds: bool, api_only: bool) -> None:
+        """Set both kind and access mode together.
+
+        The UI presents these as ONE choice — SmartCenter (SMS), Multi-Domain
+        (MDS) or Smart-1 Cloud — so they have to move together: applying them as
+        two separate calls leaves an environment briefly (or, if the second call
+        fails, permanently) in a combination the operator never picked. Both
+        setters remain for the two existing endpoints; this rebuilds once, at
+        the end, rather than once per flag.
+        """
+        if not self._store.set_environment_kind(name, is_mds):
+            raise InventoryError(f"unknown environment: {name!r}")
+        if not self._store.set_environment_access(name, api_only):
+            raise InventoryError(f"unknown environment: {name!r}")
+        self.rebuild()
+
     def set_skip_verify_default(self, name: str, skip: bool) -> None:
         """Set the Management tab's default for the per-install "skip verify"
         checkbox — purely a UI default, doesn't change what any command does."""

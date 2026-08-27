@@ -359,6 +359,15 @@ class EnvironmentAccessIn(BaseModel):
     api_only: bool
 
 
+class EnvironmentTypeIn(BaseModel):
+    """Both flags at once — the UI offers them as a single three-way choice
+    (SmartCenter / Multi-Domain / Smart-1 Cloud) rather than two checkboxes,
+    so it has to apply them together. See the /type endpoint."""
+
+    is_mds: bool
+    api_only: bool
+
+
 class SkipVerifyDefaultIn(BaseModel):
     skip_verify_by_default: bool
 
@@ -1124,6 +1133,23 @@ def _register_routes(app: FastAPI) -> None:
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
         return {"is_mds": body.is_mds}
+
+    @app.post("/api/environments/{env}/type")
+    def set_environment_type(
+        env: str, body: EnvironmentTypeIn, request: Request
+    ) -> dict[str, bool]:
+        """Set an environment's kind and access mode as one operation.
+
+        The two are separate concepts (is_mds decides which command variants
+        run; api_only decides whether SSH to management-plane hosts is allowed
+        at all) and keep their own endpoints, but the UI offers a single
+        three-way choice over them — so it needs to apply both without an
+        intermediate state that is neither of the two."""
+        try:
+            _envmgr(request).set_environment_type(env, is_mds=body.is_mds, api_only=body.api_only)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        return {"is_mds": body.is_mds, "api_only": body.api_only}
 
     @app.post("/api/environments/{env}/access")
     def set_environment_access(

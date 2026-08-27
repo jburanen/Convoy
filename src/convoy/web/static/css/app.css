@@ -1035,7 +1035,14 @@ button.link-btn.fw-name-link {
   padding: 0.5rem 0;
   border-bottom: 1px solid var(--border);
 }
-.env-manage-name { display: flex; gap: 0.5rem; }
+.env-manage-name { display: flex; gap: 0.5rem; align-items: center; }
+/* The name grows, the type picker stays its natural width beside it — the two
+   read as one line describing the environment, which is the point of folding
+   the old MDS/API-only checkboxes into it. */
+.env-manage-name .env-rename-input { flex: 1 1 auto; min-width: 8rem; }
+.env-manage-name .env-type-select { flex: 0 0 auto; }
+/* Explains whichever type is selected, in place of the per-checkbox hints. */
+.env-type-note { margin: 0.15rem 0 0.4rem; }
 .env-manage-name input { flex: 1; }
 .env-storage-toggle {
   display: flex;

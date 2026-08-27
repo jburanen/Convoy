@@ -280,6 +280,33 @@ def test_set_environment_kind_unknown_environment_404s(client: TestClient) -> No
     assert resp.status_code == 404
 
 
+def test_set_environment_type_applies_both_flags_at_once(client: TestClient) -> None:
+    """The UI offers one three-way choice (SMS / MDS / Smart-1 Cloud) over two
+    flags, so it needs to set both in a single call — applying them as two
+    sequential requests can leave an environment in a combination the operator
+    never picked, and a failure between them makes that permanent."""
+    client.post("/api/environments", json={"name": "cloud"})
+
+    # Smart-1 Cloud: API-only, and NOT multi-domain.
+    resp = client.post("/api/environments/cloud/type", json={"is_mds": False, "api_only": True})
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"is_mds": False, "api_only": True}
+    env = next(e for e in client.get("/api/environments").json() if e["name"] == "cloud")
+    assert (env["is_mds"], env["api_only"]) == (False, True)
+
+    # ...and switching to MDS clears api_only in the same call, rather than
+    # leaving the environment briefly both.
+    resp = client.post("/api/environments/cloud/type", json={"is_mds": True, "api_only": False})
+    assert resp.status_code == 200, resp.text
+    env = next(e for e in client.get("/api/environments").json() if e["name"] == "cloud")
+    assert (env["is_mds"], env["api_only"]) == (True, False)
+
+
+def test_set_environment_type_rejects_an_unknown_environment(client: TestClient) -> None:
+    resp = client.post("/api/environments/nope/type", json={"is_mds": True, "api_only": False})
+    assert resp.status_code == 404
+
+
 def test_set_environment_access_toggles_api_only(client: TestClient) -> None:
     client.post("/api/environments", json={"name": "cloud-mgmt"})
     resp = client.post("/api/environments/cloud-mgmt/access", json={"api_only": True})
