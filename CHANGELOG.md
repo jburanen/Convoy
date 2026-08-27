@@ -9,6 +9,20 @@ Known issues and planned work live under Roadmap / Punch List in
 [README.md](README.md); a fix that closes an item there moves it into this file
 in the same commit as the fix and the version bump.
 
+## v1.0.0-rc.1
+
+**First release candidate, and the first release that is a container rather than a checkout.** `docker-compose.yml` now pulls `ghcr.io/jburanen/convoy` instead of building: an operator takes that one file and runs `docker compose up -d`. No clone, no `--build`, no toolchain.
+
+Three things had to change for that to actually work on a host that has never seen this repository:
+
+**The image carries its own config.** `Config.load()` treats a missing config file as fatal, and v0.79.5 fixed that for a clone by seeding `data/config.yaml` in `scripts/deploy.sh` — which only ever helps a deployment made from a checkout. The image now ships `examples/config.example.yaml` and seeds the data volume from it on first start (`docker-entrypoint.sh`), so the seeding lives in one place that covers both paths, and `deploy.sh`'s copy is gone. The entrypoint also reports an unwritable volume as itself rather than letting it surface as an unexplained health-check timeout — the same first-run trap, one layer down.
+
+**Data lives in a named volume.** `/data` in the image is owned by uid 1001, the account the container runs as, and Docker initializes a fresh named volume with the image's ownership — so a bare `docker compose up -d` works on any host. A bind-mounted host directory cannot do that: it arrives owned by whoever ran compose, and the container gets `Permission denied`. That is why the dev-host deployment has always needed `DEPLOY_UID`/`DEPLOY_GID` from `scripts/deploy.sh`. The compose file documents the bind-mount alternative, and how to back the volume up, for anyone who wants a directory they can tar.
+
+**Building from source is now its own file.** `docker-compose.dev.yml` keeps the `build: .` and the `./data` bind mount the test host uses; `scripts/deploy.sh` passes `-f` on every compose call. Nothing about the dev workflow changes — the split just means the file end users run has no build stanza to ignore.
+
+`.github/workflows/release.yml` publishes on any `vX.Y.Z` tag: pytest, ruff and mypy first, then build and push `:<version>` and `:latest`. A tag whose code fails the suite never becomes an image anyone can pull. The GitHub Release itself is created by hand afterwards, deliberately — a release pointing at an image nobody has run is a claim, not a result
+
 ## v0.82.1
 
 No API key field in the credential-set editor on a Smart-1 Cloud environment (operator-specified 2026-08-27). The one API key such an environment has is the tenant's, captured and stored by Connect to Smart-1 Cloud in v0.82.0 — offering the field here only invited a second, unused copy of a management credential inside a set that exists to log in to *firewalls* over SSH, where it is never used. The field is hidden, `api_key` is never sent from the hidden input, a new set now requires an SSH password or private key (an API-key-only set is no longer something this form can create), and the hint says where the Management API key actually lives. The SSH username label drops its "or the API user" wording, which no longer describes anything.

@@ -3,6 +3,11 @@
 # Run this ON the host from inside the checkout:  ./scripts/deploy.sh
 # (Claude invokes it over SSH so no manual git pull is needed.)
 #
+# This builds from the checkout via docker-compose.dev.yml. docker-compose.yml
+# is the file END USERS run: it pulls the published image and needs no clone,
+# no build and no this script. Every compose call below therefore passes -f
+# explicitly, or it would deploy the published image instead of the source.
+#
 # --reset (dev only): wipe the app's own state before deploying — ./data's
 # config.yaml, the DB (environments, servers, firewalls, credentials,
 # sessions, jobs/job history) and uploaded packages. ./data/certs and .env are
@@ -14,6 +19,9 @@
 # back-to-built-in-defaults wipe (no TLS, no LDAP, basic auth admin/admin).
 # Both are irreversible and prompt for confirmation unless -y/--yes is given.
 set -euo pipefail
+
+# Build-from-source stack. See the note above on why this is not the default file.
+COMPOSE="docker compose -f docker-compose.dev.yml"
 
 # Refuse to run as root. DEPLOY_UID below is taken from `id -u` and becomes the
 # container's `user:` in docker-compose.yml, so `sudo ./scripts/deploy.sh` would
@@ -83,7 +91,7 @@ if [ "$RESET" = "1" ]; then
   fi
 
   echo ">> stopping the stack (so nothing has ./data open while it's wiped)"
-  docker compose down || true
+  $COMPOSE down || true
 
   if [ "$RESET_ALL" = "1" ]; then
     echo ">> wiping ./data in full (certs included) and .env"
@@ -105,17 +113,10 @@ git pull --ff-only
 echo ">> ensure data dir"
 mkdir -p data
 
-# Seed the config on a first deploy (and after a --reset, which deletes it).
-# Config.load() treats a missing /data/config.yaml as fatal, so without this a
-# fresh checkout builds and starts a container that then dies on boot -- the
-# failure surfaces as an unexplained health-check timeout rather than as
-# "you have no config". Only ever creates what is absent: an existing
-# config.yaml is operator-edited state and is never overwritten, which is also
-# what makes this safe to run on every deploy.
-if [ ! -f data/config.yaml ]; then
-  echo ">> no data/config.yaml — seeding from examples/config.example.yaml"
-  cp examples/config.example.yaml data/config.yaml
-fi
+# NOTE: seeding data/config.yaml on a first deploy is no longer done here. The
+# image carries its own examples/config.example.yaml and seeds the data volume
+# from it on first start (docker-entrypoint.sh) — which covers a published-image
+# deployment too, where there is no checkout to copy from. One code path.
 
 # The container runs as this uid:gid (docker-compose.yml's `user:`) so the
 # bind-mounted ./data above — just created owned by whoever is running this
@@ -126,7 +127,7 @@ DEPLOY_UID="$(id -u)"
 DEPLOY_GID="$(id -g)"
 
 echo ">> build + (re)start"
-docker compose up -d --build
+$COMPOSE up -d --build
 
 echo ">> wait for health"
 for i in $(seq 1 30); do
@@ -148,5 +149,5 @@ for i in $(seq 1 30); do
 done
 
 echo "!! container did not become healthy in time" >&2
-docker compose logs --tail=50 web >&2 || true
+$COMPOSE logs --tail=50 web >&2 || true
 exit 1
