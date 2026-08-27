@@ -107,8 +107,32 @@ if [ "$RESET" = "1" ]; then
   fi
 fi
 
+# bash reads a script incrementally, so `git pull` can rewrite the very file it
+# is executing and the shell carries on at a byte offset into the NEW text --
+# running a spliced mixture of the two versions. That is not theoretical: the
+# v1.0.0-rc.1 deploy hit it. This script's compose file moved to
+# docker-compose.dev.yml in that same commit, the still-running old copy called
+# plain `docker compose`, and it therefore drove the NEW docker-compose.yml --
+# which pulls a published image -- against a registry that had nothing in it
+# yet. Nothing was harmed (the pull failed before anything was recreated), but
+# the deploy was a no-op that needed a second run to take.
+#
+# So: if the pull changed this script, hand over to the new one. Deliberately
+# without the original arguments -- any --reset already ran, above, before the
+# pull, and re-running it would prompt for confirmation a second time (or, with
+# -y, wipe again). The sentinel makes a loop impossible even if something else
+# rewrites the file mid-run.
+script_cksum() { cksum "$0" | cut -d' ' -f1,2; }
+before_cksum="$(script_cksum)"
+
 echo ">> git pull"
 git pull --ff-only
+
+if [ "$before_cksum" != "$(script_cksum)" ] && [ "${CONVOY_DEPLOY_REEXEC:-0}" != "1" ]; then
+  echo ">> deploy.sh changed in that pull — re-running the updated script"
+  export CONVOY_DEPLOY_REEXEC=1
+  exec "$0"
+fi
 
 echo ">> ensure data dir"
 mkdir -p data
