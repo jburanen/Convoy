@@ -51,7 +51,11 @@ Supporting features, all in the UI:
 
 ## 🚀 Run it (Docker Compose)
 
-No clone and no build. Take the compose file and start it:
+First run seeds `config.yaml` into the volume, then seeds environments from it (plus any inventory files) into the database; after that the database is authoritative and environments are managed in the UI. On an empty inventory the UI opens on the **Provisioning** tab.
+
+#### Basic Testing
+
+Grab the compose file and start it in the most basic form without credential storage and using built-in single-user authentication:
 
 ```bash
 curl -O https://raw.githubusercontent.com/jburanen/Convoy/main/docker-compose.yml
@@ -60,21 +64,16 @@ docker compose up -d
 
 That pulls `ghcr.io/jburanen/convoy:latest` and serves the UI on **http://localhost:8080**, with a default login of `admin` / `admin` that you should change immediately. Application state lives in a Docker named volume (`convoy-data`) — the compose file's comments cover pinning a release with `CONVOY_TAG`, using a bind mount instead, and backing the volume up.
 
-### Production-capable
+#### Production Capable
 
-The two lines above give you a working instance that **cannot store credentials**: without a master key every action prompts for them instead. Generate one into the compose file before the first start:
+Modify the compose file to include a randomly generated master key in order to enable credential storage, still using the basic single-user auth:
 
-```bash
-curl -O https://raw.githubusercontent.com/jburanen/Convoy/main/docker-compose.yml
-sed -i "s|CONVOY_MASTER_KEY: .*|CONVOY_MASTER_KEY: \"$(openssl rand -base64 48 | tr -d '[:space:]')\"|" docker-compose.yml
-docker compose up -d
-```
 
-> **Back that key up somewhere else, now.** It is the only thing that can decrypt the credential store — lose it and every stored credential is unrecoverable, and no amount of access to the volume gets them back. It also means this `docker-compose.yml` is now a secret: `chmod 600` it, keep it out of version control, and do **not** re-run the `curl` above (it would overwrite the file, taking the key with it). To keep the key out of the compose file instead, put `CONVOY_MASTER_KEY=…` in a `.env` beside it — the compose file reads that too, and `curl -O` cannot clobber it.
 
-One more setting matters for a real deployment: **`CONVOY_LDAP_*`** turns on LDAP/AD authentication (see [.env.example](.env.example) for the full list). Credential storage requires an authentication gate, so a master key alone, with basic auth still in front, leaves storage off.
+Two settings are worth adding before you store anything real. Put them in a `.env` file next to `docker-compose.yml` (see [.env.example](.env.example) for the full list):
 
-First run seeds `config.yaml` into the volume, then seeds environments from it (plus any inventory files) into the database; after that the database is authoritative and environments are managed in the UI. On an empty inventory the UI opens on the **Provisioning** tab.
+- **`CONVOY_MASTER_KEY`** — encrypts the credential store. Without it, credentials cannot be stored at all and every action prompts for them instead. Generate one with `openssl rand -base64 48`, and keep a copy: **lose it and every stored credential is unrecoverable.**
+- **`CONVOY_LDAP_*`** — LDAP/AD authentication. Credential storage requires an authentication gate, so basic auth alone leaves storage off.
 
 > **FOR DEVELOPMENT DEPLOYMENTS**  
 > To run from a checkout instead, `./scripts/deploy.sh` builds the image from source via `docker-compose.dev.yml` (bind-mounting `./data`), sets `DEPLOY_UID`/`DEPLOY_GID` for you, then pulls, rebuilds and health-checks. `./scripts/deploy.sh --reset` (dev only) wipes `./data` and `.env` first — every environment, server, firewall, credential, package, and job history entry, plus every runtime setting back to its built-in default — then deploys clean. Prompts for confirmation unless you also pass `-y`/`--yes`.
