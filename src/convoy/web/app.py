@@ -4,9 +4,9 @@ The UI is plain HTML/CSS/JS served from ``web/static/`` (no build step, no
 templating — see .claude/memory/patching-web-design.md). Routes here stay thin:
 business logic lives in ``services/``.
 
-Run: ``uvicorn chkp_cpuse_orch.web.app:app --host 0.0.0.0 --port 8080``, or
-``python -m chkp_cpuse_orch.web`` (see web/__main__.py) for optional, off-by-default
-HTTPS via ``CHKP_CPUSE_SSL_CERTFILE`` / ``CHKP_CPUSE_SSL_KEYFILE``.
+Run: ``uvicorn convoy.web.app:app --host 0.0.0.0 --port 8080``, or
+``python -m convoy.web`` (see web/__main__.py) for optional, off-by-default
+HTTPS via ``CONVOY_SSL_CERTFILE`` / ``CONVOY_SSL_KEYFILE``.
 
 Startup wiring (lifespan): config → Store → PackageStore → CredentialStore
 (if the master key env is set — otherwise credential/patching endpoints return
@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import os
 import shutil
 import uuid
 from collections.abc import AsyncIterator, Callable
@@ -45,6 +44,7 @@ from ..credentials import (
     JobCredentialVault,
     load_master_key,
 )
+from ..envcompat import compat_env
 from ..errors import (
     AuthError,
     CDTError,
@@ -111,7 +111,7 @@ MAX_JOBS_PAGE = 500
 # filling /data, which also holds the SQLite DB and the job archive, not to
 # second-guess a legitimate package. Overridable for deployments with unusually
 # large images.
-MAX_UPLOAD_BYTES = int(os.environ.get("CHKP_CPUSE_MAX_UPLOAD_BYTES") or 16 * 1024**3)
+MAX_UPLOAD_BYTES = int(compat_env().get("CONVOY_MAX_UPLOAD_BYTES") or 16 * 1024**3)
 # Keep this much free beyond the incoming file, so an upload that just fits
 # doesn't leave the DB with nowhere to write.
 _UPLOAD_FREE_SPACE_MARGIN = 1 * 1024**3
@@ -562,7 +562,7 @@ def create_app(
                 "reachable by anyone who can connect to this service",
                 hint=(
                     f"unset {BASIC_AUTH_DISABLE_ENV}/{ALLOW_NO_AUTH_ENV} to restore "
-                    "the login gate, or configure LDAP (CHKP_CPUSE_LDAP_*)"
+                    "the login gate, or configure LDAP (CONVOY_LDAP_*)"
                 ),
             )
             open_envs = [e.name for e in store.list_environments() if e.credential_storage_enabled]
@@ -571,7 +571,7 @@ def create_app(
                     "credential storage requested but authentication isn't configured — "
                     "treating storage as disabled for these environments",
                     environments=open_envs,
-                    hint="configure LDAP auth (CHKP_CPUSE_LDAP_*) to enable it",
+                    hint="configure LDAP auth (CONVOY_LDAP_*) to enable it",
                 )
 
         # Purge a job's in-memory credentials the moment it reaches any terminal
@@ -681,7 +681,7 @@ def create_app(
             await serve_task
 
     app = FastAPI(
-        title="chkp-cpuse-orch",
+        title="Convoy",
         version=__version__,
         summary="Orchestration API for Check Point CDT/CPUSE deployments.",
         lifespan=lifespan,
@@ -1105,7 +1105,7 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(
                 status_code=409,
                 detail="credential storage requires authentication — configure LDAP "
-                "(CHKP_CPUSE_LDAP_*) before enabling storage for any environment",
+                "(CONVOY_LDAP_*) before enabling storage for any environment",
             )
         try:
             purged = _envmgr(request).set_credential_storage(env, body.enabled)
@@ -2125,7 +2125,7 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(
                 status_code=409,
                 detail="credential storage requires authentication — configure LDAP "
-                "(CHKP_CPUSE_LDAP_*) before storing credentials",
+                "(CONVOY_LDAP_*) before storing credentials",
             )
         if not _registry(request).get(env).credential_storage_enabled:
             raise HTTPException(

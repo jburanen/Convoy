@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from chkp_cpuse_orch.errors import InventoryError
-from chkp_cpuse_orch.inventory import Host, Inventory, Role
+from convoy.errors import InventoryError
+from convoy.inventory import Host, Inventory, Role
 
 
 def test_lookup_and_role_filter(inventory: Inventory) -> None:

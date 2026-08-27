@@ -7,7 +7,7 @@ from typing import Literal
 
 import pytest
 
-from chkp_cpuse_orch.hfconfig import (
+from convoy.hfconfig import (
     HfConfig,
     extract_hf_config,
     extract_package_metadata,
@@ -118,7 +118,7 @@ def test_extract_hf_config_gives_up_past_the_depth_limit(tmp_path: Path) -> None
 def test_extract_hf_config_skips_oversized_nested_members(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import chkp_cpuse_orch.hfconfig as hfconfig_module
+    import convoy.hfconfig as hfconfig_module
 
     monkeypatch.setattr(hfconfig_module, "_MAX_NESTED_SIZE", 10)  # smaller than our nested tar
     inner = _make_tar({"hf.config": HF_CONFIG_TEXT.encode()})

@@ -9,24 +9,24 @@ structlog and provides a run recorder. Output goes to git-ignored ``reports/`` a
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import Mapping
 
 import structlog
 
+from .envcompat import compat_env
 from .errors import ConfigError
 
 # Web server verbosity (also applied to uvicorn's own access/error logs — see
 # web/__main__.py). Defaults to WARNING so routine per-request INFO chatter
 # doesn't fill `docker compose logs`; set DEBUG/INFO to see more.
-LOG_LEVEL_ENV = "CHKP_CPUSE_WEB_LOG_LEVEL"
+LOG_LEVEL_ENV = "CONVOY_WEB_LOG_LEVEL"
 DEFAULT_LOG_LEVEL = logging.WARNING
 
 
 def resolve_log_level(environ: Mapping[str, str] | None = None) -> int:
     """Read the web server's log level from the environment, or WARNING if unset.
     Raises ``ConfigError`` on a name ``logging`` doesn't recognize."""
-    env = os.environ if environ is None else environ
+    env = compat_env(environ)
     raw = (env.get(LOG_LEVEL_ENV) or "").strip().upper()
     if not raw:
         return DEFAULT_LOG_LEVEL

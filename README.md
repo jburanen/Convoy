@@ -53,6 +53,14 @@ GA releases (beginning v1.0.0) will be a simple docker-compose.yml deployment mo
 > ** FOR DEVELOPMENT DEPLOYMENTS**  
 > Run `./scripts/deploy.sh`, which sets `DEPLOY_UID`/`DEPLOY_GID` for you (and pulls, rebuilds, and health-checks). `./scripts/deploy.sh --reset` (dev only) wipes `./data` and `.env` first — every environment, server, firewall, credential, package, and job history entry, plus every runtime setting back to its built-in default — then deploys clean. Prompts for confirmation unless you also pass `-y`/`--yes`.
 
+> **Upgrading an install that predates the rename?** This project was called
+> `chkp-cpuse-orch`. Nothing is required of you: the `CHKP_CPUSE_*` environment
+> variables still work (each logs a warning naming its `CONVOY_*` replacement, and
+> an explicit `CONVOY_*` value wins), and the credential store, database and
+> package volume are untouched. Two visible effects: the container is now named
+> `convoy` rather than `chkp-cpuse-orch`, and everyone is signed out once because
+> the session cookie was renamed.
+
 First run seeds environments from `config.yaml` (+ any inventory files) into the
 database; after that the database is authoritative and environments are managed in
 the UI. On an empty inventory the UI opens on the **Provisioning** tab.
@@ -68,7 +76,7 @@ This tool has the capability to alter or negatively impact your management serve
 - **No snapshots, no maintenance windows** — the tool does not take rollback snapshots and does not gate runs to an approved window. Earlier example configs implied otherwise; see `examples/config.example.yaml`.
 - **Auditable** — tool actions and job results are tracked on the Jobs tab.
 
-> **Authorization model:** every authenticated user has full destructive authority over every environment — there are no roles or per-environment permissions. Under LDAP, that means **every member of `CHKP_CPUSE_LDAP_REQUIRED_GROUP`** can patch, reboot, bootstrap admin accounts onto gateways, and delete environments. Scope that group accordingly. Per-environment RBAC is a v2 item.
+> **Authorization model:** every authenticated user has full destructive authority over every environment — there are no roles or per-environment permissions. Under LDAP, that means **every member of `CONVOY_LDAP_REQUIRED_GROUP`** can patch, reboot, bootstrap admin accounts onto gateways, and delete environments. Scope that group accordingly. Per-environment RBAC is a v2 item.
 
 > Prior to the v1 initial release a policy will be implemented to require code security review by an independent agentic analyst prior to release publication.
 

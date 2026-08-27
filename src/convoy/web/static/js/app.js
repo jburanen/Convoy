@@ -1,5 +1,5 @@
 /*
-  chkp-cpuse-orch — UI logic.
+  Convoy — UI logic.
   Plain JS on purpose: no framework, no build step. All markup lives in
   index.html <template> elements; this file only fills in data and wires events.
 
@@ -1447,7 +1447,7 @@ async function refreshStatus() {
     jobArchivePath = s.job_archive_path;
     // Chips are for warnings only (counts live on their own tabs).
     if (!s.credentials_unlocked) {
-      addChip(box, "credential store LOCKED — set CHKP_CPUSE_MASTER_KEY and restart", "warn");
+      addChip(box, "credential store LOCKED — set CONVOY_MASTER_KEY and restart", "warn");
     }
   } catch (e) {
     addChip(box, "API unreachable: " + e.message, "warn");

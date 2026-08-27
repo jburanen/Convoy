@@ -81,10 +81,10 @@ docker compose up -d --build
 
 echo ">> wait for health"
 for i in $(seq 1 30); do
-  status="$(docker inspect --format '{{ .State.Health.Status }}' chkp-cpuse-orch 2>/dev/null || echo starting)"
+  status="$(docker inspect --format '{{ .State.Health.Status }}' convoy 2>/dev/null || echo starting)"
   if [ "$status" = "healthy" ]; then
     echo ">> healthy"
-    # Native TLS (CHKP_CPUSE_SSL_CERTFILE/KEYFILE, see .env) makes the app
+    # Native TLS (CONVOY_SSL_CERTFILE/KEYFILE, see .env) makes the app
     # https-only — try plain http first, fall back to an unverified https
     # probe (loopback, not a trust decision) so this doesn't print a spurious
     # failure on a TLS-enabled host.

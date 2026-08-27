@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from chkp_cpuse_orch.errors import JobError
-from chkp_cpuse_orch.jobs import JobContext, JobRunner, JobTimedOut
-from chkp_cpuse_orch.store import JobRecord, JobStatus, Store
+from convoy.errors import JobError
+from convoy.jobs import JobContext, JobRunner, JobTimedOut
+from convoy.store import JobRecord, JobStatus, Store
 
 
 @pytest.fixture

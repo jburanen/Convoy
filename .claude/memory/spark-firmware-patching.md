@@ -166,7 +166,7 @@ the existing `except TransportError` handling. **Operator confirmed after
 the fact: the device did not install the patch, and never rebooted.**
 
 This is a distinct case from the 2026-08-19 finding's point 2, and the
-existing code conflates them. [ssh.py](../../src/chkp_cpuse_orch/transport/ssh.py)'s
+existing code conflates them. [ssh.py](../../src/convoy/transport/ssh.py)'s
 `InteractiveShell.expect()` raises `TransportError` from two different
 branches — channel actually reported closed (`self._channel.closed` true),
 vs. the client-side deadline just elapsing with the channel still open —
@@ -225,7 +225,7 @@ anywhere — see below):**
   `finally` block used to unconditionally close the pty-backed shell/client
   on *any* exit, including this one. `open_interactive_shell()` opens a real
   pty (`invoke_shell(term="vt100", ...)`,
-  [ssh.py:245-251](../../src/chkp_cpuse_orch/transport/ssh.py#L245-L251)),
+  [ssh.py:245-251](../../src/convoy/transport/ssh.py#L245-L251)),
   and `upgrade_revert_image.sh` (and its `tar` child) runs in that same
   pty's foreground — closing the channel almost certainly delivers a
   hangup to it, killing the extraction outright. This is why manual runs
@@ -233,7 +233,7 @@ anywhere — see below):**
   succeeded every time while tool-driven runs consistently failed at the
   same point: **the tool itself was killing its own upgrades.**
 - **Fixed 2026-08-20**: added `TransportTimeoutError(TransportError)`
-  ([errors.py](../../src/chkp_cpuse_orch/errors.py)) — `InteractiveShell.expect()`
+  ([errors.py](../../src/convoy/errors.py)) — `InteractiveShell.expect()`
   now raises this specifically for the deadline-elapsed-but-channel-still-open
   case, keeping plain `TransportError` for an actually-closed channel (the
   2026-08-19 finding's case, still untested against real hardware). Bumped

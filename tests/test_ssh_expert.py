@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import pytest
 
-from chkp_cpuse_orch.errors import ExpertModeError, TransportError
-from chkp_cpuse_orch.transport.ssh import GaiaExpertSession, InteractiveShell
+from convoy.errors import ExpertModeError, TransportError
+from convoy.transport.ssh import GaiaExpertSession, InteractiveShell
 
 from .fakes import FakeInteractiveShell
 

@@ -1,4 +1,4 @@
-# CLAUDE.md — chkp-cpuse-orch
+# CLAUDE.md — Convoy
 
 Project instructions for Claude Code. Persistent project knowledge lives in
 [.claude/memory/](.claude/memory/MEMORY.md) — read that index first.
@@ -21,7 +21,7 @@ Tooling: pytest, ruff, mypy. Details:
 [.claude/memory/tech-stack.md](.claude/memory/tech-stack.md).
 
 ## Layout
-- `src/chkp_cpuse_orch/` — package (see
+- `src/convoy/` — package (see
   [.claude/memory/architecture.md](.claude/memory/architecture.md))
 - `tests/` — pytest suite
 - `examples/` — `*.example.yaml` inventory/config templates (only these are tracked)
@@ -46,7 +46,7 @@ pip install -e ".[dev]"     # install with dev extras
 pytest                      # run tests
 ruff check . && ruff format .
 mypy src
-chkp-cpuse-orch --help      # CLI entrypoint (once installed)
+convoy --help      # CLI entrypoint (once installed)
 ```
 
 ## Maintaining memory

@@ -6,8 +6,8 @@ import shlex
 import pytest
 from passlib.hash import sha512_crypt
 
-from chkp_cpuse_orch.errors import ProvisioningError
-from chkp_cpuse_orch.services.provisioning import (
+from convoy.errors import ProvisioningError
+from convoy.services.provisioning import (
     new_api_session_file,
     parse_api_key_from_add_api_key_output,
     render_add_administrator_command,
@@ -195,7 +195,7 @@ def _normalise_session(commands: list[str]) -> list[str]:
     which is the point — a fixed, predictable path was pre-creatable as a
     symlink and shared between concurrent jobs.
     """
-    return [re.sub(r"cpuse_orch_mgmt_api\.[0-9a-f]+\.sid", "SESSION", c) for c in commands]
+    return [re.sub(r"convoy_mgmt_api\.[0-9a-f]+\.sid", "SESSION", c) for c in commands]
 
 
 def test_composable_builders_match_the_flat_preview() -> None:
@@ -218,7 +218,7 @@ def test_each_render_uses_a_fresh_unguessable_session_path() -> None:
     redirect runs as root) and was shared by concurrent jobs on the same host."""
     a, b = new_api_session_file(), new_api_session_file()
     assert a != b
-    assert re.fullmatch(r"/tmp/cpuse_orch_mgmt_api\.[0-9a-f]{32}\.sid", a)
+    assert re.fullmatch(r"/tmp/convoy_mgmt_api\.[0-9a-f]{32}\.sid", a)
 
 
 def test_login_creates_the_session_file_with_a_tight_umask() -> None:

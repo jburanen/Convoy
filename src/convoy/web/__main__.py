@@ -1,33 +1,33 @@
-"""Production entrypoint: ``python -m chkp_cpuse_orch.web``.
+"""Production entrypoint: ``python -m convoy.web``.
 
-Equivalent to ``uvicorn chkp_cpuse_orch.web.app:app --host 0.0.0.0 --port 8080``
+Equivalent to ``uvicorn convoy.web.app:app --host 0.0.0.0 --port 8080``
 (see app.py's module docstring) but also wires up optional, off-by-default HTTPS
 from the environment (see .env.example). Plain HTTP unless both
-``CHKP_CPUSE_SSL_CERTFILE`` and ``CHKP_CPUSE_SSL_KEYFILE`` are set; a partial pair
+``CONVOY_SSL_CERTFILE`` and ``CONVOY_SSL_KEYFILE`` are set; a partial pair
 fails startup rather than silently serving HTTP. Also applies
-``CHKP_CPUSE_WEB_LOG_LEVEL`` (see reporting.resolve_log_level) to uvicorn's own
+``CONVOY_WEB_LOG_LEVEL`` (see reporting.resolve_log_level) to uvicorn's own
 access/error logs, same level app.py's lifespan applies to the app's own
 structlog output — so the two never drift apart under docker compose logs.
 """
 
 from __future__ import annotations
 
-import os
 from collections.abc import Mapping
 
 import uvicorn
 
+from ..envcompat import compat_env
 from ..errors import ConfigError
 from ..reporting import resolve_log_level
 
-SSL_CERTFILE_ENV = "CHKP_CPUSE_SSL_CERTFILE"
-SSL_KEYFILE_ENV = "CHKP_CPUSE_SSL_KEYFILE"
+SSL_CERTFILE_ENV = "CONVOY_SSL_CERTFILE"
+SSL_KEYFILE_ENV = "CONVOY_SSL_KEYFILE"
 
 
 def resolve_ssl(environ: Mapping[str, str] | None = None) -> tuple[str | None, str | None]:
     """Read the TLS cert/key paths from the environment, or ``(None, None)`` for
     plain HTTP. Raises ``ConfigError`` if only one of the pair is set."""
-    env = os.environ if environ is None else environ
+    env = compat_env(environ)
     certfile = env.get(SSL_CERTFILE_ENV) or None
     keyfile = env.get(SSL_KEYFILE_ENV) or None
     if bool(certfile) != bool(keyfile):
@@ -41,7 +41,7 @@ def resolve_ssl(environ: Mapping[str, str] | None = None) -> tuple[str | None, s
 def main() -> None:
     certfile, keyfile = resolve_ssl()
     uvicorn.run(
-        "chkp_cpuse_orch.web.app:app",
+        "convoy.web.app:app",
         host="0.0.0.0",
         port=8080,
         ssl_certfile=certfile,

@@ -7,14 +7,14 @@ from typing import Any
 
 import pytest
 
-from chkp_cpuse_orch.credentials import CredentialStore
-from chkp_cpuse_orch.errors import CredentialError, InventoryError
-from chkp_cpuse_orch.inventory import Host, Inventory, Role, Site
-from chkp_cpuse_orch.jobs import JobRunner
-from chkp_cpuse_orch.services.common import EnvironmentRegistry, HostConnector
-from chkp_cpuse_orch.services.gateway_bootstrap import GatewayBootstrapService
-from chkp_cpuse_orch.services.provisioning import REDACTED_HASH
-from chkp_cpuse_orch.store import JobStatus, Store
+from convoy.credentials import CredentialStore
+from convoy.errors import CredentialError, InventoryError
+from convoy.inventory import Host, Inventory, Role, Site
+from convoy.jobs import JobRunner
+from convoy.services.common import EnvironmentRegistry, HostConnector
+from convoy.services.gateway_bootstrap import GatewayBootstrapService
+from convoy.services.provisioning import REDACTED_HASH
+from convoy.store import JobStatus, Store
 
 
 @pytest.fixture
@@ -246,7 +246,7 @@ class _FakeMgmtClient:
         return self._objects
 
     def run_script(
-        self, script: str, targets: list[str], *, script_name: str = "chkp-cpuse-orch-run"
+        self, script: str, targets: list[str], *, script_name: str = "convoy-run"
     ) -> str:
         self.run_script_calls.append((script, targets, script_name))
         return "6a99e21c-681a-4d6d-87f4-9a0cb0854332"
@@ -428,7 +428,7 @@ def test_do_bootstrap_rejects_private_key_only_set_before_any_api_call(
 
 
 def test_decode_task_output_handles_unexpected_shape() -> None:
-    from chkp_cpuse_orch.services.gateway_bootstrap import _decode_task_output
+    from convoy.services.gateway_bootstrap import _decode_task_output
 
     ok, message = _decode_task_output({"status": "succeeded", "task-details": []})
     assert ok is False

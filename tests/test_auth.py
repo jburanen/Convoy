@@ -6,13 +6,13 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from chkp_cpuse_orch import __version__
-from chkp_cpuse_orch.config import Config, Paths
-from chkp_cpuse_orch.credentials import MASTER_KEY_ENV
-from chkp_cpuse_orch.errors import AuthError, ConfigError
-from chkp_cpuse_orch.store import Store, utcnow
-from chkp_cpuse_orch.web.app import create_app
-from chkp_cpuse_orch.web.auth import (
+from convoy import __version__
+from convoy.config import Config, Paths
+from convoy.credentials import MASTER_KEY_ENV
+from convoy.errors import AuthError, ConfigError
+from convoy.store import Store, utcnow
+from convoy.web.app import create_app
+from convoy.web.auth import (
     ALLOW_NO_AUTH_ENV,
     BASIC_AUTH_DISABLE_ENV,
     BASIC_AUTH_PASSWORD_ENV,
@@ -219,12 +219,12 @@ def test_load_auth_settings_service_account(tmp_path: Path) -> None:
         {
             LDAP_URL_ENV: "ldaps://dc1:636, ldaps://dc2:636",
             LDAP_REQUIRED_GROUP_ENV: "cn=admins",
-            "CHKP_CPUSE_LDAP_BIND_DN": "cn=svc",
-            "CHKP_CPUSE_LDAP_BIND_PASSWORD_FILE": str(pw_file),
-            "CHKP_CPUSE_LDAP_USER_BASE_DN": "ou=users,dc=corp",
-            "CHKP_CPUSE_LDAP_START_TLS": "true",
-            "CHKP_CPUSE_SESSION_IDLE_MINUTES": "15",
-            "CHKP_CPUSE_SESSION_COOKIE_SECURE": "false",
+            "CONVOY_LDAP_BIND_DN": "cn=svc",
+            "CONVOY_LDAP_BIND_PASSWORD_FILE": str(pw_file),
+            "CONVOY_LDAP_USER_BASE_DN": "ou=users,dc=corp",
+            "CONVOY_LDAP_START_TLS": "true",
+            "CONVOY_SESSION_IDLE_MINUTES": "15",
+            "CONVOY_SESSION_COOKIE_SECURE": "false",
         }
     )
     assert settings is not None
@@ -239,7 +239,7 @@ def test_load_auth_settings_service_account(tmp_path: Path) -> None:
 # A Secure cookie set over plain HTTP is silently dropped by the browser — login
 # "succeeds" server-side but every request after that looks unauthenticated. The
 # default now tracks whether native TLS is actually configured; an explicit
-# CHKP_CPUSE_SESSION_COOKIE_SECURE always overrides the guess either way.
+# CONVOY_SESSION_COOKIE_SECURE always overrides the guess either way.
 
 
 def test_cookie_secure_defaults_false_without_native_tls() -> None:
@@ -251,7 +251,7 @@ def test_cookie_secure_defaults_false_without_native_tls() -> None:
         {
             LDAP_URL_ENV: "ldap://test",
             LDAP_REQUIRED_GROUP_ENV: "cn=g",
-            "CHKP_CPUSE_LDAP_USER_DN_TEMPLATE": "{username}",
+            "CONVOY_LDAP_USER_DN_TEMPLATE": "{username}",
         }
     )
     assert ldap is not None
@@ -355,7 +355,7 @@ def test_ldap_takes_priority_over_basic_auth_when_both_configured() -> None:
     env = {
         LDAP_URL_ENV: "ldap://test",
         LDAP_REQUIRED_GROUP_ENV: "cn=admins",
-        "CHKP_CPUSE_LDAP_USER_DN_TEMPLATE": "{username}",
+        "CONVOY_LDAP_USER_DN_TEMPLATE": "{username}",
         BASIC_AUTH_DISABLE_ENV: "false",
     }
     assert isinstance(load_active_auth_settings(env), AuthSettings)

@@ -143,7 +143,7 @@ UI is the primary interface (see [[architecture]]); the CLI is secondary.
 ## Web frontend structure (operator preference — hand-editable, 2026-07-17)
 The operator wants to **hand-edit the UI files directly**, so the frontend must stay
 plain and file-based:
-- Static `*.html` + `css/` + `js/` files under `src/chkp_cpuse_orch/web/static/`,
+- Static `*.html` + `css/` + `js/` files under `src/convoy/web/static/`,
   served via FastAPI `StaticFiles`. What's on disk is what the browser gets.
 - **No build step, no bundler, no npm, no SPA framework.** Edit → refresh.
 - Dynamic data comes from plain-JS `fetch()` against the JSON API, filling
@@ -184,8 +184,8 @@ all `/api/*` + the static UI. Full design in [[web-auth]]. Key facts:
 - **Auth is optional** (operator-chosen): unset LDAP env → app runs open, as before
   — **but** enabling per-environment credential storage is then rejected (409). No
   persistent secrets without an auth gate.
-- **Group gate = direct `memberOf`** membership of `CHKP_CPUSE_LDAP_REQUIRED_GROUP`.
-- **Idle logout** (`CHKP_CPUSE_SESSION_IDLE_MINUTES`, default 30) enforced
+- **Group gate = direct `memberOf`** membership of `CONVOY_LDAP_REQUIRED_GROUP`.
+- **Idle logout** (`CONVOY_SESSION_IDLE_MINUTES`, default 30) enforced
   server-side (sliding `last_seen_at`) *and* client-side; logout/idle/401 all wipe
   the tab's cached credentials via the existing `cacheClearCreds()`.
 - Login is a **separate static page** (`login.html` + `js/login.js`), as planned.

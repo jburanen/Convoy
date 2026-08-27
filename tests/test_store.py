@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from chkp_cpuse_orch.errors import StoreError
-from chkp_cpuse_orch.store import (
+from convoy.errors import StoreError
+from convoy.store import (
     _MIGRATIONS,
     CredentialSetRow,
     EnvHostRow,
@@ -289,7 +289,7 @@ def test_package_roundtrip_and_unique_filename(store: Store) -> None:
 def test_package_expiry_roundtrip_and_listing(store: Store) -> None:
     from datetime import timedelta
 
-    from chkp_cpuse_orch.store import utcnow
+    from convoy.store import utcnow
 
     now = utcnow()
     store.insert_package(

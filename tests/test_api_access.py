@@ -6,17 +6,17 @@ from pathlib import Path
 
 import pytest
 
-from chkp_cpuse_orch.credentials import CredentialStore
-from chkp_cpuse_orch.jobs import JobRunner
-from chkp_cpuse_orch.services.api_access import (
+from convoy.credentials import CredentialStore
+from convoy.jobs import JobRunner
+from convoy.services.api_access import (
     JOB_REPAIR_API_ACCESS,
     ApiAccessService,
     parse_api_status,
     render_repair_commands,
 )
-from chkp_cpuse_orch.services.common import EnvironmentRegistry
-from chkp_cpuse_orch.services.environments import EnvironmentManager
-from chkp_cpuse_orch.store import Store
+from convoy.services.common import EnvironmentRegistry
+from convoy.services.environments import EnvironmentManager
+from convoy.store import Store
 
 from .fakes import FakeTransport, make_factory
 
@@ -205,7 +205,7 @@ def test_preview_repair_commands_matches_render(service: ApiAccessService) -> No
     one (see provisioning.new_api_session_file), which is the whole point."""
 
     def norm(commands: list[str]) -> list[str]:
-        return [re.sub(r"cpuse_orch_mgmt_api\.[0-9a-f]+\.sid", "SESSION", c) for c in commands]
+        return [re.sub(r"convoy_mgmt_api\.[0-9a-f]+\.sid", "SESSION", c) for c in commands]
 
     assert norm(service.preview_repair_commands(ENV)) == norm(render_repair_commands(is_mds=False))
 

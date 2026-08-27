@@ -1,5 +1,5 @@
 /*
-  chkp-cpuse-orch — login page logic. Plain JS, no build step.
+  Convoy — login page logic. Plain JS, no build step.
   Posts credentials to /api/auth/login; the server sets an HttpOnly session
   cookie on success, then we hand off to the main UI.
 */

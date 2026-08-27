@@ -1,5 +1,5 @@
 # ==========================================================================
-# chkp-cpuse-orch .gitignore
+# Convoy .gitignore
 # This repo will become PUBLIC. Anything that could leak customer
 # infrastructure, credentials, or deployment topology MUST stay untracked.
 # When in doubt, add it here. See also .claudeignore.
@@ -25,7 +25,7 @@ secrets.*
 credentials.*
 .credentials
 # ...but the credential-store *source module* is code, not a secret:
-!src/chkp_cpuse_orch/credentials.py
+!src/convoy/credentials.py
 *.env
 .env
 .env.*

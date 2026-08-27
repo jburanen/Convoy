@@ -3,13 +3,13 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "chkp-cpuse-orch"
-dynamic = ["version"]  # single source: chkp_cpuse_orch.__version__
+name = "convoy"
+dynamic = ["version"]  # single source: convoy.__version__
 description = "Orchestration layer for Check Point's Central Deployment Tool (CDT/CPUSE) — staged, health-gated patching and upgrades across management servers and gateways."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-authors = [{ name = "chkp-cpuse-orch contributors" }]
+authors = [{ name = "Convoy contributors" }]
 keywords = ["check-point", "cdt", "cpuse", "firewall", "orchestration", "patching"]
 classifiers = [
   "Programming Language :: Python :: 3.11",
@@ -49,17 +49,17 @@ dev = [
 ]
 
 [project.scripts]
-chkp-cpuse-orch = "chkp_cpuse_orch.cli:app"
+convoy = "convoy.cli:app"
 
 [tool.setuptools.dynamic]
-version = { attr = "chkp_cpuse_orch.__version__" }
+version = { attr = "convoy.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
 # Ship the hand-editable static UI (HTML/CSS/JS) inside the wheel/container.
-"chkp_cpuse_orch.web" = ["static/**/*"]
+"convoy.web" = ["static/**/*"]
 
 [tool.ruff]
 line-length = 100

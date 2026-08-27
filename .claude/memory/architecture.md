@@ -5,7 +5,7 @@ metadata:
   type: project
 ---
 
-Package: `src/chkp_cpuse_orch/`. Layered so the CDT/CPUSE wrappers stay thin and the
+Package: `src/convoy/`. Layered so the CDT/CPUSE wrappers stay thin and the
 orchestration/safety logic is testable without live gear.
 
 **Front-end model: web-primary, CLI-secondary.** The FastAPI web app is the main
@@ -14,7 +14,7 @@ over the same **service core** — no business logic lives in `web/` routes or `
 See [[patching-web-design]] for the two-subsystem design this serves.
 
 ```
-chkp_cpuse_orch/
+convoy/
   cli.py            # Typer entrypoint (secondary front-end); calls the service core
   web/              # FastAPI app (PRIMARY front-end): routes, SSE/WS status, static UI
     app.py          # ASGI app, health/root today; grows the management UI

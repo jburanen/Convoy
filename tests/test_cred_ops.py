@@ -4,10 +4,10 @@ from pathlib import Path
 
 import pytest
 
-from chkp_cpuse_orch.credentials import CredentialStore
-from chkp_cpuse_orch.errors import InventoryError
-from chkp_cpuse_orch.services.cred_ops import JOB_ADD, JOB_DELETE, JOB_EDIT, CredentialJobService
-from chkp_cpuse_orch.store import Store
+from convoy.credentials import CredentialStore
+from convoy.errors import InventoryError
+from convoy.services.cred_ops import JOB_ADD, JOB_DELETE, JOB_EDIT, CredentialJobService
+from convoy.store import Store
 
 ENV = "default"
 

@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from chkp_cpuse_orch.archive import JobArchiver
-from chkp_cpuse_orch.errors import StoreError
-from chkp_cpuse_orch.store import JobRecord, JobStatus, Store, utcnow
+from convoy.archive import JobArchiver
+from convoy.errors import StoreError
+from convoy.store import JobRecord, JobStatus, Store, utcnow
 
 
 @pytest.fixture

@@ -11,9 +11,9 @@ import paramiko
 import pytest
 from pydantic import SecretStr
 
-from chkp_cpuse_orch.credentials import Credential, CredentialKind
-from chkp_cpuse_orch.inventory import Host, Role
-from chkp_cpuse_orch.services.common import default_client_factory
+from convoy.credentials import Credential, CredentialKind
+from convoy.inventory import Host, Role
+from convoy.services.common import default_client_factory
 
 
 def _patch_paramiko_connect(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:

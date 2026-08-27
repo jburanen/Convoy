@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from pydantic import SecretStr
 
-from chkp_cpuse_orch.credentials import Credential, CredentialBundle, CredentialKind
-from chkp_cpuse_orch.errors import InventoryError, ManagementAPIForbidden, TransportError
-from chkp_cpuse_orch.inventory import FIREWALL_ROLES, Host, Inventory, Role, Site
-from chkp_cpuse_orch.services.discovery import (
+from convoy.credentials import Credential, CredentialBundle, CredentialKind
+from convoy.errors import InventoryError, ManagementAPIForbidden, TransportError
+from convoy.inventory import FIREWALL_ROLES, Host, Inventory, Role, Site
+from convoy.services.discovery import (
     DiscoveryService,
     find_cluster_for_gateway,
     map_gateways_and_servers,

@@ -9,7 +9,7 @@ Security model:
   holds Fernet ciphertext. The repo is public and /data is a bind mount, so
   nothing readable may land on disk.
 - The Fernet key is derived (Argon2id) from a master passphrase supplied at startup
-  via ``CHKP_CPUSE_MASTER_KEY`` (or ``..._FILE`` for docker secrets) and is never
+  via ``CONVOY_MASTER_KEY`` (or ``..._FILE`` for docker secrets) and is never
   persisted. The Argon2id salt and a canary token live in the DB so a wrong
   passphrase fails fast and loudly instead of yielding garbage.
 """
@@ -26,15 +26,20 @@ from argon2.low_level import Type, hash_secret_raw
 from cryptography.fernet import Fernet, InvalidToken
 from pydantic import BaseModel, SecretStr
 
+from .envcompat import compat_env
 from .errors import CredentialError
 from .store import CredentialSetRow, Store
 
-MASTER_KEY_ENV = "CHKP_CPUSE_MASTER_KEY"
-MASTER_KEY_FILE_ENV = "CHKP_CPUSE_MASTER_KEY_FILE"
+MASTER_KEY_ENV = "CONVOY_MASTER_KEY"
+MASTER_KEY_FILE_ENV = "CONVOY_MASTER_KEY_FILE"
 
 _SALT_META_KEY = "credential_kdf_salt"
 _CANARY_META_KEY = "credential_canary"
-_CANARY_PLAINTEXT = b"chkp-cpuse-orch credential canary v1"
+# NOTE: this literal is a persisted wire value, not a label. Its ciphertext is
+# stored in the DB `credential_canary` meta row and compared on every open, so
+# changing it makes an existing install fail _check_canary and report the master
+# key as wrong. Changing it again means re-initializing every credential store.
+_CANARY_PLAINTEXT = b"convoy credential canary v1"
 _MIN_PASSPHRASE_LEN = 8
 
 
@@ -77,7 +82,7 @@ class CredentialSetInfo(BaseModel):
 
 def load_master_key(environ: os._Environ[str] | dict[str, str] | None = None) -> str:
     """Resolve the master passphrase: env var, or file path (docker secret)."""
-    env = os.environ if environ is None else environ
+    env = compat_env(environ)
     value = env.get(MASTER_KEY_ENV)
     if not value:
         file_path = env.get(MASTER_KEY_FILE_ENV)

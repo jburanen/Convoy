@@ -161,7 +161,7 @@ FAILED" for this case were rewritten to expect a synchronous raise instead
 - `tests/test_gaia_session.py`: `GaiaSession` unit tests against a scripted
   fake `SSHClient` (shell detection both branches, lazy single-elevation,
   the transfer toggle-and-restore maneuver success/failure/restore-failure
-  paths) — monkeypatches `chkp_cpuse_orch.transport.ssh.SSHClient` so
+  paths) — monkeypatches `convoy.transport.ssh.SSHClient` so
   `GaiaSession._new_client()` picks up the fake.
 
 ## The silent expert-password reader (confirmed on live gear, 2026-08-26)

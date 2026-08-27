@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from chkp_cpuse_orch.config import Config
-from chkp_cpuse_orch.errors import SafetyViolation
-from chkp_cpuse_orch.inventory import Inventory
-from chkp_cpuse_orch.orchestrator import Orchestrator, StepKind
+from convoy.config import Config
+from convoy.errors import SafetyViolation
+from convoy.inventory import Inventory
+from convoy.orchestrator import Orchestrator, StepKind
 
 
 def test_plan_starts_with_management_and_is_dry_by_default(

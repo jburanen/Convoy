@@ -1,5 +1,5 @@
 # ==========================================================================
-# chkp-cpuse-orch .claudeignore
+# Convoy .claudeignore
 # Files Claude Code should NOT read. Keeps customer credentials, real site
 # inventories, and captured runtime output out of the model's context so it
 # can never be echoed into a commit, PR, or shared artifact.

@@ -21,22 +21,22 @@ TLS: management servers present a self-signed certificate by default, so
 ``verify_tls`` defaults to ``False`` (with a logged note). Set it True when the
 server presents a CA-trusted certificate.
 
-Set ``CHKP_CPUSE_LOG_API_CALLS`` to log every request/response through
+Set ``CONVOY_LOG_API_CALLS`` to log every request/response through
 ``docker compose logs`` — off by default (this is every Management API call in
 full, useful for troubleshooting but noisy). Payloads/bodies are redacted
 (``_redact``) before logging so passwords/API keys/session ids never land in
-the log, and logged at WARNING regardless of ``CHKP_CPUSE_WEB_LOG_LEVEL`` so
+the log, and logged at WARNING regardless of ``CONVOY_WEB_LOG_LEVEL`` so
 turning this on is never silently neutered by the default log-level threshold.
 """
 
 from __future__ import annotations
 
-import os
 from types import TracebackType
 from typing import Any
 
 import httpx
 
+from ..envcompat import compat_env
 from ..errors import ManagementAPIForbidden, TransportError
 from ..inventory import Host
 from ..reporting import get_logger
@@ -46,7 +46,7 @@ logger = get_logger(__name__)
 # Server-side default page size for list commands; we page until we've seen `total`.
 _PAGE_LIMIT = 200
 
-LOG_API_CALLS_ENV = "CHKP_CPUSE_LOG_API_CALLS"
+LOG_API_CALLS_ENV = "CONVOY_LOG_API_CALLS"
 
 # Substrings marking a key whose value must be redacted before a payload or
 # response body is logged. Matched as SUBSTRINGS, not exact keys: exact matching
@@ -54,7 +54,7 @@ LOG_API_CALLS_ENV = "CHKP_CPUSE_LOG_API_CALLS"
 # "password-hash", "api_key", "session-id" — and, worst, "script". The
 # credential-bootstrap run-script payload carries the whole clish script
 # including `set user <u> password-hash $6$...`, so with exact matching, turning
-# on CHKP_CPUSE_LOG_API_CALLS wrote a crackable hash of a gateway's admin
+# on CONVOY_LOG_API_CALLS wrote a crackable hash of a gateway's admin
 # password into `docker compose logs` at WARNING level.
 _SENSITIVE_KEY_PARTS = (
     "password",
@@ -86,7 +86,7 @@ def _is_sensitive_key(key: str) -> bool:
 
 
 def _log_api_calls_enabled() -> bool:
-    raw = os.environ.get(LOG_API_CALLS_ENV, "")
+    raw = compat_env().get(LOG_API_CALLS_ENV, "")
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
@@ -289,7 +289,7 @@ class ManagementAPIClient:
         return task_id
 
     def run_script(
-        self, script: str, targets: list[str], *, script_name: str = "chkp-cpuse-orch-run"
+        self, script: str, targets: list[str], *, script_name: str = "convoy-run"
     ) -> str:
         """Execute ``script`` (bash) on each of ``targets`` (gateway names)
         via SIC — no SSH needed. Returns a ``task-id`` to poll via

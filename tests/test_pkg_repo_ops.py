@@ -6,14 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from chkp_cpuse_orch.credentials import CredentialStore, JobCredentialVault
-from chkp_cpuse_orch.errors import InventoryError, PackageError
-from chkp_cpuse_orch.inventory import Host, Inventory, Role, Site
-from chkp_cpuse_orch.jobs import JobRunner
-from chkp_cpuse_orch.packages import PackageStore
-from chkp_cpuse_orch.services.common import EnvironmentRegistry, HostConnector
-from chkp_cpuse_orch.services.pkg_repo_ops import PackageRepoService
-from chkp_cpuse_orch.store import JobStatus, Store
+from convoy.credentials import CredentialStore, JobCredentialVault
+from convoy.errors import InventoryError, PackageError
+from convoy.inventory import Host, Inventory, Role, Site
+from convoy.jobs import JobRunner
+from convoy.packages import PackageStore
+from convoy.services.common import EnvironmentRegistry, HostConnector
+from convoy.services.pkg_repo_ops import PackageRepoService
+from convoy.store import JobStatus, Store
 
 from .fakes import FakeTransport, make_factory
 
