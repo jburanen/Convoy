@@ -73,6 +73,7 @@ from __future__ import annotations
 
 import asyncio
 import posixpath
+import re
 import shlex
 import time
 from collections.abc import Sequence
@@ -208,6 +209,17 @@ def _filename_matches_display_name(filename: str, display_name: str) -> bool:
 # Those directories are mode 0700 and root-owned, so reading them needs expert.
 _CPDA_REPOSITORY = "/var/log/CPda/repository"
 
+# Anything reading a file name out of shell output has to assume it may arrive
+# decorated: these sessions run under a pty, so a colourising `ls` (Gaia's
+# default alias) wraps every name in SGR sequences. A stray "\x1b[0m" on the end
+# of a package name is invisible in a log and fails much later, as a control-
+# character rejection from _check_id (observed 2026-08-27).
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text)
+
 
 def _on_box_package_files(client: object, ctx: JobContext) -> list[str]:
     """Real package file names CPUSE is holding on this host.
@@ -224,15 +236,22 @@ def _on_box_package_files(client: object, ctx: JobContext) -> list[str]:
     run_bash = getattr(client, "run_bash", None)
     if run_bash is None:
         return []
-    repo = shlex.quote(_CPDA_REPOSITORY)
+    # `find`, not `ls`: these sessions run under a pty, so `ls` decides it is
+    # talking to a terminal and colourises — the name came back as
+    # "...FULL.tgz\x1b[0m" and was then rejected for containing control
+    # characters (live gear, 2026-08-27). find never colourises. _strip_ansi
+    # below stays as a second line of defence rather than trusting that.
     try:
-        result = run_bash(f"ls -1 {repo}/*/*.tgz {repo}/*/*.tar 2>/dev/null")
+        result = run_bash(
+            f"find {shlex.quote(_CPDA_REPOSITORY)} -mindepth 2 -maxdepth 2 -type f "
+            r"\( -name '*.tgz' -o -name '*.tar' \) 2>/dev/null"
+        )
     except OrchestratorError as exc:
         ctx.log(f"could not read the CPUSE repository: {exc}", level="warning")
         return []
     names: list[str] = []
     for line in result.stdout.splitlines():
-        name = line.strip().rsplit("/", 1)[-1]
+        name = _strip_ansi(line).strip().rsplit("/", 1)[-1]
         if name and name not in names:
             names.append(name)
     return names

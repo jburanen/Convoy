@@ -1467,6 +1467,36 @@ def test_on_box_package_files_reads_basenames_out_of_the_repository() -> None:
     assert "/var/log/CPda/repository" in client.commands[0]
 
 
+def test_on_box_package_files_strips_terminal_colour_codes() -> None:
+    """Regression, live gear 2026-08-27: these sessions run under a pty, so a
+    colourising `ls` returned "...FULL.tgz\x1b[0m". The escape is invisible in
+    a log and surfaced much later as CPUSE rejecting the identifier for
+    containing control characters, after the install had already been logged as
+    starting. The command is `find` now (which never colourises) and the parse
+    strips SGR sequences anyway."""
+    from convoy.cpuse import _check_id
+    from convoy.services.patching import _on_box_package_files
+
+    coloured = (
+        "/var/log/CPda/repository/CheckPoint#CPUpdates#All#6.0#5#6#"
+        "BUNDLE_R82_10_JUMBO_HF_MAIN#40/"
+        "Check_Point_R82_10_jumbo_hf_main_Bundle_T40_FULL.tgz\x1b[0m\n"
+    )
+    files = _on_box_package_files(_BashClient(coloured), _Ctx())
+    assert files == ["Check_Point_R82_10_jumbo_hf_main_Bundle_T40_FULL.tgz"]
+    # The whole point: what comes out has to survive CPUSE's own validation.
+    assert _check_id(files[0]) == files[0]
+
+
+def test_on_box_package_files_uses_find_not_ls() -> None:
+    """`ls` is what colourised under a pty; `find` never does."""
+    from convoy.services.patching import _on_box_package_files
+
+    client = _BashClient(REPOSITORY_LS)
+    _on_box_package_files(client, _Ctx())
+    assert client.commands[0].startswith("find ")
+
+
 def test_on_box_package_files_is_best_effort_on_a_shell_failure() -> None:
     """A host whose repository lives elsewhere, or a session that never reached
     expert, contributes no candidates rather than failing the job."""
