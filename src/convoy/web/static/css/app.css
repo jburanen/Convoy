@@ -1120,6 +1120,41 @@ button.link-btn.fw-name-link {
   gap: 0.2rem;
   font-size: 0.9rem;
 }
+/* ...but a hidden one stays hidden. `.stacked label` (class + type) outranks the
+   generic `.hidden` (class) on specificity, so every label in a stacked form
+   ignored the class entirely — regardless of source order. That is why
+   storage-enabled environments still showed the per-host "SSH user" field in
+   Add/Edit Server and Add/Edit Firewall (and, the other way round,
+   storage-disabled ones showed the Credential set picker): the JS toggled
+   `.hidden` correctly the whole time and the CSS threw it away. #cp-user-label
+   already carried a one-off fix for exactly this; this covers the class of bug
+   rather than the next instance of it. */
+.stacked label.hidden { display: none; }
+/* Show/hide toggle sitting inside a password field (app.js's
+   addPasswordReveal). The wrapper does the positioning so the input keeps its
+   own full width and only reserves room on the right, letting a long secret
+   scroll under nothing. Overrides the base `button` fill — this reads as an
+   affordance inside the field, not a control beside it. */
+.pw-field { position: relative; display: block; }
+.pw-field input { padding-right: 2.1rem; }
+.pw-reveal {
+  position: absolute;
+  top: 50%;
+  right: 0.3rem;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.2rem;
+  background: none;
+  color: var(--muted);
+  border-radius: 3px;
+  line-height: 0;
+}
+.pw-reveal:hover { color: var(--text); filter: none; }
+.pw-reveal:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.pw-reveal svg { display: block; width: 1.05rem; height: 1.05rem; }
+
 .stacked input:not([type="checkbox"]):not([type="radio"]),
 .stacked select,
 .stacked textarea { width: 100%; }

@@ -16,7 +16,7 @@ from convoy.credentials import (
     load_master_key,
 )
 from convoy.errors import CredentialError
-from convoy.store import Store
+from convoy.store import CredentialSetRow, Store
 
 
 @pytest.fixture
@@ -80,7 +80,11 @@ def test_secret_never_in_repr(creds: CredentialStore, store: Store) -> None:
 
 def test_wrong_master_key_fails_fast(store: Store) -> None:
     CredentialStore(store, master_key="the right key").put_set(
-        "default", "primary", ssh_password="pw", expert_password="expert-pw"
+        "default",
+        "primary",
+        ssh_username="admin",
+        ssh_password="pw",
+        expert_password="expert-pw",
     )
     with pytest.raises(CredentialError, match="master key does not match"):
         CredentialStore(store, master_key="not the right key")
@@ -88,7 +92,11 @@ def test_wrong_master_key_fails_fast(store: Store) -> None:
 
 def test_same_key_reopens_fine(store: Store) -> None:
     CredentialStore(store, master_key="the right key").put_set(
-        "default", "primary", ssh_password="abc", expert_password="expert-pw"
+        "default",
+        "primary",
+        ssh_username="admin",
+        ssh_password="abc",
+        expert_password="expert-pw",
     )
     reopened = CredentialStore(store, master_key="the right key")
     bundle = reopened.get_set_bundle(_set_id(store), "mgmt-01")
@@ -105,7 +113,7 @@ def test_expert_password_required(creds: CredentialStore) -> None:
     # may need to escalate to expert mode — see
     # .claude/memory/gaia-shell-posture.md.
     with pytest.raises(CredentialError, match="expert-mode password"):
-        creds.put_set("default", "noexpert", ssh_password="pw")
+        creds.put_set("default", "noexpert", ssh_username="admin", ssh_password="pw")
 
 
 def test_api_key_alone_is_a_valid_set(creds: CredentialStore, store: Store) -> None:
@@ -123,10 +131,62 @@ def test_ssh_only_set_is_valid_without_an_api_key(creds: CredentialStore, store:
     environment: those environments still patch their firewalls over SSH, so a
     set with SSH credentials and no API key has to be storable there
     (operator-specified 2026-08-27)."""
-    creds.put_set("default", "ssh-set", ssh_password="pw", expert_password="expert-pw")
+    creds.put_set(
+        "default", "ssh-set", ssh_username="admin", ssh_password="pw", expert_password="expert-pw"
+    )
     bundle = creds.get_set_bundle(_set_id(store, "ssh-set"), "mgmt-01")
     assert bundle[CredentialKind.SSH_PASSWORD].reveal() == "pw"
     assert CredentialKind.API_KEY not in bundle
+
+
+def test_ssh_set_without_a_username_is_rejected(creds: CredentialStore) -> None:
+    """The set's username is what logs in; blank falls back to the host's own
+    Host.ssh_user, a field the UI hides and stops maintaining once storage is
+    enabled — so it holds whatever stale value was last there. Operator-reported
+    2026-08-27: a Spark gateway kept logging in as `admin` while its assigned
+    set named a different account."""
+    with pytest.raises(CredentialError, match="needs an SSH username"):
+        creds.put_set("default", "nouser", ssh_password="pw", expert_password="expert-pw")
+
+
+def test_whitespace_is_not_a_username(creds: CredentialStore) -> None:
+    with pytest.raises(CredentialError, match="needs an SSH username"):
+        creds.put_set(
+            "default", "blank", ssh_username="   ", ssh_password="pw", expert_password="expert-pw"
+        )
+
+
+def test_api_key_only_set_needs_no_username(creds: CredentialStore, store: Store) -> None:
+    """Nothing logs in over SSH, so there is no account to name. This is what
+    keeps an API-only environment's management sets valid while its firewall
+    sets — still SSH — are held to the full requirement."""
+    creds.put_set("default", "api-only-set", api_key="abc123")
+    assert _set_id(store, "api-only-set")
+
+
+def test_an_older_set_without_a_username_must_gain_one_to_be_saved_again(
+    creds: CredentialStore, store: Store
+) -> None:
+    """Validation runs on write, so rows stored before this rule survive as they
+    are — but the next edit has to supply the missing username rather than
+    quietly carrying the gap forward."""
+    row = CredentialSetRow(
+        environment="default",
+        name="legacy",
+        ssh_username=None,
+        ssh_password_ct=creds._enc("pw"),  # private on purpose: seeding a pre-rule row
+        ssh_private_key_ct=None,
+        expert_password_ct=creds._enc("expert-pw"),
+        api_key_ct=None,
+    )
+    store.upsert_credential_set(row)
+
+    with pytest.raises(CredentialError, match="needs an SSH username"):
+        creds.put_set("default", "legacy", ssh_password="new-pw")
+
+    creds.put_set("default", "legacy", ssh_username="svc-patchmgr")
+    bundle = creds.get_set_bundle(_set_id(store, "legacy"), "fw-01")
+    assert bundle[CredentialKind.SSH_PASSWORD].username == "svc-patchmgr"
 
 
 def test_set_with_nothing_in_it_is_rejected(creds: CredentialStore) -> None:
@@ -173,7 +233,9 @@ def test_supplying_a_private_key_replaces_a_stored_ssh_password(
     """The two SSH secrets are mutually exclusive, so keeping the omitted one
     would carry both and fail the not-both check — leaving nothing the operator
     could type to switch a set from a password to a key."""
-    creds.put_set("default", "swap", ssh_password="ssh-pw", expert_password="expert-pw")
+    creds.put_set(
+        "default", "swap", ssh_username="admin", ssh_password="ssh-pw", expert_password="expert-pw"
+    )
     creds.put_set("default", "swap", ssh_private_key="KEY-MATERIAL")
     bundle = creds.get_set_bundle(_set_id(store, "swap"), "mgmt-01")
     assert bundle[CredentialKind.SSH_PRIVATE_KEY].reveal() == "KEY-MATERIAL"
@@ -188,7 +250,9 @@ def test_supplying_a_private_key_replaces_a_stored_ssh_password(
 def test_expert_password_kept_across_an_edit_that_omits_it(
     creds: CredentialStore, store: Store
 ) -> None:
-    creds.put_set("default", "primary", ssh_password="pw", expert_password="expert-pw")
+    creds.put_set(
+        "default", "primary", ssh_username="admin", ssh_password="pw", expert_password="expert-pw"
+    )
     creds.put_set("default", "primary", ssh_password="new-pw")  # expert password omitted
     bundle = creds.get_set_bundle(_set_id(store), "mgmt-01")
     assert bundle[CredentialKind.EXPERT_PASSWORD].reveal() == "expert-pw"
@@ -257,7 +321,9 @@ def test_editing_a_set_preserves_its_default_flag(creds: CredentialStore) -> Non
 
 def test_password_xor_private_key(creds: CredentialStore) -> None:
     with pytest.raises(CredentialError, match="not both"):
-        creds.put_set("default", "both", ssh_password="pw", ssh_private_key="key")
+        creds.put_set(
+            "default", "both", ssh_username="admin", ssh_password="pw", ssh_private_key="key"
+        )
 
 
 def test_private_key_set_bundle(creds: CredentialStore, store: Store) -> None:

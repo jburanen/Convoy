@@ -965,12 +965,18 @@ class GaiaSession:
         remote_path: str,
         progress: Callable[[int, int], None] | None,
     ) -> int:
-        if not self._username:
+        # Same resolution as SSHClient.connect() — credential's username first,
+        # the host's own field only as a fallback. This used to raise instead of
+        # falling back, which meant a session that had connected perfectly well
+        # (as host.ssh_user) refused to transfer, and refused while naming the
+        # account it was already logged in as. Toggling that account's shell is
+        # exactly right: it is the account this session authenticated as.
+        username = self._username or self.host.ssh_user
+        if not username:
             raise TransportError(
                 f"cannot transfer to {self.host.name!r}: no SSH username resolved to "
                 "toggle the account's own shell for the transfer"
             )
-        username = self._username
         # Both of these are clish config writes, and this session has almost
         # certainly just taken the config lock by elevating to expert for an
         # earlier step (a disk check, a sha1) -- so they must be able to break
