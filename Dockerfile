@@ -11,6 +11,15 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
+# Where this image keeps its config, stated once and used by both the entrypoint
+# (which seeds it) and the app (which reads it). Without it, `docker run` of this
+# image alone falls back to built-in defaults whose RELATIVE paths resolve
+# against WORKDIR — root-owned, so uid 1001 dies with a bare
+# `PermissionError: 'state'` while a perfectly good config sits in /data. Found
+# exactly that way while smoke-testing v1.0.0-rc.1. docker-compose.yml still sets
+# it explicitly, which now merely agrees with the image instead of rescuing it.
+ENV CONVOY_CONFIG=/data/config.yaml
+
 WORKDIR /app
 
 # Install deps first (better layer caching), then the package with the web extra.
