@@ -1344,98 +1344,141 @@ def test_set_in_other_environment_does_not_satisfy_unassigned_server(
 # ---- CPUSE display name -> file name resolution -----------------------------
 # All names below are verbatim from clockwerks, 2026-08-27.
 
-# What `show installer packages imported` actually returns for a cloud-imported
-# Jumbo: a friendly display name, not a file name. clish splits on whitespace
-# and rejects it ("Could not find package R82.10") even fully double-quoted.
+# CPUSE shows some packages under a friendly display name and others under
+# their file name, on the same host, regardless of how each got there. clish
+# takes only the file name (or an interactive completion number), splitting the
+# friendly form on whitespace: "Could not find package R82.10".
 JHF_DISPLAY_NAME = "R82.10 Jumbo Hotfix Accumulator Recommended Jumbo Take 40"
-JHF_FILENAME = "Check_Point_R82_10_JUMBO_HF_MAIN_Bundle_T40_FULL.tgz"
-
-
-def _import_job(package: str, *, host: str = "clockwerks", env: str = "Table15-Prod"):
-    from convoy.services.patching import JOB_IMPORT
-    from convoy.store import JobRecord, JobStatus
-
-    return JobRecord(
-        kind=JOB_IMPORT,
-        target=host,
-        environment=env,
-        params={"package": package},
-        status=JobStatus.SUCCEEDED,
-    )
-
-
-class _JobStore:
-    """Just the list_jobs slice resolve_cpuse_handle reads."""
-
-    def __init__(self, jobs: list) -> None:
-        self._jobs = jobs
-
-    def list_jobs(self, **_kwargs):
-        return self._jobs
+# What actually sits in /var/log/CPda/repository/...#BUNDLE_R82_10_JUMBO_HF_MAIN#40/
+JHF_FILENAME = "Check_Point_R82_10_jumbo_hf_main_Bundle_T40_FULL.tgz"
 
 
 def test_handle_passes_through_a_filename_identifier() -> None:
-    """A display name with no spaces IS the file name — that is why locally
-    imported packages have always installed fine, and it must not be touched."""
+    """A display name with no spaces IS the file name — that is why some
+    packages have always installed fine, and it must not be touched."""
     from convoy.services.patching import resolve_cpuse_handle
 
-    store = _JobStore([])
     name = "Check_Point_R82_10_ga_time_fix_main_Bundle_T9_FULL.tgz"
-    assert resolve_cpuse_handle(store, "Table15-Prod", "clockwerks", name) == name
+    assert resolve_cpuse_handle(name, []) == name
 
 
-def test_handle_resolves_a_display_name_to_the_imported_filename() -> None:
+def test_handle_resolves_a_display_name_to_the_real_file() -> None:
     from convoy.services.patching import resolve_cpuse_handle
 
-    store = _JobStore([_import_job(JHF_FILENAME)])
-    assert (
-        resolve_cpuse_handle(store, "Table15-Prod", "clockwerks", JHF_DISPLAY_NAME)
-        == JHF_FILENAME
-    )
+    assert resolve_cpuse_handle(JHF_DISPLAY_NAME, [JHF_FILENAME]) == JHF_FILENAME
 
 
 def test_handle_matches_on_version_and_take_not_just_substring() -> None:
     """The display name shares no substring with the file name — "Take 40" vs
-    "_T40_" — so the match has to come from version+take."""
+    "_T40_" — so version+take is what actually resolves this."""
     from convoy.services.patching import resolve_cpuse_handle
 
-    store = _JobStore([_import_job(JHF_FILENAME)])
-    handle = resolve_cpuse_handle(store, "Table15-Prod", "clockwerks", JHF_DISPLAY_NAME)
-    assert handle == JHF_FILENAME
-    assert JHF_FILENAME.rsplit(".", 1)[0] not in JHF_DISPLAY_NAME  # no substring overlap
+    assert JHF_FILENAME.rsplit(".", 1)[0] not in JHF_DISPLAY_NAME  # no overlap at all
+    assert resolve_cpuse_handle(JHF_DISPLAY_NAME, [JHF_FILENAME]) == JHF_FILENAME
+
+
+def test_handle_tolerates_the_upload_extension_differing_from_the_box() -> None:
+    """This tool uploads *.tar; CPUSE lists the same package as *.tgz."""
+    from convoy.services.patching import resolve_cpuse_handle
+
+    uploaded = "Check_Point_R82_10_ga_time_fix_main_Bundle_T9_FULL.tar"
+    listed = "Check_Point_R82_10_ga_time_fix_main_Bundle_T9_FULL.tgz"
+    assert resolve_cpuse_handle(listed, [uploaded]) == listed  # no spaces: passthrough
+    spaced = "R82.10 GA Time Fix Take 9"
+    assert resolve_cpuse_handle(spaced, [uploaded]) == uploaded
 
 
 def test_handle_does_not_match_a_different_take() -> None:
-    """Take 24 and Take 40 were both imported on this host — picking the wrong
-    one would install a package the operator did not choose."""
+    """Takes 24, 36 and 40 all sit in the repository on this host — resolving to
+    the wrong one would install a package the operator did not choose, onto a
+    box that then reboots."""
     from convoy.cpuse import CPUSEError
     from convoy.services.patching import resolve_cpuse_handle
 
-    store = _JobStore([_import_job("Check_Point_R82_10_JUMBO_HF_MAIN_Bundle_T24_FULL.tgz")])
+    others = [
+        "Check_Point_R82_10_jumbo_hf_main_Bundle_T24_FULL.tgz",
+        "Check_Point_R82_10_jumbo_hf_main_Bundle_T36_FULL.tgz",
+    ]
     with pytest.raises(CPUSEError, match="display name"):
-        resolve_cpuse_handle(store, "Table15-Prod", "clockwerks", JHF_DISPLAY_NAME)
+        resolve_cpuse_handle(JHF_DISPLAY_NAME, others)
 
 
-def test_handle_picks_the_matching_take_among_several_imports() -> None:
+def test_handle_picks_the_matching_take_among_the_whole_repository() -> None:
     from convoy.services.patching import resolve_cpuse_handle
 
-    store = _JobStore([
-        _import_job("Check_Point_R82_10_JUMBO_HF_MAIN_Bundle_T24_FULL.tgz"),
-        _import_job(JHF_FILENAME),
-        _import_job("Check_Point_R82_10_ga_time_fix_main_Bundle_T9_FULL.tgz"),
-    ])
-    assert (
-        resolve_cpuse_handle(store, "Table15-Prod", "clockwerks", JHF_DISPLAY_NAME)
-        == JHF_FILENAME
-    )
+    repository = [
+        "Check_Point_R82_10_ga_time_fix_main_Bundle_T9_FULL.tgz",
+        "Check_Point_R82_10_jumbo_hf_main_Bundle_T24_FULL.tgz",
+        "Check_Point_R82_10_jumbo_hf_main_Bundle_T36_FULL.tgz",
+        JHF_FILENAME,
+    ]
+    assert resolve_cpuse_handle(JHF_DISPLAY_NAME, repository) == JHF_FILENAME
 
 
-def test_handle_raises_actionably_when_nothing_was_imported_here() -> None:
-    """A package imported outside this tool leaves no file name to resolve to;
-    failing before the command runs beats a CLINFR0329 from the box."""
+def test_handle_raises_actionably_when_nothing_matches() -> None:
     from convoy.cpuse import CPUSEError
     from convoy.services.patching import resolve_cpuse_handle
 
-    store = _JobStore([])
     with pytest.raises(CPUSEError, match="no usable identifier"):
-        resolve_cpuse_handle(store, "Table15-Prod", "clockwerks", JHF_DISPLAY_NAME)
+        resolve_cpuse_handle(JHF_DISPLAY_NAME, [])
+
+
+# ---- reading the file names off the host ------------------------------------
+
+# Real `ls` output shape: the repository nests each package one directory deep.
+REPOSITORY_LS = (
+    "/var/log/CPda/repository/CheckPoint#CPUpdates#All#6.0#5#6#"
+    "BUNDLE_R82_10_JUMBO_HF_MAIN#40/Check_Point_R82_10_jumbo_hf_main_Bundle_T40_FULL.tgz\n"
+    "/var/log/CPda/repository/CheckPoint#CPUpdates#All#6.0#5#6#"
+    "BUNDLE_R82_10_JUMBO_HF_MAIN#24/Check_Point_R82_10_jumbo_hf_main_Bundle_T24_FULL.tgz\n"
+)
+
+
+class _BashClient:
+    def __init__(self, stdout: str = "", exc: Exception | None = None) -> None:
+        self._stdout, self._exc = stdout, exc
+        self.commands: list[str] = []
+
+    def run_bash(self, command: str):
+        self.commands.append(command)
+        if self._exc is not None:
+            raise self._exc
+        from convoy.transport.ssh import CommandResult
+
+        return CommandResult(command=command, exit_status=0, stdout=self._stdout, stderr="")
+
+
+class _Ctx:
+    def __init__(self) -> None:
+        self.logs: list[str] = []
+
+    def log(self, message: str, level: str = "info") -> None:
+        self.logs.append(message)
+
+
+def test_on_box_package_files_reads_basenames_out_of_the_repository() -> None:
+    from convoy.services.patching import _on_box_package_files
+
+    client = _BashClient(REPOSITORY_LS)
+    assert _on_box_package_files(client, _Ctx()) == [
+        "Check_Point_R82_10_jumbo_hf_main_Bundle_T40_FULL.tgz",
+        "Check_Point_R82_10_jumbo_hf_main_Bundle_T24_FULL.tgz",
+    ]
+    assert "/var/log/CPda/repository" in client.commands[0]
+
+
+def test_on_box_package_files_is_best_effort_on_a_shell_failure() -> None:
+    """A host whose repository lives elsewhere, or a session that never reached
+    expert, contributes no candidates rather than failing the job."""
+    from convoy.errors import TransportError
+    from convoy.services.patching import _on_box_package_files
+
+    ctx = _Ctx()
+    assert _on_box_package_files(_BashClient(exc=TransportError("no expert")), ctx) == []
+    assert any("CPUSE repository" in m for m in ctx.logs)
+
+
+def test_on_box_package_files_without_a_bash_capable_client() -> None:
+    from convoy.services.patching import _on_box_package_files
+
+    assert _on_box_package_files(object(), _Ctx()) == []
