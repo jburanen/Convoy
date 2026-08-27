@@ -119,6 +119,16 @@ These gates define the major version releases - the milestones may change in the
 🤞 RADIUS auth option  
 🤞 Timed/scheduled install actions  
 ⏫ Improve the initial management naming modal to include all the checkboxes from the manage environments modal  
+✨ Click/drag to highlight with mouse-up occuring outside the modal closes the modal 
+
+#### Provisioning
+✨ Handle S1C API endpoint URL  
+🤞 API creds should not be required for 
+✨ Separate bootstrapping flow for API-only scenarios  
+✨ Permit update of only part of a credential set without destroying other fields like API keys  
+✨ On API-Only environments, make the API key optional on credential sets  
+✨ While entering passwords on credential sets, provide an eyelid-style button inside the text field to show the password while typing  
+✨ Are there any character limitations for passwords?
 
 #### Packages
 🤞 Add a percentage progress display for package upload  
