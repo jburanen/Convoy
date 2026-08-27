@@ -75,6 +75,7 @@ import asyncio
 import posixpath
 import shlex
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from ..clusterxl import ClusterMemberState
@@ -196,54 +197,59 @@ def _filename_matches_display_name(filename: str, display_name: str) -> bool:
     )
 
 
-def resolve_cpuse_handle(
-    store: Store, environment: str, host_name: str, package_id: str
-) -> str:
-    """The identifier to put on a clish ``installer``/``show installer package``
-    command line for ``package_id``.
+# CPUSE keeps each imported package in its own directory under here — named
+# CheckPoint#CPUpdates#...#<take> — with the real package file inside it
+# (observed on live gear 2026-08-27)::
+#
+#   /var/log/CPda/repository/
+#       CheckPoint#CPUpdates#All#6.0#5#6#BUNDLE_R82_10_JUMBO_HF_MAIN#40/
+#           Check_Point_R82_10_jumbo_hf_main_Bundle_T40_FULL.tgz
+#
+# Those directories are mode 0700 and root-owned, so reading them needs expert.
+_CPDA_REPOSITORY = "/var/log/CPda/repository"
 
-    CPUSE lists cloud-imported packages under a friendly DISPLAY NAME full of
-    spaces — "R82.10 Jumbo Hotfix Accumulator Recommended Jumbo Take 40" — and
-    that is what ``show installer packages imported`` returns, so it is what
-    ends up in the UI's install picker. clish accepts neither it nor a quoted
-    form of it: it splits the command line on whitespace and takes the first
-    token, so the box answers ``Could not find package R82.10`` even when the
-    whole name is wrapped in double quotes (live gear, 2026-08-27). The failure
-    it reports names the two forms it does accept: the package FILE NAME, or
-    the number from ``installer install``'s own TAB-completion list.
 
-    The number is only reachable through interactive TAB completion, which is
-    not a thing to drive over SSH for a command that reboots a firewall, so
-    this resolves the file name instead. Every ``installer import local`` this
-    tool has run recorded the file it uploaded in that job's own params, so the
-    mapping is already on disk and needs no new schema — see
-    ``_uploaded_filenames``.
+def _on_box_package_files(client: object, ctx: JobContext) -> list[str]:
+    """Real package file names CPUSE is holding on this host.
 
-    An identifier with no whitespace is already usable as-is, which is why
-    locally-imported ``*.tgz`` packages have always installed fine: for those,
-    CPUSE's display name IS the file name.
+    This is the authoritative answer to "what is this package actually called?"
+    — it comes from the box, so it holds for packages imported before this tool
+    existed, imported by another operator, or whose own import record has since
+    been pruned or wiped.
+
+    Best-effort by design: a host whose repository lives elsewhere, or a job
+    without expert escalation (uninstall does not require it), simply
+    contributes no candidates instead of failing.
     """
-    if not any(ch.isspace() for ch in package_id):
-        return package_id
-    for filename in _uploaded_filenames(store, environment, host_name):
-        if _filename_matches_display_name(filename, package_id):
-            return filename
-    raise CPUSEError(
-        f"{package_id!r} is a CPUSE display name, and clish cannot accept one as a "
-        "package argument — it splits on whitespace, so the host reports "
-        f"'Could not find package {package_id.split()[0]}'. No package file uploaded "
-        f"to {host_name} by this tool matches it, so there is no usable identifier "
-        "for it here. Import this package through this tool (which uploads a file "
-        "and remembers its name), or run the install from the host's own clish "
-        "using `installer install` and its numbered completion list."
-    )
+    run_bash = getattr(client, "run_bash", None)
+    if run_bash is None:
+        return []
+    repo = shlex.quote(_CPDA_REPOSITORY)
+    try:
+        result = run_bash(f"ls -1 {repo}/*/*.tgz {repo}/*/*.tar 2>/dev/null")
+    except OrchestratorError as exc:
+        ctx.log(f"could not read the CPUSE repository: {exc}", level="warning")
+        return []
+    names: list[str] = []
+    for line in result.stdout.splitlines():
+        name = line.strip().rsplit("/", 1)[-1]
+        if name and name not in names:
+            names.append(name)
+    return names
 
 
 def _uploaded_filenames(store: Store, environment: str, host_name: str) -> list[str]:
-    """Package files this tool has successfully imported onto ``host_name``,
-    newest first, read back out of the import jobs' own params — recorded there
-    since the feature existed (see ``submit_import``), so no new state is
-    needed to answer "what did we upload here?"."""
+    """Package files this tool imported onto ``host_name``, newest first, read
+    back out of the import jobs' own params (recorded there since the feature
+    existed — see ``submit_import``).
+
+    A fallback behind ``_on_box_package_files``, not a substitute for it: this
+    record is destroyed by ``deploy.sh --reset``, prunable by job retention,
+    and absent entirely for anything imported outside this tool — while the
+    package itself stays on the firewall. Observed 2026-08-27: a Jumbo this
+    tool had genuinely uploaded was unresolvable from history alone because the
+    dev host's database had been wiped in between.
+    """
     names: list[str] = []
     for job in store.list_jobs(
         kinds=[JOB_IMPORT],
@@ -256,6 +262,44 @@ def _uploaded_filenames(store: Store, environment: str, host_name: str) -> list[
         if isinstance(name, str) and name and name not in names:
             names.append(name)
     return names
+
+
+def resolve_cpuse_handle(package_id: str, candidates: Sequence[str]) -> str:
+    """The identifier to put on a clish ``installer``/``show installer package``
+    command line for ``package_id``, given the package file names known for
+    this host.
+
+    CPUSE lists some packages under a friendly DISPLAY NAME full of spaces —
+    "R82.10 Jumbo Hotfix Accumulator Recommended Jumbo Take 40" — and others
+    under their file name, with no relation to how the package got there: the
+    same host shows both forms in one ``show installer packages all``. The
+    friendly form is what reaches the UI's picker, and clish will not take it:
+    it splits the command line on whitespace and uses the first token, so the
+    box answers ``Could not find package R82.10`` even when the whole name is
+    double-quoted (live gear, 2026-08-27). Its own error names what it does
+    accept — the package file name, or the number from ``installer install``'s
+    TAB-completion list.
+
+    This resolves the file name. The number is only reachable through
+    interactive TAB completion, and a positional index is not a thing to feed a
+    command that reboots a firewall.
+
+    An identifier with no whitespace is already usable and passes straight
+    through — for those, CPUSE's display name IS the file name.
+    """
+    if not any(ch.isspace() for ch in package_id):
+        return package_id
+    for filename in candidates:
+        if _filename_matches_display_name(filename, package_id):
+            return filename
+    first = package_id.split()[0]
+    raise CPUSEError(
+        f"{package_id!r} is a CPUSE display name, and clish cannot accept one as a "
+        f"package argument — it splits on whitespace, so the host reports 'Could not "
+        f"find package {first}'. No package file on this host matches it, so there is "
+        "no usable identifier for it. Check that the package is still in CPUSE's "
+        "repository on the host, and that this job could reach expert mode to read it."
+    )
 
 
 @dataclass
@@ -883,15 +927,15 @@ class PatchingService:
         host = connector.patchable_host(ctx.job.target or "")
         package_id = str(ctx.job.params["package_id"])
         verify_first = bool(ctx.job.params.get("verify_first", True))
-        # Resolved once, up front: a display name reaches clish as several
-        # arguments and is rejected, so failing here beats failing after the
-        # verify has already run (see resolve_cpuse_handle).
-        package_id = self._cpuse_handle(ctx, package_id)
 
         creds = job_run_credentials(connector, self._vault, ctx.job)
         client = connector.connect(host, creds)
         try:
             cpuse = CPUSE(client, shell=client.shell)
+            # Resolved before anything runs: a display name reaches clish as
+            # several arguments and is rejected, so failing here beats failing
+            # after the verify has already gone through (resolve_cpuse_handle).
+            package_id = self._cpuse_handle(ctx, package_id, client)
             if verify_first:
                 ctx.log(f"verifying {package_id} (installer verify)")
                 output = cpuse.verify(package_id)
@@ -929,13 +973,20 @@ class PatchingService:
         except OrchestratorError as exc:
             ctx.log(f"could not refresh detected state: {exc}", level="warning")
 
-    def _cpuse_handle(self, ctx: JobContext, package_id: str) -> str:
+    def _cpuse_handle(self, ctx: JobContext, package_id: str, client: object) -> str:
         """resolve_cpuse_handle for a running job, saying so in the job log when
         the operator's chosen display name had to be swapped for a file name —
-        the two look nothing alike, and every later log line names the handle."""
-        handle = resolve_cpuse_handle(
-            self._store, ctx.job.environment, ctx.job.target or "", package_id
+        the two look nothing alike, and every later log line names the handle.
+
+        Candidates come from the host first and this tool's own import history
+        second: the box knows about packages our records never saw or no longer
+        remember."""
+        if not any(ch.isspace() for ch in package_id):
+            return package_id  # already usable — don't pay for a repository read
+        candidates = _on_box_package_files(client, ctx) + _uploaded_filenames(
+            self._store, ctx.job.environment, ctx.job.target or ""
         )
+        handle = resolve_cpuse_handle(package_id, candidates)
         if handle != package_id:
             ctx.log(
                 f"{package_id!r} is a CPUSE display name, which clish will not accept — "
@@ -947,12 +998,12 @@ class PatchingService:
         connector = self.registry.get(ctx.job.environment)
         host = connector.patchable_host(ctx.job.target or "")
         package_id = str(ctx.job.params["package_id"])
-        package_id = self._cpuse_handle(ctx, package_id)
 
         creds = job_run_credentials(connector, self._vault, ctx.job)
         client = connector.connect(host, creds)
         try:
             cpuse = CPUSE(client, shell=client.shell)
+            package_id = self._cpuse_handle(ctx, package_id, client)
             ctx.raise_if_cancelled()  # last safe stop; uninstall may reboot the host
             ctx.log(f"uninstalling {package_id} — host may reboot when this completes")
             output = cpuse.uninstall(package_id)
