@@ -1,6 +1,4 @@
-# Convoy
-
-Orchestration layer for Check Point's **Central Deployment Tool (CDT)** and **CPUSE**. It coordinates deployment of patches and upgrades — hotfixes, Jumbo Hotfix Accumulators, and major-version upgrades — across fleets of Security Management Servers and Security Gateways, through a web interface.  
+Convoy is an orchestration layer for Check Point's **Central Deployment Tool (CDT)** and **CPUSE**. It coordinates deployment of patches and upgrades — hotfixes, Jumbo Hotfix Accumulators, and major-version upgrades — across fleets of Security Management Servers and Security Gateways, through a web interface.  
 
 > This is an internal operations tool for authorized maintenance on infrastructure you own. It *drives* Check Point's own CDT/CPUSE agents; it does not replace them.
 
@@ -63,7 +61,7 @@ This tool has the capability to alter or negatively impact your management serve
 - **Cluster-aware ordering is operator-supplied, not tool-enforced** — the CDT candidates order *is* the rollout order, and standby-first sequencing is whatever you put in that list. The tool does **not** currently detect that two candidates are members of the same cluster, and does not stagger or health-gate between them. Order the list yourself.
 - **Detected state, not assumed** — the UI reflects live `show installer packages`, uploads are checksum-verified, and free space is checked before import.
 - **Host-key pinning** — a Gaia host's SSH key is pinned on first connect and stored on the data volume. If it later changes, jobs for that host fail closed before any credential is sent; re-accepting is an explicit operator action. Rebuild or upgrade a box and you will need to re-accept it.
-- **No snapshots, no maintenance windows** — the tool does not take rollback snapshots and does not gate runs to an approved window. Earlier example configs implied otherwise; see `examples/config.example.yaml`.
+- **No snapshots, no maintenance windows** — the tool does not take rollback snapshots and does not gate runs to an approved window. 
 - **Auditable** — tool actions and job results are tracked on the Jobs tab.
 
 > **Authorization model:** every authenticated user has full destructive authority over every environment — there are no roles or per-environment permissions. Under LDAP, that means **every member of `CONVOY_LDAP_REQUIRED_GROUP`** can patch, reboot, bootstrap admin accounts onto gateways, and delete environments. Scope that group accordingly. Per-environment RBAC is a v2 item.
@@ -71,11 +69,6 @@ This tool has the capability to alter or negatively impact your management serve
 > Prior to the v1 initial release a policy will be implemented to require code security review by an independent agentic analyst prior to release publication.
 
 ## 🎯 Status and Milestones
-
-**Working, pre-production.** The web UI, service core, SSH transport, CPUSE and CDT wrappers, credential/package stores, environments, and the background job runner are implemented and unit-tested. Caveats:  
-
-- CPUSE/CDT output parsers are built tolerant but **not yet validated against live Gaia hardware** — expect to tune them on first real connection.  
-- The secondary **CLI** does inventory validation and dry-run planning; its fleet-`--execute` path and the health-check gating (`checks.py`) are still typed stubs.  
 
 ### Milestones to reach v1 / Initial Release
 These gates define the major version releases - the milestones may change in the future but they will remain documented here. A milestone is not marked complete until it is tested and confirmed working by a human. There will not be a packaged release until v1.
@@ -91,7 +84,7 @@ These gates define the major version releases - the milestones may change in the
 ◻️ Test Spark major version patching - ie 80.20.X > 81.10.X  
 ✅ Independent agentic code security review  
 ◻️ Re-test of functionality  
-◻️ Packaged deployment release that doesn't require git clone and --build  
+◻️ Containerized deployment release that doesn't require git clone and --build  
 
 ### Milestones to reach v2
 
@@ -103,13 +96,13 @@ These gates define the major version releases - the milestones may change in the
 ✨ Add logic to display a warning on mobile devices that the UI of this tool does not scale down well (by design) and you should use it on a larger display.   
 🤞 RADIUS auth option  
 🤞 Timed/scheduled install actions  
+⏫ Improve the initial management naming modal to include all the checkboxes from the manage environments modal  
 
 #### Provisioning
 ✨ Handle S1C API endpoint URL  
 ✨ Separate bootstrapping flow for API-only scenarios  
 
 #### Packages
-🤞 Add a percentage progress display for package upload  
 🤞 If disk space check fails, parse for large folders, suggest things to clean  
 
 #### Manual Patching (CPUSE)

@@ -83,7 +83,14 @@ from ..inventory import Host
 from ..jobs import JobContext, JobRunner, JobTimedOut
 from ..packages import PackageStore, check_filename, package_kind
 from ..store import JobRecord, ServerStateRow, Store, utcnow
-from ..transport.ssh import GaiaExpertSession, InteractiveShell, require_ok
+from ..transport.ssh import (
+    CommandResult,
+    CommandRunner,
+    GaiaExpertSession,
+    GaiaShell,
+    InteractiveShell,
+    require_ok,
+)
 from .common import (
     EnvironmentRegistry,
     HostConnector,
@@ -173,6 +180,40 @@ _STALE_MOUNT_MARKER = "is mounted; will not make a filesystem here"
 # tolerates either a straight or a typographic apostrophe in case CPUSE
 # renders the latter on some builds.
 _FW_VER_PREFIX_RE = re.compile(r"^\s*this is check point.s\s+", re.IGNORECASE)
+
+
+def read_fw_ver(client: CommandRunner, ctx: JobContext | None = None) -> CommandResult:
+    """Run ``fw ver`` in a shell that can actually find it.
+
+    ``fw ver`` works in clish and in expert alike — the shell is not the
+    variable (operator-confirmed 2026-08-27, running it by hand in both). What
+    matters is that it resolves through Check Point's own PATH, which is set up
+    by the profile an INTERACTIVE LOGIN shell sources. ``exec_command`` gets
+    neither: on a device where ``bashUser on`` has made the account's login
+    shell bash, the command lands in a plain non-login bash and fails
+    `bash: line 1: fw: command not found` (rc 127) — while the operator, logged
+    in interactively at that same moment, runs it fine. That is what reported a
+    genuinely successful Spark upgrade as a failure: the upgrade was done, only
+    its verification step could not read the version back.
+
+    So: bare when the login shell is clish, where clish resolves it itself and
+    this has always worked; through a login shell (``bash -lc``) when the login
+    shell is bash, so the profile runs first. One fallback to ``clish -c`` if
+    that still fails, since ``fw ver`` is equally valid there — this single call
+    decides whether a completed upgrade is reported as success, which is worth a
+    second attempt rather than a confident guess.
+    """
+    in_bash = getattr(client, "shell", None) is GaiaShell.EXPERT
+    wire = "bash -lc 'fw ver'" if in_bash else "fw ver"
+    result = client.run(wire)
+    if result.ok:
+        return result
+    if ctx is not None:
+        ctx.log(
+            f"{wire!r} failed (rc={result.exit_status}) — retrying `fw ver` through clish",
+            level="warning",
+        )
+    return require_ok(client.run("clish -c 'fw ver'"))
 
 
 def parse_fw_ver(stdout: str) -> str:
@@ -346,7 +387,7 @@ class SparkPatchingService:
         creds = connector.require_credentials(host, credentials)
         client = connector.connect(host, creds)
         try:
-            result = require_ok(client.run("fw ver"))
+            result = read_fw_ver(client)
             version = parse_fw_ver(result.stdout)
             existing = self._store.get_server_state(environment, host.name)
             self._store.upsert_server_state(
@@ -578,15 +619,24 @@ class SparkPatchingService:
         expert_password = require_expert_password(bundle, host)  # no SSH before this
 
         self._check_storage_space(connector, host, bundle, local_size, ctx)
-        self._enable_bash_user(connector, host, bundle, expert_password, ctx)
+        turned_on_here = self._enable_bash_user(connector, host, bundle, expert_password, ctx)
         self._transfer_image(
             connector, host, bundle, local_path, local_size, expected_sha1, remote_path, ctx
         )
-        # Restore the device to its normal (bashUser off) state now rather
-        # than leaving SCP/shell access enabled until whenever install
-        # eventually runs — install (_run_upgrade) does NOT repeat this, so
-        # it's the only place bashUser gets turned back off.
-        self._disable_bash_user(connector, host, bundle, expert_password, ctx)
+        if turned_on_here:
+            # Restore the device to its normal (bashUser off) state now rather
+            # than leaving SCP/shell access enabled until whenever install
+            # eventually runs — install (_run_upgrade) does NOT repeat this, so
+            # it's the only place bashUser gets turned back off.
+            self._disable_bash_user(connector, host, bundle, expert_password, ctx)
+        else:
+            # ...but only what this job turned on. A device the operator
+            # deliberately left with bashUser enabled must come out of a
+            # transfer the way it went in (operator-specified 2026-08-27):
+            # turning it off here would be this tool changing a setting it was
+            # never asked to manage, and the operator would find shell access
+            # silently revoked after an unrelated upload.
+            ctx.log("leaving bashUser on — it was already on before this job started")
 
         self._mark_staged(ctx.job.environment, host.name, package)
         ctx.log(
@@ -682,14 +732,33 @@ class SparkPatchingService:
         bundle: CredentialBundle,
         expert_password: str,
         ctx: JobContext,
-    ) -> None:
+    ) -> bool:
+        """Turn on the device's bash/SCP access for the transfer.
+
+        Returns True if this actually turned it on — which is also the caller's
+        licence to turn it back off afterwards. False means it was already on
+        when we arrived, and the device must be left that way.
+
+        How it knows: `bashUser on` is what makes the account's login shell
+        bash, so a device already carrying it drops an SSH login straight into
+        expert with no clish prompt in between — which is exactly what
+        ``enter_expert`` reports by returning False (see transport/ssh.py, and
+        the SG1800 that prompted it). No extra probe command is needed, and no
+        guess about how to read the setting back: the session's own landing
+        prompt is the evidence.
+        """
         ctx.log(f"connecting over SSH to {host.name} (enabling SCP transfer)")
         client = self._connect(connector, host, bundle)
         try:
             shell = client.open_interactive_shell()
             try:
                 session = GaiaExpertSession(shell)
-                session.enter_expert(expert_password)
+                if not session.enter_expert(expert_password):
+                    ctx.log(
+                        "bashUser is already on (login landed in expert) — leaving it "
+                        "on, and this job will not turn it off afterwards"
+                    )
+                    return False
                 ctx.raise_if_cancelled()  # last safe stop before mutating device state
                 output = session.run_expert("bashUser on")
                 if output:
@@ -703,6 +772,7 @@ class SparkPatchingService:
         # exiting expert mode — some Gaia Embedded builds only pick up the new
         # bashUser state on a fresh session (operator-specified sequence).
         ctx.log("logging out before file transfer (full session boundary)")
+        return True
 
     def _transfer_image(
         self,
@@ -789,7 +859,7 @@ class SparkPatchingService:
         client = self._wait_until_reconnected(connector, host, bundle, ctx)
         try:
             ctx.set_status("verifying installed build")
-            result = require_ok(client.run("fw ver"))
+            result = read_fw_ver(client, ctx)
         finally:
             _safe_close(client)
 
