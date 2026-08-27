@@ -97,10 +97,6 @@ if [ "$RESET" = "1" ]; then
       find ./data -mindepth 1 -maxdepth 1 ! -name certs -exec rm -rf {} +
     fi
   fi
-
-  echo ">> restoring default config.yaml"
-  mkdir -p data
-  cp examples/config.example.yaml data/config.yaml
 fi
 
 echo ">> git pull"
@@ -108,6 +104,18 @@ git pull --ff-only
 
 echo ">> ensure data dir"
 mkdir -p data
+
+# Seed the config on a first deploy (and after a --reset, which deletes it).
+# Config.load() treats a missing /data/config.yaml as fatal, so without this a
+# fresh checkout builds and starts a container that then dies on boot -- the
+# failure surfaces as an unexplained health-check timeout rather than as
+# "you have no config". Only ever creates what is absent: an existing
+# config.yaml is operator-edited state and is never overwritten, which is also
+# what makes this safe to run on every deploy.
+if [ ! -f data/config.yaml ]; then
+  echo ">> no data/config.yaml — seeding from examples/config.example.yaml"
+  cp examples/config.example.yaml data/config.yaml
+fi
 
 # The container runs as this uid:gid (docker-compose.yml's `user:`) so the
 # bind-mounted ./data above — just created owned by whoever is running this

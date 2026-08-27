@@ -12,9 +12,16 @@ runs first so nothing has the SQLite file open mid-wipe.
 ## `--reset` — application state only (the common one)
 Deletes the *contents* of `./data` **except `data/certs`**: `config.yaml`, the
 whole DB (environments, servers, firewalls, credential sets, sessions, job
-history) and uploaded package files. Then restores
-`examples/config.example.yaml` to `data/config.yaml` and continues the normal
+history) and uploaded package files, then continues the normal
 pull/build/up/health-check flow.
+
+`data/config.yaml` comes back via the **seed-if-absent** step that now runs on
+every deploy (after `git pull`, at "ensure data dir"), not via a restore step
+inside the reset branch — reset deletes the file, so the seed picks it up like
+any other first deploy. One code path instead of two, and it seeds the example
+as of the pull rather than as it stood before it. The seed only ever creates
+what is missing: an existing `config.yaml` is operator-edited state and is
+never overwritten.
 
 **`.env` and `data/certs` are deliberately KEPT** — so the master key, LDAP
 config, any `BASIC_AUTH_*` override and the TLS certificate/private key all
