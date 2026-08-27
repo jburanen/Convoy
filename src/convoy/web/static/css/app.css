@@ -111,9 +111,12 @@ header {
   background: var(--bg);
 }
 /* Fade strip directly under the pinned tab bar, visible only once scrolled
-   (header.condensed, same threshold updateHeaderCondensed() already uses)
-   — content scrolling underneath eases out instead of butting flush against
-   the tabs. Positioned relative to <header> itself (its sticky box is the
+   (header.scrolled, toggled by updateHeaderScrolled() in app.js) — content
+   scrolling underneath eases out instead of butting flush against the tabs.
+   Still scroll-gated rather than always-on: at the top of the page there is
+   nothing passing beneath it to soften. This is the ONLY thing that class
+   drives — the header itself no longer changes size or hides anything on
+   scroll. Positioned relative to <header> itself (its sticky box is the
    containing block for this absolutely-positioned pseudo), sitting just
    past its bottom edge so it moves with the pinned header. */
 header::after {
@@ -128,24 +131,19 @@ header::after {
   opacity: 0;
   transition: opacity 0.15s ease;
 }
-header.condensed::after { opacity: 1; }
+header.scrolled::after { opacity: 1; }
 /* Logo, stacked title+tagline, and (pushed right via #header-right's own
    margin-left:auto) the signed-in-user/logout controls, all on one line.
-   header.condensed (toggled by updateHeaderCondensed() in app.js, a few px
-   into any scroll) shrinks the vertical padding, hides the tagline, and
-   shrinks the logo to match the now single-line title — so the pinned
-   header/tabs/picker don't eat too much space during a long scroll. */
+   The header keeps this size for the whole scroll: it used to shrink its
+   padding, hide the tagline and shrink the logo once scrolled, which was
+   removed (operator-directed) — a pinned header that reflows itself while
+   you read is more distracting than the vertical space it reclaims. */
 #header-top {
   display: flex;
   align-items: center;
   gap: 0.7rem;
   padding-top: 1rem;
   padding-bottom: 0.5rem;
-  transition: padding 0.15s ease;
-}
-header.condensed #header-top {
-  padding-top: 0.4rem;
-  padding-bottom: 0.3rem;
 }
 #header-titles {
   display: flex;
@@ -154,25 +152,17 @@ header.condensed #header-top {
   min-width: 0; /* lets .subtitle actually shrink/truncate instead of overflowing the row */
 }
 #header-titles h1 { margin: 0; font-size: 1.5rem; line-height: 1.15; white-space: nowrap; }
+/* nowrap/ellipsis stay: they keep a long tagline from wrapping the identity
+   row onto two lines in a narrow window. The max-height/opacity transition
+   that used to collapse it on scroll is gone with header.condensed. */
 .subtitle {
   margin: 0;
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-height: 1.3em;
-  opacity: 1;
-  transition: max-height 0.15s ease, opacity 0.15s ease;
 }
-header.condensed .subtitle {
-  max-height: 0;
-  opacity: 0;
-}
-#header-logo {
-  flex-shrink: 0;
-  transition: width 0.15s ease, height 0.15s ease;
-}
-header.condensed #header-logo { width: 26px; height: 26px; }
+#header-logo { flex-shrink: 0; }
 #header-right {
   display: flex;
   align-items: center;
@@ -861,11 +851,38 @@ button.link-btn.fw-name-link {
 .modal-card.narrow { width: min(480px, 100%); } /* welcome / credential dialogs */
 #env-modal .modal-card { width: min(600px, 100%); } /* a little wider than narrow */
 
-/* ---- discover-servers review table ---- */
-#discover-table input[type="text"] { width: 100%; box-sizing: border-box; }
-#discover-table .disc-existing { opacity: 0.5; } /* already in inventory — greyed */
-#discover-table .disc-review .disc-note { color: var(--warn); }
-#discover-warnings div { margin: 0.1rem 0; }
+/* ---- discover review tables (servers + firewalls) ---- */
+/* The two share row markup and classes; only the firewalls table carries the
+   credential picker and the post-import test result. */
+#discover-table input[type="text"],
+#discover-firewalls-table input[type="text"] { width: 100%; box-sizing: border-box; }
+#discover-table .disc-existing,
+#discover-firewalls-table .disc-existing { opacity: 0.5; } /* already imported/in inventory */
+#discover-table .disc-review .disc-note,
+#discover-firewalls-table .disc-review .disc-note { color: var(--warn); }
+#discover-warnings div,
+#discover-firewalls-warnings div { margin: 0.1rem 0; }
+
+/* Bulk credential picker above the firewalls review table. Same flex rhythm as
+   .bulk-import-row on the Firewalls panel. */
+.disc-cred-row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 0.5rem 0;
+}
+.disc-cred-row .hint { margin: 0; }
+#discover-firewalls-table .disc-cred { width: 100%; box-sizing: border-box; }
+/* The imported row's note cell holds the test result and, only when that test
+   failed on authentication, the Bootstrap button — stacked so a long paramiko
+   error doesn't push the button out of the cell. */
+#discover-firewalls-table .disc-note {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
+}
 
 /* Provisioning form: fields stacked over a table-style header row of labels. */
 #provision-form { flex-direction: column; align-items: stretch; }

@@ -31,15 +31,16 @@
      nested inside something short. #status-chips/#cred-cache-note deliberately
      stay OUTSIDE, in normal flow, so they scroll away with the page like any
      other contextual content — only the identity/nav row needs to persist.
-     updateHeaderCondensed() (app.js) adds/removes header.condensed on
-     scroll to shrink the vertical padding once you're a few pixels down,
-     without hiding or reflowing any of its content. -->
+     The header keeps its full height for the whole scroll — nothing shrinks
+     or hides. updateHeaderScrolled() (app.js) still adds/removes
+     header.scrolled, but that now drives only the fade strip beneath the tab
+     bar (header.scrolled::after in app.css). -->
 <header>
   <div id="header-top">
     <img src="/favicon.svg" alt="" id="header-logo" width="46" height="46">
     <!-- Title + tagline stacked so the bigger logo has two lines to sit next
-         to; header.condensed (app.js) hides the tagline and shrinks the logo
-         so only the title remains, matched in height. -->
+         to. Both stay visible while scrolling — the tagline used to collapse
+         and the logo shrink once scrolled, removed operator-directed. -->
     <div id="header-titles">
       <h1>Convoy</h1>
       <p class="subtitle">Patching orchestration for Check Point systems</p>
@@ -267,7 +268,7 @@
           <tr>
             <th>Filename</th>
             <th>Size</th>
-            <th>Compatible with</th>
+            <th>Package Info</th>
             <th>Retention</th>
             <th></th>
           </tr>
@@ -1044,8 +1045,11 @@
     </div>
     <p class="hint">
       Connects to the environment's primary management server and enumerates gateways
-      and cluster members via the Management API. Uses the credential set assigned to
-      the primary. Review the detected roles and import the ones you want.
+      and cluster members via the Management API — the scan itself uses the credential
+      set assigned to the primary. Review the detected roles, choose the credential set
+      each firewall should use, and import the ones you want. Imported firewalls are
+      credential-tested straight away; any that fail to authenticate can be bootstrapped
+      from their own row.
     </p>
     <form id="discover-firewalls-form">
       <label id="discover-firewalls-domain-label" class="hidden">Domain
@@ -1055,10 +1059,22 @@
     </form>
     <p class="hint" id="discover-firewalls-status"></p>
     <div id="discover-firewalls-warnings" class="hint warn hidden"></div>
+    <!-- Bulk credential picker: sets every row's own select below, which stays
+         individually overridable. Hidden when the environment has credential
+         storage disabled — there are no sets to choose from, and the import
+         falls back to carrying the primary's typed SSH username across
+         (see app.js's import handler). -->
+    <div id="discover-firewalls-cred-row" class="disc-cred-row hidden">
+      <label for="discover-firewalls-cred-all">Credential set for all imported firewalls
+        <select id="discover-firewalls-cred-all"></select>
+      </label>
+      <span class="hint">Override any row individually below.</span>
+    </div>
     <table id="discover-firewalls-table" class="hidden">
       <thead>
         <tr>
-          <th></th><th>Name</th><th>Address</th><th>Detected role</th><th>Notes</th>
+          <th></th><th>Name</th><th>Address</th><th>Detected role</th>
+          <th class="disc-cred-col hidden">Credential set</th><th>Notes</th>
         </tr>
       </thead>
       <tbody><!-- tpl-discovered-firewall-row instances --></tbody>
@@ -1265,7 +1281,17 @@
         <option value="spark_firewall">Spark Firewall</option>
       </select>
     </td>
-    <td class="disc-note muted"></td>
+    <!-- Filled from the environment's credential sets, preselected to the
+         primary's; hidden along with its header when storage is disabled. -->
+    <td class="disc-cred-col hidden"><select class="disc-cred"></select></td>
+    <!-- Notes doubles as the post-import credential-test result. The bootstrap
+         button appears only when that test failed on authentication (app.js) —
+         full Gaia gets the confirm-gated Management-API push, Spark the
+         display-only commands modal. -->
+    <td class="disc-note muted">
+      <span class="disc-note-text"></span>
+      <button type="button" class="disc-bootstrap small hidden">Bootstrap credentials</button>
+    </td>
   </tr>
 </template>
 
