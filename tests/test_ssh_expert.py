@@ -24,13 +24,24 @@ class FakeChannel:
     wants that. Ignores whatever is sent — the response script is fixed in
     advance, independent of what InteractiveShell.send_line/send_secret write."""
 
-    def __init__(self, chunks: list[bytes], *, close_when_empty: bool = False) -> None:
+    def __init__(
+        self,
+        chunks: list[bytes],
+        *,
+        close_when_empty: bool = False,
+        greet_silently: bool = False,
+    ) -> None:
         self._chunks = list(chunks)
         self.sent: list[bytes] = []
         self.closed = False
         self._close_when_empty = close_when_empty
+        # Withholds every chunk until something is sent, modelling a device
+        # that prints no prompt of its own at login.
+        self._greet_silently = greet_silently
 
     def recv_ready(self) -> bool:
+        if self._greet_silently and not self.sent:
+            return False
         return bool(self._chunks)
 
     def recv(self, n: int) -> bytes:
@@ -86,16 +97,36 @@ def test_send_line_and_send_secret_write_to_channel() -> None:
 
 
 def test_enter_expert_succeeds_with_correct_password() -> None:
-    channel = FakeChannel([b"Password: ", b"[Expert@gw01]# "])
+    channel = FakeChannel([b"gw01> ", b"Password: ", b"[Expert@gw01]# "])
     session = GaiaExpertSession(InteractiveShell(channel))
-    session.enter_expert("hunter2", timeout=1.0)  # must not raise
+    assert session.enter_expert("hunter2", timeout=1.0) is True
 
 
 def test_enter_expert_fails_with_wrong_password() -> None:
-    channel = FakeChannel([b"Password: ", b"wrong password\nPassword: "])
+    channel = FakeChannel([b"gw01> ", b"Password: ", b"wrong password\nPassword: "])
     session = GaiaExpertSession(InteractiveShell(channel))
     with pytest.raises(ExpertModeError, match="wrong password"):
         session.enter_expert("hunter2", timeout=1.0)
+
+
+def test_enter_expert_skips_escalation_when_login_lands_in_expert() -> None:
+    """A Spark gateway whose user is configured `bashUser on` drops you
+    straight into expert at login. Sending `expert` there asks for a password
+    the session does not need, so the greeting decides it (operator-specified
+    2026-08-27)."""
+    channel = FakeChannel([b"[Expert@gw01]# "])
+    session = GaiaExpertSession(InteractiveShell(channel))
+    assert session.enter_expert("hunter2", timeout=1.0) is False
+    assert channel.sent == []  # nothing sent at all -- not even `expert`
+
+
+def test_enter_expert_still_escalates_when_the_device_greets_with_silence() -> None:
+    """No greeting is not evidence of being elevated: fall back to sending
+    `expert`, which is what this did before the greeting read existed."""
+    channel = FakeChannel([b"Password: ", b"[Expert@gw01]# "], greet_silently=True)
+    session = GaiaExpertSession(InteractiveShell(channel))
+    assert session.enter_expert("hunter2", timeout=0.3) is True
+    assert channel.sent[0] == b"expert\n"
 
 
 def test_run_expert_strips_echo_and_prompt() -> None:
@@ -169,6 +200,7 @@ def test_run_expert_command_raises_when_marker_missing() -> None:
 def test_full_expert_conversation() -> None:
     channel = FakeChannel(
         [
+            b"gw01> ",
             b"Password: ",
             b"[Expert@gw01]# ",
             b"bashUser on\nDone.\n[Expert@gw01]# ",

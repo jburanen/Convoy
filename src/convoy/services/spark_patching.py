@@ -523,11 +523,22 @@ class SparkPatchingService:
             try:
                 session = GaiaExpertSession(shell)
                 try:
-                    session.enter_expert(expert_password)
+                    elevated = session.enter_expert(expert_password)
                 except ExpertModeError:
                     ctx.log("expert-mode password was rejected", level="error")
                     raise
-                ctx.log("expert mode entered successfully")
+                if elevated:
+                    ctx.log("expert mode entered successfully")
+                else:
+                    # Worth saying plainly rather than reporting a pass: on a
+                    # device already configured `bashUser on`, login lands in
+                    # expert and there is no escalation to perform, so this run
+                    # proves SSH access only -- it never exercised the expert
+                    # password the credential set carries.
+                    ctx.log(
+                        "already at an expert prompt at login (bashUser on) — no "
+                        "escalation needed, so the expert password was not tested"
+                    )
                 session.exit_expert()
             finally:
                 _safe_close(shell)

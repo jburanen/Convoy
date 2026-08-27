@@ -235,6 +235,41 @@ def test_test_credentials_fails_on_wrong_expert_password(
     assert finished.error is not None and "wrong password" in finished.error
 
 
+def test_test_credentials_succeeds_without_escalating_when_bashuser_is_on(
+    store: Store,
+    creds: CredentialStore,
+    packages: PackageStore,
+    inventory: Inventory,
+) -> None:
+    """A Spark gateway configured `bashUser on` lands you in expert at login.
+    The job must not send `expert` there — and must say so, because a run that
+    never escalated never exercised the expert password (operator-specified
+    2026-08-27)."""
+    transport = FakeTransport(expert_already_expert=True, expert_wrong_password=True)
+    _assign(store, inventory, "spark-01", "spark-primary")
+    registry = EnvironmentRegistry()
+    registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
+    service = SparkPatchingService(
+        registry=registry,
+        packages=packages,
+        runner=JobRunner(store),
+        vault=JobCredentialVault(),
+        store=store,
+    )
+    job = service.submit_test_credentials("default", "spark-01")
+    _run(service)
+
+    finished = store.get_job(job.id)
+    # expert_wrong_password would fail this job if it had tried to escalate at
+    # all — succeeding here is the proof that it didn't.
+    assert finished.status is JobStatus.SUCCEEDED
+    shell = transport.interactive_shells[0]
+    assert "expert" not in shell.sent
+    messages = " ".join(e.message for e in store.events(job.id))
+    assert "bashUser on" in messages
+    assert "expert password was not tested" in messages
+
+
 # -- transfer job -------------------------------------------------------------------
 
 
