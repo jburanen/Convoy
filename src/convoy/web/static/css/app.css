@@ -872,17 +872,28 @@ button.link-btn.fw-name-link {
   align-items: center;
   margin: 0.5rem 0;
 }
+.disc-cred-row.hidden { display: none; } /* out-rank the generic .hidden */
 .disc-cred-row .hint { margin: 0; }
 #discover-firewalls-table .disc-cred { width: 100%; box-sizing: border-box; }
 /* The imported row's note cell holds the test result and, only when that test
    failed on authentication, the Bootstrap button — stacked so a long paramiko
-   error doesn't push the button out of the cell. */
-#discover-firewalls-table .disc-note {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.3rem;
+   error doesn't push the button out of the cell.
+   Stacked via the inner span/button, NOT by making the <td> a flex container:
+   `display: flex` on a cell replaces `display: table-cell`, which drops it out
+   of the row box so its own border-bottom is drawn at content height rather
+   than row height — the Notes column's dividers then sit at different heights
+   from every other column's. */
+#discover-firewalls-table .disc-note-text { display: block; }
+#discover-firewalls-table .disc-bootstrap { margin-top: 0.3rem; }
+
+/* Bootstrap-all confirmation: the list of firewalls about to be pushed to. */
+.disc-bootstrap-all-list {
+  margin: 0.5rem 0;
+  padding-left: 1.2rem;
+  max-height: 12rem;
+  overflow-y: auto;
 }
+.disc-bootstrap-all-list li { margin: 0.15rem 0; }
 
 /* Provisioning form: fields stacked over a table-style header row of labels. */
 #provision-form { flex-direction: column; align-items: stretch; }
