@@ -9,25 +9,25 @@ from pathlib import Path
 import pytest
 from pydantic import SecretStr
 
-from chkp_cpuse_orch.credentials import (
+from convoy.credentials import (
     Credential,
     CredentialKind,
     CredentialStore,
     JobCredentialVault,
 )
-from chkp_cpuse_orch.errors import (
+from convoy.errors import (
     CredentialError,
     InventoryError,
     JobError,
     PackageError,
     TransportError,
 )
-from chkp_cpuse_orch.inventory import Host, Inventory, Role, Site
-from chkp_cpuse_orch.jobs import JobRunner
-from chkp_cpuse_orch.packages import PackageStore
-from chkp_cpuse_orch.services.common import EnvironmentRegistry, HostConnector
-from chkp_cpuse_orch.services.patching import LOW_SPACE_OVERRIDABLE, PatchingService
-from chkp_cpuse_orch.store import JobStatus, Store
+from convoy.inventory import Host, Inventory, Role, Site
+from convoy.jobs import JobRunner
+from convoy.packages import PackageStore
+from convoy.services.common import EnvironmentRegistry, HostConnector
+from convoy.services.patching import LOW_SPACE_OVERRIDABLE, PatchingService
+from convoy.store import JobStatus, Store
 
 from .fakes import DA_BUILD, SHOW_PACKAGES_ALL, FakeTransport, make_factory
 

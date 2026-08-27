@@ -8,7 +8,7 @@ from __future__ import annotations
 
 
 class OrchestratorError(Exception):
-    """Base class for all chkp-cpuse-orch errors."""
+    """Base class for all Convoy errors."""
 
 
 class ConfigError(OrchestratorError):

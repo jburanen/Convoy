@@ -5,10 +5,10 @@ import json
 import httpx
 import pytest
 
-from chkp_cpuse_orch.errors import ManagementAPIForbidden, TransportError
-from chkp_cpuse_orch.inventory import Host, Role
-from chkp_cpuse_orch.transport import mgmt_api
-from chkp_cpuse_orch.transport.mgmt_api import LOG_API_CALLS_ENV, ManagementAPIClient, _redact
+from convoy.errors import ManagementAPIForbidden, TransportError
+from convoy.inventory import Host, Role
+from convoy.transport import mgmt_api
+from convoy.transport.mgmt_api import LOG_API_CALLS_ENV, ManagementAPIClient, _redact
 
 
 def _host() -> Host:
@@ -148,7 +148,7 @@ def test_api_calls_not_logged_by_default(monkeypatch: pytest.MonkeyPatch) -> Non
     _client(handler).login()
     # The TLS-verification-disabled notice is a deliberate standing warning
     # (it was logger.debug, i.e. invisible at the default level) — what must
-    # not appear without CHKP_CPUSE_LOG_API_CALLS is the calls themselves.
+    # not appear without CONVOY_LOG_API_CALLS is the calls themselves.
     assert not [msg for msg, _ in calls if msg.startswith("mgmt-api request")]
     assert not [msg for msg, _ in calls if msg.startswith("mgmt-api response")]
 
@@ -309,7 +309,7 @@ def test_api_calls_logged_and_sanitized_when_enabled(monkeypatch: pytest.MonkeyP
 # _redact used to match keys EXACTLY, which missed every compound name the API
 # actually uses. The sharp one was "script": the credential-bootstrap run-script
 # payload carries the whole clish script including `set user <u> password-hash
-# $6$...`, so enabling CHKP_CPUSE_LOG_API_CALLS wrote a crackable hash of a
+# $6$...`, so enabling CONVOY_LOG_API_CALLS wrote a crackable hash of a
 # gateway's admin password into `docker compose logs` at WARNING level.
 
 

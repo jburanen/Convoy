@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import SecretStr
 
-from chkp_cpuse_orch.credentials import (
+from convoy.credentials import (
     MASTER_KEY_ENV,
     MASTER_KEY_FILE_ENV,
     Credential,
@@ -15,8 +15,8 @@ from chkp_cpuse_orch.credentials import (
     ensure_ssh_credential,
     load_master_key,
 )
-from chkp_cpuse_orch.errors import CredentialError
-from chkp_cpuse_orch.store import Store
+from convoy.errors import CredentialError
+from convoy.store import Store
 
 
 @pytest.fixture

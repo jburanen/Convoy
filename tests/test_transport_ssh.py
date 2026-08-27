@@ -6,9 +6,9 @@ from pathlib import Path
 import paramiko
 import pytest
 
-from chkp_cpuse_orch.errors import TransportError
-from chkp_cpuse_orch.inventory import Host, Role
-from chkp_cpuse_orch.transport.ssh import (
+from convoy.errors import TransportError
+from convoy.inventory import Host, Role
+from convoy.transport.ssh import (
     CommandResult,
     SSHClient,
     _fingerprint,

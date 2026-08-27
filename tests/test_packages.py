@@ -9,9 +9,9 @@ from typing import Literal
 
 import pytest
 
-from chkp_cpuse_orch.errors import PackageError
-from chkp_cpuse_orch.packages import PackageStore, package_kind
-from chkp_cpuse_orch.store import Store, utcnow
+from convoy.errors import PackageError
+from convoy.packages import PackageStore, package_kind
+from convoy.store import Store, utcnow
 
 CONTENT = b"pretend this is a multi-gigabyte JHF bundle"
 

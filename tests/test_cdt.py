@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from chkp_cpuse_orch.cdt import CDT, CandidatesFile, CDTStatus, build_config_xml
-from chkp_cpuse_orch.errors import CDTError
+from convoy.cdt import CDT, CandidatesFile, CDTStatus, build_config_xml
+from convoy.errors import CDTError
 
 from .fakes import FakeTransport
 

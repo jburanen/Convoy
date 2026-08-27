@@ -5,16 +5,16 @@ from pathlib import Path
 
 import pytest
 
-from chkp_cpuse_orch.errors import PackageError
-from chkp_cpuse_orch.packages import PackageStore
-from chkp_cpuse_orch.services.pkgs_ops import (
+from convoy.errors import PackageError
+from convoy.packages import PackageStore
+from convoy.services.pkgs_ops import (
     JOB_DELETE,
     JOB_KEEP,
     JOB_NOTKEEP,
     JOB_UPLOAD,
     PackageJobService,
 )
-from chkp_cpuse_orch.store import JobStatus, Store
+from convoy.store import JobStatus, Store
 
 PKG = "jhf_t89.tgz"
 PKG_CONTENT = b"fake jumbo hotfix bytes"

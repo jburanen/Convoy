@@ -5,8 +5,8 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 
-from chkp_cpuse_orch.errors import TransportError, TransportTimeoutError
-from chkp_cpuse_orch.transport.ssh import CommandResult, GaiaShell
+from convoy.errors import TransportError, TransportTimeoutError
+from convoy.transport.ssh import CommandResult, GaiaShell
 
 # Canned CPUSE output used across tests: one imported, one installed package.
 SHOW_PACKAGES_ALL = """\
@@ -243,8 +243,8 @@ class FakeAuthenticator:
         self.users = users
 
     def authenticate(self, username: str, password: str):  # type: ignore[no-untyped-def]
-        from chkp_cpuse_orch.errors import AuthError
-        from chkp_cpuse_orch.web.auth import AuthenticatedUser
+        from convoy.errors import AuthError
+        from convoy.web.auth import AuthenticatedUser
 
         if password and self.users.get(username) == password:
             return AuthenticatedUser(

@@ -23,7 +23,7 @@ admin/admin, no LDAP, credential store unconfigured).
 passed — same pattern as this assistant's own confirm-before-destroying-work
 default, just baked into the script instead of asked interactively each time.
 
-Config.load() requires `/data/config.yaml` to exist when `CHKP_CPUSE_CONFIG` is
+Config.load() requires `/data/config.yaml` to exist when `CONVOY_CONFIG` is
 set (which docker-compose.yml always does) — `--reset` must recreate it
 (copied from the example), never just delete-and-leave-gone, or the container
 won't boot.

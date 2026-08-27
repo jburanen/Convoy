@@ -199,13 +199,13 @@ PROVISIONING_NOTES = [
 # an API key) is what makes discovery work.
 # mgmt_cli's session id is a bearer credential for the life of the login, and it
 # lands in a file on the MANAGED server. This used to be one fixed path,
-# "/tmp/cpuse_orch_mgmt_api.sid", written with a plain `>` redirect: predictable
+# "/tmp/convoy_mgmt_api.sid", written with a plain `>` redirect: predictable
 # (so pre-creatable as a symlink by any local user, redirecting root's write),
 # world-readable under the default umask, shared by concurrent jobs on the same
 # host, and removed only on the success path. Now: an unpredictable per-run name,
 # created under `umask 077`, and removed in a `finally` whatever happens.
 _API_SESSION_DIR = "/tmp"
-_API_SESSION_PREFIX = "cpuse_orch_mgmt_api"
+_API_SESSION_PREFIX = "convoy_mgmt_api"
 
 
 def new_api_session_file() -> str:

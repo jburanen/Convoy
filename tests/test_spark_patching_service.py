@@ -8,24 +8,24 @@ from pathlib import Path
 
 import pytest
 
-from chkp_cpuse_orch.credentials import CredentialStore, JobCredentialVault
-from chkp_cpuse_orch.errors import (
+from convoy.credentials import CredentialStore, JobCredentialVault
+from convoy.errors import (
     CredentialError,
     InventoryError,
     JobError,
     PackageError,
     TransportError,
 )
-from chkp_cpuse_orch.inventory import Host, Inventory, Role, Site
-from chkp_cpuse_orch.jobs import JobRunner
-from chkp_cpuse_orch.packages import PackageStore
-from chkp_cpuse_orch.services.common import EnvironmentRegistry, HostConnector
-from chkp_cpuse_orch.services.spark_patching import (
+from convoy.inventory import Host, Inventory, Role, Site
+from convoy.jobs import JobRunner
+from convoy.packages import PackageStore
+from convoy.services.common import EnvironmentRegistry, HostConnector
+from convoy.services.spark_patching import (
     SparkPatchingService,
     builds_match,
     parse_fw_ver,
 )
-from chkp_cpuse_orch.store import JobStatus, Store
+from convoy.store import JobStatus, Store
 
 from .fakes import FakeTransport, make_factory
 
@@ -717,7 +717,7 @@ def test_ensure_host_free_shared_with_cpuse_still_works(store: Store) -> None:
     """Regression guard for the ensure_host_free extraction (moved from
     PatchingService to services.common) — importable and callable the same
     way from either service."""
-    from chkp_cpuse_orch.services.common import ensure_host_free
+    from convoy.services.common import ensure_host_free
 
     store.insert_environment("default", credential_storage_enabled=True)
     ensure_host_free(store, "default", "anything")  # no jobs yet — must not raise

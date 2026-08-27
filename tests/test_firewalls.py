@@ -4,11 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from chkp_cpuse_orch.errors import InventoryError
-from chkp_cpuse_orch.services.common import EnvironmentRegistry
-from chkp_cpuse_orch.services.environments import EnvironmentManager
-from chkp_cpuse_orch.services.firewalls import FirewallManager
-from chkp_cpuse_orch.store import CredentialSetRow, Store
+from convoy.errors import InventoryError
+from convoy.services.common import EnvironmentRegistry
+from convoy.services.environments import EnvironmentManager
+from convoy.services.firewalls import FirewallManager
+from convoy.store import CredentialSetRow, Store
 
 
 @pytest.fixture

@@ -6,18 +6,18 @@ from pathlib import Path
 import pytest
 from pydantic import SecretStr
 
-from chkp_cpuse_orch.credentials import (
+from convoy.credentials import (
     Credential,
     CredentialKind,
     CredentialStore,
     JobCredentialVault,
 )
-from chkp_cpuse_orch.errors import JobError
-from chkp_cpuse_orch.jobs import JobRunner
-from chkp_cpuse_orch.services.common import EnvironmentRegistry
-from chkp_cpuse_orch.services.connect_primary import JOB_CONNECT_PRIMARY, PrimaryConnectService
-from chkp_cpuse_orch.services.environments import EnvironmentManager
-from chkp_cpuse_orch.store import Store
+from convoy.errors import JobError
+from convoy.jobs import JobRunner
+from convoy.services.common import EnvironmentRegistry
+from convoy.services.connect_primary import JOB_CONNECT_PRIMARY, PrimaryConnectService
+from convoy.services.environments import EnvironmentManager
+from convoy.store import Store
 
 from .fakes import FakeTransport, make_factory
 

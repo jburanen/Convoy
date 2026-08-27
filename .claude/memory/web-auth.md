@@ -12,11 +12,11 @@ Extends the design in [[patching-web-design]].
 ## Backend precedence (2026-07-24)
 Two backends behind one `Authenticator` protocol; `load_active_auth_settings()`
 picks one:
-1. **LDAP**, when `CHKP_CPUSE_LDAP_URL` + `CHKP_CPUSE_LDAP_REQUIRED_GROUP` are set —
+1. **LDAP**, when `CONVOY_LDAP_URL` + `CONVOY_LDAP_REQUIRED_GROUP` are set —
    always wins if configured, regardless of the basic-auth vars.
 2. **Basic auth**, otherwise — **on by default**: `BASIC_AUTH_USER` /
    `BASIC_AUTH_PASSWORD` (both default `admin`/`admin`, deliberately not
-   `CHKP_CPUSE_`-prefixed — see [[env-example-sync]]), unless `BASIC_AUTH_DISABLE`
+   `CONVOY_`-prefixed — see [[env-example-sync]]), unless `BASIC_AUTH_DISABLE`
    is set.
 3. Fully open, only when LDAP is unconfigured **and** `BASIC_AUTH_DISABLE` is set —
    the old "auth-optional" behavior, now opt-in rather than the out-of-the-box
@@ -85,7 +85,7 @@ by default; the operator must deliberately opt out.
   nothing.
 - Cookie is `HttpOnly`, `SameSite=Strict`, `Secure` per `SESSION_COOKIE_SECURE` —
   which itself defaults to `_default_cookie_secure(env)`: true only when native TLS
-  (`CHKP_CPUSE_SSL_CERTFILE`/`KEYFILE`) is configured, false otherwise (2026-07-25;
+  (`CONVOY_SSL_CERTFILE`/`KEYFILE`) is configured, false otherwise (2026-07-25;
   an explicit `SESSION_COOKIE_SECURE` always overrides the guess). **Why:** a
   `Secure` cookie set over plain HTTP is silently dropped by the browser — login
   "succeeds" (server sets it) but every request after looks unauthenticated,

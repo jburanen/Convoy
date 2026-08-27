@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from chkp_cpuse_orch.config import Config
-from chkp_cpuse_orch.inventory import Cluster, Host, Inventory, Role, Site
-from chkp_cpuse_orch.web.auth import ALLOW_NO_AUTH_ENV, BASIC_AUTH_DISABLE_ENV
+from convoy.config import Config
+from convoy.inventory import Cluster, Host, Inventory, Role, Site
+from convoy.web.auth import ALLOW_NO_AUTH_ENV, BASIC_AUTH_DISABLE_ENV
 
 
 @pytest.fixture(autouse=True)

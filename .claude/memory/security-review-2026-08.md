@@ -62,7 +62,7 @@ revisiting the reasoning.
   per-source-IP login throttle (`LoginThrottle`, store migration **v28**
   `login_attempts`, 5 free attempts then exponential backoff capped at 15 min,
   swept by the existing session reaper); and `BASIC_AUTH_DISABLE` alone no
-  longer runs the app open — it needs `CHKP_CPUSE_ALLOW_NO_AUTH` too, otherwise
+  longer runs the app open — it needs `CONVOY_ALLOW_NO_AUTH` too, otherwise
   the login gate stays up with a warning (fail closed). **tests/conftest.py sets
   both**, since the suite deliberately runs auth-off.
 - **M13:** a password change now revokes every other session for that user
@@ -113,7 +113,7 @@ revisiting the reasoning.
 - **H6, all four leaks.** Pty transcripts run through `scrub_transcript()`
   before entering any exception (they reach job.error, job_events, the archive
   AND the browser). The mgmt_cli session id moved from one fixed
-  `/tmp/cpuse_orch_mgmt_api.sid` to a per-run unguessable path created under
+  `/tmp/convoy_mgmt_api.sid` to a per-run unguessable path created under
   `umask 077` and removed in a `finally` (`new_api_session_file()`);
   `reveal-api-key` became a POST scoped to `job.username`; `_redact` matches
   key **substrings**, so `script` / `password-hash` / `new-password` /

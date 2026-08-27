@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from chkp_cpuse_orch.clusterxl import parse_cluster_state
+from convoy.clusterxl import parse_cluster_state
 
 # Real-shaped `show cluster state` output (see clusterxl.py docstring).
 ACTIVE_MEMBER_OUTPUT = """\

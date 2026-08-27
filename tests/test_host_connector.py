@@ -4,11 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from chkp_cpuse_orch.credentials import CredentialStore
-from chkp_cpuse_orch.errors import CredentialError
-from chkp_cpuse_orch.inventory import Host, Inventory, Role, Site
-from chkp_cpuse_orch.services.common import HostConnector
-from chkp_cpuse_orch.store import Store
+from convoy.credentials import CredentialStore
+from convoy.errors import CredentialError
+from convoy.inventory import Host, Inventory, Role, Site
+from convoy.services.common import HostConnector
+from convoy.store import Store
 
 from .fakes import FakeTransport, make_factory
 

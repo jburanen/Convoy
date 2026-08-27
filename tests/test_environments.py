@@ -4,11 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from chkp_cpuse_orch.config import Config, EnvironmentDef, Paths
-from chkp_cpuse_orch.errors import InventoryError
-from chkp_cpuse_orch.services.common import EnvironmentRegistry
-from chkp_cpuse_orch.services.environments import EnvironmentManager
-from chkp_cpuse_orch.store import CredentialSetRow, Store
+from convoy.config import Config, EnvironmentDef, Paths
+from convoy.errors import InventoryError
+from convoy.services.common import EnvironmentRegistry
+from convoy.services.environments import EnvironmentManager
+from convoy.store import CredentialSetRow, Store
 
 
 def _set(store: Store, environment: str, name: str = "primary") -> str:

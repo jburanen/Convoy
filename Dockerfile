@@ -1,4 +1,4 @@
-# chkp-cpuse-orch — container image for the orchestration web service.
+# Convoy — container image for the orchestration web service.
 # Pure-Python deps (paramiko/cryptography ship manylinux wheels), so no build
 # toolchain is needed on slim.
 FROM python:3.11-slim
@@ -23,9 +23,9 @@ EXPOSE 8080
 USER 1001:1001
 
 # Liveness probe used by compose; kept dependency-free (stdlib only). Follows
-# CHKP_CPUSE_SSL_CERTFILE to probe https:// (unverified — loopback, not a trust
+# CONVOY_SSL_CERTFILE to probe https:// (unverified — loopback, not a trust
 # decision) when the optional native TLS listener is enabled.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD python -c "import os,ssl,urllib.request,sys; tls=bool(os.environ.get('CHKP_CPUSE_SSL_CERTFILE')); ctx=ssl._create_unverified_context() if tls else None; sys.exit(0 if urllib.request.urlopen(('https' if tls else 'http')+'://localhost:8080/health', context=ctx).status==200 else 1)"
+  CMD python -c "import os,ssl,urllib.request,sys; tls=bool(os.environ.get('CONVOY_SSL_CERTFILE')); ctx=ssl._create_unverified_context() if tls else None; sys.exit(0 if urllib.request.urlopen(('https' if tls else 'http')+'://localhost:8080/health', context=ctx).status==200 else 1)"
 
-CMD ["python", "-m", "chkp_cpuse_orch.web"]
+CMD ["python", "-m", "convoy.web"]

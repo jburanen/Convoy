@@ -54,7 +54,7 @@ moved to Squashed Bugs with the new version number, in this same commit. All
 three or none — don't let fixing one bug fix leave the other two undone.
 
 ## Bump the version every batch
-Keep `__version__` in `src/chkp_cpuse_orch/__init__.py` (the single source of truth —
+Keep `__version__` in `src/convoy/__init__.py` (the single source of truth —
 `pyproject` reads it dynamically) moving forward as we go. **Include the bump in the
 same commit as the changes it ships** — do not leave it as a follow-up commit. The
 version is user-visible (login + main footer, `/health`, `/api/status`). Patch bump

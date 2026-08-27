@@ -10,12 +10,12 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from chkp_cpuse_orch.config import Config, EnvironmentDef, Paths
-from chkp_cpuse_orch.credentials import MASTER_KEY_ENV
-from chkp_cpuse_orch.store import JobRecord, JobStatus
-from chkp_cpuse_orch.web import app as web_app
-from chkp_cpuse_orch.web.app import create_app
-from chkp_cpuse_orch.web.auth import AuthSettings
+from convoy.config import Config, EnvironmentDef, Paths
+from convoy.credentials import MASTER_KEY_ENV
+from convoy.store import JobRecord, JobStatus
+from convoy.web import app as web_app
+from convoy.web.app import create_app
+from convoy.web.auth import AuthSettings
 
 from .fakes import DA_BUILD, SHOW_PACKAGES_ALL, FakeAuthenticator, FakeTransport, make_factory
 
@@ -225,7 +225,7 @@ def test_root_serves_static_ui(client: TestClient) -> None:
     resp = client.get("/")
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
-    assert "chkp-cpuse-orch" in resp.text
+    assert "Convoy" in resp.text
 
 
 def test_status_reports_unlocked_and_counts(client: TestClient) -> None:

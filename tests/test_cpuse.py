@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from chkp_cpuse_orch.cpuse import (
+from convoy.cpuse import (
     CPUSE,
     GaiaShell,
     PackageScope,
@@ -12,8 +12,8 @@ from chkp_cpuse_orch.cpuse import (
     parse_packages,
     summarize_jumbo,
 )
-from chkp_cpuse_orch.errors import CPUSEError
-from chkp_cpuse_orch.transport.ssh import CommandResult
+from convoy.errors import CPUSEError
+from convoy.transport.ssh import CommandResult
 
 
 class FakeRunner:

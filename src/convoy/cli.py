@@ -21,7 +21,7 @@ from .orchestrator import Orchestrator
 from .reporting import configure_logging
 
 app = typer.Typer(
-    name="chkp-cpuse-orch",
+    name="convoy",
     help="Orchestrate Check Point CDT/CPUSE patching across management servers and gateways.",
     no_args_is_help=True,
     add_completion=False,
@@ -48,7 +48,7 @@ def _main(
 @app.command()
 def version() -> None:
     """Print the tool version."""
-    console.print(f"chkp-cpuse-orch {__version__}")
+    console.print(f"convoy {__version__}")
 
 
 @app.command()

@@ -2,7 +2,7 @@
 small backend-agnostic interface, plus session-token helpers.
 
 Configured entirely from the environment (see ``.env.example``). Presence of
-``CHKP_CPUSE_LDAP_URL`` **and** ``CHKP_CPUSE_LDAP_REQUIRED_GROUP`` enables LDAP auth.
+``CONVOY_LDAP_URL`` **and** ``CONVOY_LDAP_REQUIRED_GROUP`` enables LDAP auth.
 When LDAP isn't configured, a local basic-auth backend is used instead —
 **on by default** (``BASIC_AUTH_USER``/``BASIC_AUTH_PASSWORD``, default
 ``admin``/``admin``) unless ``BASIC_AUTH_DISABLE`` is set. Only when LDAP is
@@ -35,6 +35,7 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from pydantic import BaseModel, Field
 
+from ..envcompat import compat_env
 from ..errors import AuthError, ConfigError
 from ..reporting import get_logger
 from ..store import SessionRow, Store, utcnow
@@ -42,25 +43,25 @@ from ..store import SessionRow, Store, utcnow
 logger = get_logger(__name__)
 
 # -- env var names -----------------------------------------------------------------
-LDAP_URL_ENV = "CHKP_CPUSE_LDAP_URL"
-LDAP_REQUIRED_GROUP_ENV = "CHKP_CPUSE_LDAP_REQUIRED_GROUP"
-LDAP_BIND_DN_ENV = "CHKP_CPUSE_LDAP_BIND_DN"
-LDAP_BIND_PASSWORD_ENV = "CHKP_CPUSE_LDAP_BIND_PASSWORD"
-LDAP_BIND_PASSWORD_FILE_ENV = "CHKP_CPUSE_LDAP_BIND_PASSWORD_FILE"
-LDAP_USER_BASE_DN_ENV = "CHKP_CPUSE_LDAP_USER_BASE_DN"
-LDAP_USER_FILTER_ENV = "CHKP_CPUSE_LDAP_USER_FILTER"
-LDAP_USER_DN_TEMPLATE_ENV = "CHKP_CPUSE_LDAP_USER_DN_TEMPLATE"
-LDAP_MEMBER_OF_ATTR_ENV = "CHKP_CPUSE_LDAP_MEMBER_OF_ATTR"
-LDAP_START_TLS_ENV = "CHKP_CPUSE_LDAP_START_TLS"
-LDAP_TLS_VERIFY_ENV = "CHKP_CPUSE_LDAP_TLS_VERIFY"
-LDAP_CA_CERT_ENV = "CHKP_CPUSE_LDAP_CA_CERT"
-SESSION_IDLE_MINUTES_ENV = "CHKP_CPUSE_SESSION_IDLE_MINUTES"
-SESSION_COOKIE_SECURE_ENV = "CHKP_CPUSE_SESSION_COOKIE_SECURE"
+LDAP_URL_ENV = "CONVOY_LDAP_URL"
+LDAP_REQUIRED_GROUP_ENV = "CONVOY_LDAP_REQUIRED_GROUP"
+LDAP_BIND_DN_ENV = "CONVOY_LDAP_BIND_DN"
+LDAP_BIND_PASSWORD_ENV = "CONVOY_LDAP_BIND_PASSWORD"
+LDAP_BIND_PASSWORD_FILE_ENV = "CONVOY_LDAP_BIND_PASSWORD_FILE"
+LDAP_USER_BASE_DN_ENV = "CONVOY_LDAP_USER_BASE_DN"
+LDAP_USER_FILTER_ENV = "CONVOY_LDAP_USER_FILTER"
+LDAP_USER_DN_TEMPLATE_ENV = "CONVOY_LDAP_USER_DN_TEMPLATE"
+LDAP_MEMBER_OF_ATTR_ENV = "CONVOY_LDAP_MEMBER_OF_ATTR"
+LDAP_START_TLS_ENV = "CONVOY_LDAP_START_TLS"
+LDAP_TLS_VERIFY_ENV = "CONVOY_LDAP_TLS_VERIFY"
+LDAP_CA_CERT_ENV = "CONVOY_LDAP_CA_CERT"
+SESSION_IDLE_MINUTES_ENV = "CONVOY_SESSION_IDLE_MINUTES"
+SESSION_COOKIE_SECURE_ENV = "CONVOY_SESSION_COOKIE_SECURE"
 # Native HTTPS (web/__main__.py) — read here (as plain strings, not imported, to
 # avoid pulling in uvicorn just to check two env vars) only to pick
 # SESSION_COOKIE_SECURE_ENV's default; an explicit value for that var always wins.
-NATIVE_TLS_CERTFILE_ENV = "CHKP_CPUSE_SSL_CERTFILE"
-NATIVE_TLS_KEYFILE_ENV = "CHKP_CPUSE_SSL_KEYFILE"
+NATIVE_TLS_CERTFILE_ENV = "CONVOY_SSL_CERTFILE"
+NATIVE_TLS_KEYFILE_ENV = "CONVOY_SSL_KEYFILE"
 
 # Local basic-auth backend — the default when LDAP isn't configured.
 BASIC_AUTH_USER_ENV = "BASIC_AUTH_USER"
@@ -72,7 +73,7 @@ BASIC_AUTH_DISABLE_ENV = "BASIC_AUTH_DISABLE"
 # only relaxes a login prompt, so it must be paired with this second, explicitly
 # named acknowledgement. Set only one and the login gate stays up (fail closed),
 # with a warning explaining what to do.
-ALLOW_NO_AUTH_ENV = "CHKP_CPUSE_ALLOW_NO_AUTH"
+ALLOW_NO_AUTH_ENV = "CONVOY_ALLOW_NO_AUTH"
 DEFAULT_BASIC_AUTH_USER = "admin"
 DEFAULT_BASIC_AUTH_PASSWORD = "admin"
 # meta table key (store.py) for a password changed at runtime via the UI; overrides
@@ -84,7 +85,7 @@ BASIC_AUTH_PASSWORD_HASH_META_KEY = "basic_auth_password_hash"
 DEFAULT_USER_FILTER = "(sAMAccountName={username})"
 DEFAULT_MEMBER_OF_ATTR = "memberOf"
 DEFAULT_IDLE_MINUTES = 30
-SESSION_COOKIE_NAME = "chkp_session"
+SESSION_COOKIE_NAME = "convoy_session"
 
 
 class AuthenticatedUser(BaseModel):
@@ -156,13 +157,13 @@ def _load_idle_minutes(env: dict[str, str]) -> int:
 
 
 def _default_cookie_secure(env: dict[str, str]) -> bool:
-    """Secure-by-default only when native TLS (CHKP_CPUSE_SSL_CERTFILE/KEYFILE) is
+    """Secure-by-default only when native TLS (CONVOY_SSL_CERTFILE/KEYFILE) is
     actually configured. A ``Secure`` cookie set over plain HTTP is silently
     dropped by the browser — login "succeeds" (the server sets it) but every
     request after that looks unauthenticated, bouncing straight back to the login
     page with no visible error (observed 2026-07-25 on a TLS-less dev host). Behind
     a reverse proxy that terminates TLS (native certs correctly unset here, but the
-    browser only ever sees https), set CHKP_CPUSE_SESSION_COOKIE_SECURE=true
+    browser only ever sees https), set CONVOY_SESSION_COOKIE_SECURE=true
     explicitly — it always overrides this guess."""
     return bool(env.get(NATIVE_TLS_CERTFILE_ENV)) and bool(env.get(NATIVE_TLS_KEYFILE_ENV))
 
@@ -189,13 +190,13 @@ def load_basic_auth_settings(
     environ: os._Environ[str] | dict[str, str] | None = None,
 ) -> BasicAuthSettings | None:
     """Build local basic-auth settings from the environment, or ``None`` when
-    ``BASIC_AUTH_DISABLE`` **and** ``CHKP_CPUSE_ALLOW_NO_AUTH`` are both set
+    ``BASIC_AUTH_DISABLE`` **and** ``CONVOY_ALLOW_NO_AUTH`` are both set
     (see ALLOW_NO_AUTH_ENV — one alone keeps the login gate up).
     Unset ``BASIC_AUTH_USER``/``BASIC_AUTH_PASSWORD``
     default to ``admin``/``admin`` — this backend is **on by default** so a fresh
     deployment isn't left wide open; operators are expected to change the password
     (or configure LDAP, or set ``BASIC_AUTH_DISABLE``) promptly."""
-    env = dict(os.environ if environ is None else environ)
+    env = compat_env(environ)
     if _env_bool(env, BASIC_AUTH_DISABLE_ENV, False):
         if _env_bool(env, ALLOW_NO_AUTH_ENV, False):
             return None
@@ -235,12 +236,12 @@ def load_auth_settings(
 ) -> AuthSettings | None:
     """Build settings from the environment, or ``None`` when auth is not configured.
 
-    Auth is "configured" when both ``CHKP_CPUSE_LDAP_URL`` and
-    ``CHKP_CPUSE_LDAP_REQUIRED_GROUP`` are set. A URL set without a usable user-DN
+    Auth is "configured" when both ``CONVOY_LDAP_URL`` and
+    ``CONVOY_LDAP_REQUIRED_GROUP`` are set. A URL set without a usable user-DN
     resolution method (service account or DN template) raises ``ConfigError`` so a
     half-finished config fails loudly rather than leaving the UI open.
     """
-    env = dict(os.environ if environ is None else environ)
+    env = compat_env(environ)
     url = (env.get(LDAP_URL_ENV) or "").strip()
     group = (env.get(LDAP_REQUIRED_GROUP_ENV) or "").strip()
     if not url and not group:
@@ -480,10 +481,10 @@ class LDAPAuthenticator:
             if not self.settings.tls_verify:
                 # Deliberately auditable: disabling verification exposes the bind
                 # (which carries the user's password) to MITM. Prefer trusting the
-                # directory's CA via CHKP_CPUSE_LDAP_CA_CERT.
+                # directory's CA via CONVOY_LDAP_CA_CERT.
                 logger.warning(
                     "LDAPS certificate verification DISABLED "
-                    "(CHKP_CPUSE_LDAP_TLS_VERIFY=false) — connection is not MITM-safe",
+                    "(CONVOY_LDAP_TLS_VERIFY=false) — connection is not MITM-safe",
                     urls=self.settings.urls,
                 )
             tls = Tls(validate=validate, ca_certs_file=self.settings.ca_cert or None)

@@ -8,18 +8,18 @@ module only carries non-sensitive defaults and paths. See
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import yaml
 from pydantic import BaseModel, Field
 
+from .envcompat import compat_env
 from .errors import ConfigError
 
 # Uploaded packages are auto-deleted this many days after upload unless the
 # operator pins them ("store indefinitely"). The default is overridable at
 # runtime via this environment variable (see Config.load); 0 disables expiry.
-PACKAGE_RETENTION_ENV = "CHKP_CPUSE_PACKAGE_RETENTION_DAYS"
+PACKAGE_RETENTION_ENV = "CONVOY_PACKAGE_RETENTION_DAYS"
 DEFAULT_PACKAGE_RETENTION_DAYS = 30
 
 
@@ -79,7 +79,7 @@ class Config(BaseModel):
 
     # Uploaded packages are auto-deleted after this many days unless the operator
     # pins one to keep it indefinitely. 0 disables automatic expiry entirely.
-    # Overridable at runtime via $CHKP_CPUSE_PACKAGE_RETENTION_DAYS (see load()).
+    # Overridable at runtime via $CONVOY_PACKAGE_RETENTION_DAYS (see load()).
     package_retention_days: int = Field(default=DEFAULT_PACKAGE_RETENTION_DAYS, ge=0)
 
     # Independent management environments. Empty → one implicit "default"
@@ -103,8 +103,8 @@ class Config(BaseModel):
     def load(cls, path: str | Path | None = None) -> Config:
         """Load config from YAML, falling back to built-in defaults.
 
-        Resolution order: explicit ``path`` → ``$CHKP_CPUSE_CONFIG`` → defaults.
-        ``$CHKP_CPUSE_PACKAGE_RETENTION_DAYS`` overrides the retention window on
+        Resolution order: explicit ``path`` → ``$CONVOY_CONFIG`` → defaults.
+        ``$CONVOY_PACKAGE_RETENTION_DAYS`` overrides the retention window on
         top of whichever config was loaded.
 
         Relative ``paths.*`` / ``environments[].inventory`` entries are anchored
@@ -118,7 +118,7 @@ class Config(BaseModel):
         fresh deploy using examples/config.example.yaml's relative paths
         unmodified). Absolute paths are left untouched either way.
         """
-        candidate = path or os.environ.get("CHKP_CPUSE_CONFIG")
+        candidate = path or compat_env().get("CONVOY_CONFIG")
         if candidate is None:
             cfg = cls()
         else:
@@ -159,8 +159,8 @@ def _anchor_relative_paths(cfg: Config, *, base_dir: Path) -> None:
 
 
 def _apply_retention_override(cfg: Config) -> None:
-    """Let ``$CHKP_CPUSE_PACKAGE_RETENTION_DAYS`` override the config value."""
-    raw = os.environ.get(PACKAGE_RETENTION_ENV)
+    """Let ``$CONVOY_PACKAGE_RETENTION_DAYS`` override the config value."""
+    raw = compat_env().get(PACKAGE_RETENTION_ENV)
     if raw is None:
         return
     try:

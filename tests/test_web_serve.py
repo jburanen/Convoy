@@ -4,9 +4,9 @@ import logging
 
 import pytest
 
-from chkp_cpuse_orch.errors import ConfigError
-from chkp_cpuse_orch.reporting import LOG_LEVEL_ENV, resolve_log_level
-from chkp_cpuse_orch.web.__main__ import SSL_CERTFILE_ENV, SSL_KEYFILE_ENV, resolve_ssl
+from convoy.errors import ConfigError
+from convoy.reporting import LOG_LEVEL_ENV, resolve_log_level
+from convoy.web.__main__ import SSL_CERTFILE_ENV, SSL_KEYFILE_ENV, resolve_ssl
 
 
 def test_resolve_ssl_none_when_unconfigured() -> None:

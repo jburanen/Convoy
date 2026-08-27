@@ -1,11 +1,11 @@
 ---
 name: project-overview
-description: What chkp-cpuse-orch is, who uses it, and what problem it solves
+description: What Convoy is, who uses it, and what problem it solves
 metadata:
   type: project
 ---
 
-`chkp-cpuse-orch` is an **internal orchestration tool** for organizations running
+**Convoy** is an **internal orchestration tool** for organizations running
 Check Point firewalls and security infrastructure. It wraps and coordinates Check
 Point's **Central Deployment Tool (CDT)** to roll out patches and upgrades
 (hotfixes, Jumbo Hotfix Accumulators, and major-version upgrades) across fleets of

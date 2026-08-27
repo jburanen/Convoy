@@ -91,7 +91,7 @@ class ProvisioningJobService:
         ssh_user: str,
         ssh_port: int,
         notes: str | None,
-        credential_set: str | None | _Unset = UNSET,
+        credential_set: str | _Unset | None = UNSET,
         triggered_by: str | None = None,
     ) -> JobRecord:
         kind = JOB_ADD if self._store.get_env_host(environment, name) is None else JOB_EDIT
@@ -135,7 +135,7 @@ class ProvisioningJobService:
         ssh_user: str,
         ssh_port: int,
         notes: str | None,
-        credential_set: str | None | _Unset = UNSET,
+        credential_set: str | _Unset | None = UNSET,
         cluster_name: str | None = None,
         mds_domain: str | None = None,
         tags: list[str] | None = None,
@@ -282,7 +282,7 @@ def _put_params(
     ssh_user: str,
     ssh_port: int,
     notes: str | None,
-    credential_set: str | None | _Unset,
+    credential_set: str | _Unset | None,
 ) -> dict[str, object]:
     params: dict[str, object] = {
         "entity": entity,

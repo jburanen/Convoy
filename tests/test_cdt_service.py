@@ -6,18 +6,18 @@ from pathlib import Path
 
 import pytest
 
-from chkp_cpuse_orch.cdt import CandidatesFile
-from chkp_cpuse_orch.credentials import (
+from convoy.cdt import CandidatesFile
+from convoy.credentials import (
     CredentialStore,
     JobCredentialVault,
 )
-from chkp_cpuse_orch.errors import CDTError, JobError
-from chkp_cpuse_orch.inventory import Host, Inventory, Role, Site
-from chkp_cpuse_orch.jobs import JobRunner
-from chkp_cpuse_orch.packages import PackageStore
-from chkp_cpuse_orch.services.cdt_ops import CDTService
-from chkp_cpuse_orch.services.common import EnvironmentRegistry, HostConnector
-from chkp_cpuse_orch.store import JobStatus, Store
+from convoy.errors import CDTError, JobError
+from convoy.inventory import Host, Inventory, Role, Site
+from convoy.jobs import JobRunner
+from convoy.packages import PackageStore
+from convoy.services.cdt_ops import CDTService
+from convoy.services.common import EnvironmentRegistry, HostConnector
+from convoy.store import JobStatus, Store
 
 from .fakes import FakeTransport, make_factory
 

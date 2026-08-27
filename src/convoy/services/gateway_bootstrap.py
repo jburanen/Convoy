@@ -302,9 +302,7 @@ class GatewayBootstrapService:
                 f"server, matching this environment's inventory"
             )
             ctx.log(f"pushing credentials for {username!r} to {name!r} via the Management API")
-            task_id = client.run_script(
-                script, [name], script_name="chkp-cpuse-orch-bootstrap-credentials"
-            )
+            task_id = client.run_script(script, [name], script_name="convoy-bootstrap-credentials")
             ctx.log(f"run-script task {task_id} submitted — polling for completion")
             self._poll_task(ctx, client, task_id)
 

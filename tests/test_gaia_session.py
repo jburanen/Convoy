@@ -14,10 +14,10 @@ from typing import ClassVar
 
 import pytest
 
-from chkp_cpuse_orch.errors import CredentialError, GaiaShellRestoreError, TransportError
-from chkp_cpuse_orch.inventory import Host, Role
-from chkp_cpuse_orch.transport import ssh as ssh_module
-from chkp_cpuse_orch.transport.ssh import (
+from convoy.errors import CredentialError, GaiaShellRestoreError, TransportError
+from convoy.inventory import Host, Role
+from convoy.transport import ssh as ssh_module
+from convoy.transport.ssh import (
     CommandResult,
     GaiaSession,
     GaiaShell,

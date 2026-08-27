@@ -4,12 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from chkp_cpuse_orch.config import (
+from convoy.config import (
     DEFAULT_PACKAGE_RETENTION_DAYS,
     PACKAGE_RETENTION_ENV,
     Config,
 )
-from chkp_cpuse_orch.errors import ConfigError
+from convoy.errors import ConfigError
 
 
 def test_retention_defaults_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -92,6 +92,6 @@ def test_environment_inventory_paths_also_anchor(tmp_path: Path) -> None:
 def test_bare_defaults_stay_relative_to_cwd_without_a_config_file(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("CHKP_CPUSE_CONFIG", raising=False)
+    monkeypatch.delenv("CONVOY_CONFIG", raising=False)
     cfg = Config.load()
     assert cfg.paths.db_path == Path("state") / "orch.db"

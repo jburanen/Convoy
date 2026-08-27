@@ -14,27 +14,27 @@ undiscoverable — the operator won't know the knob exists.
 
 **How to apply:**
 - Whenever you add or rename a runtime env var (anything actually read via
-  `os.environ`, or a `CHKP_CPUSE_*` name), add a matching commented entry to
+  `os.environ`, or a `CONVOY_*` name), add a matching commented entry to
   `.env.example` in the same change — name, one-line purpose, default.
 - Real secrets never get real values here — placeholders only (see
-  [[security-hygiene]]). Secret vars (`CHKP_CPUSE_MASTER_KEY`) use `changeme`;
+  [[security-hygiene]]). Secret vars (`CONVOY_MASTER_KEY`) use `changeme`;
   optional/tunable vars stay commented out showing their default.
-- Current runtime env vars: `CHKP_CPUSE_MASTER_KEY` (+ `_FILE`), `CHKP_CPUSE_CONFIG`,
-  `CHKP_CPUSE_PACKAGE_RETENTION_DAYS`, `CHKP_CPUSE_SSL_CERTFILE`/`_KEYFILE` (native
+- Current runtime env vars: `CONVOY_MASTER_KEY` (+ `_FILE`), `CONVOY_CONFIG`,
+  `CONVOY_PACKAGE_RETENTION_DAYS`, `CONVOY_SSL_CERTFILE`/`_KEYFILE` (native
   HTTPS, `web/__main__.py`),
-  `CHKP_CPUSE_WEB_LOG_LEVEL` (`reporting.resolve_log_level`, also applied to
-  uvicorn's own logs by `web/__main__.py`), `CHKP_CPUSE_LOG_API_CALLS`
+  `CONVOY_WEB_LOG_LEVEL` (`reporting.resolve_log_level`, also applied to
+  uvicorn's own logs by `web/__main__.py`), `CONVOY_LOG_API_CALLS`
   (`transport/mgmt_api.py` — sanitized request/response logging), and the
-  web-auth set (see [[web-auth]]): `CHKP_CPUSE_LDAP_URL`,
-  `CHKP_CPUSE_LDAP_REQUIRED_GROUP`, `CHKP_CPUSE_LDAP_BIND_DN`,
-  `CHKP_CPUSE_LDAP_BIND_PASSWORD` (+ `_FILE`), `CHKP_CPUSE_LDAP_USER_BASE_DN`,
-  `CHKP_CPUSE_LDAP_USER_FILTER`, `CHKP_CPUSE_LDAP_USER_DN_TEMPLATE`,
-  `CHKP_CPUSE_LDAP_MEMBER_OF_ATTR`, `CHKP_CPUSE_LDAP_START_TLS`,
-  `CHKP_CPUSE_LDAP_TLS_VERIFY`, `CHKP_CPUSE_LDAP_CA_CERT`,
-  `CHKP_CPUSE_SESSION_IDLE_MINUTES`, `CHKP_CPUSE_SESSION_COOKIE_SECURE`, and the
+  web-auth set (see [[web-auth]]): `CONVOY_LDAP_URL`,
+  `CONVOY_LDAP_REQUIRED_GROUP`, `CONVOY_LDAP_BIND_DN`,
+  `CONVOY_LDAP_BIND_PASSWORD` (+ `_FILE`), `CONVOY_LDAP_USER_BASE_DN`,
+  `CONVOY_LDAP_USER_FILTER`, `CONVOY_LDAP_USER_DN_TEMPLATE`,
+  `CONVOY_LDAP_MEMBER_OF_ATTR`, `CONVOY_LDAP_START_TLS`,
+  `CONVOY_LDAP_TLS_VERIFY`, `CONVOY_LDAP_CA_CERT`,
+  `CONVOY_SESSION_IDLE_MINUTES`, `CONVOY_SESSION_COOKIE_SECURE`, and the
   basic-auth trio (default backend, on unless LDAP is configured or disabled):
   `BASIC_AUTH_USER`, `BASIC_AUTH_PASSWORD` (both default `admin`),
-  `BASIC_AUTH_DISABLE`. Deliberately **not** `CHKP_CPUSE_`-prefixed — matches the
+  `BASIC_AUTH_DISABLE`. Deliberately **not** `CONVOY_`-prefixed — matches the
   literal names requested when this backend was added (2026-07-24).
 - Per-host SSH credentials are NOT env vars anymore: they live in the encrypted
   DB-backed `CredentialStore`, added via the web UI. The inventory `secret_ref`
