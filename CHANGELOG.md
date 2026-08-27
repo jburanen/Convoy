@@ -9,6 +9,10 @@ Known issues and planned work live under Roadmap / Punch List in
 [README.md](README.md); a fix that closes an item there moves it into this file
 in the same commit as the fix and the version bump.
 
+## v0.79.2
+
+Punch List bookkeeping: drops the three items v0.79.0 and v0.79.1 closed - the modal-dismissal-on-drag bug, partial credential-set updates, and the optional API key on API-only environments - which arrived in the list while those fixes were already being written, so they were never removed when the work shipped
+
 ## v0.79.1
 
 Click-dragging to select text in a modal's field and releasing the button outside the dialog closed the modal, discarding whatever had been typed - reported against the credential-set editor, but every modal in the app had the same shape. The backdrop check was `ev.target.id === "<modal>"` inside a click handler, which is true both when you click the backdrop and when you merely *release* on it after pressing inside: the browser reports such a click against the nearest common ancestor of press and release, which is the modal container itself. All 20 handlers now share one `onBackdropClick()` helper that requires the press to have landed on the backdrop too, clearing the flag on every click so a press inside can't leave it armed for a later one. Carries the UI half of v0.79.0 as well: the credential modal's SSH fields are no longer hidden on API-only environments, and its form-level checks mirror put_set's new content-based rules
