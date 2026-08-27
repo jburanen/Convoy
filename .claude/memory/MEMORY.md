@@ -25,6 +25,7 @@ Load this at the start of each session; read a linked file when its hook looks r
 - [No SSH for cluster name](no-ssh-for-cluster-name.md) — cluster object name is Mgmt-API-only, ever; manual entry is the only valid fallback, never SSH/CLI
 - [MDS domain per firewall](mds-domain-per-firewall.md) — FirewallRow.mds_domain tracks each firewall's Domain/CMA so post-hoc API lookups can log in correctly on MDS
 - [Config path resolution](config-path-resolution.md) — relative paths.* anchor to config.yaml's own directory, not the process CWD
+- [Container release process](container-release.md) — GHCR image published by a vX.Y.Z tag; docker-compose.yml pulls / docker-compose.dev.yml builds; deploy.sh re-execs itself after git pull
 - [deploy.sh --reset flag](deploy-reset-flag.md) — dev-only full wipe: `./data` (DB + packages) and `.env`, then restores default config.yaml
 - [Mgmt API bootstrap MDS profile](mgmt-api-bootstrap-mds-profile.md) — MDS admin uses `multi-domain-profile "Multi-Domain Super User"`, not `permissions-profile "Super User"`
 - [Mgmt API add-api-key command](mgmt-api-add-api-key-command.md) — key comes from a separate `add api-key admin-name` call, not `add administrator`; no `api restart` needed
