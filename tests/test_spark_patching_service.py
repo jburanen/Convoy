@@ -270,6 +270,58 @@ def test_test_credentials_succeeds_without_escalating_when_bashuser_is_on(
     assert "expert password was not tested" in messages
 
 
+def test_test_credentials_names_the_username_it_will_log_in_as(
+    service: SparkPatchingService, store: Store
+) -> None:
+    """The username that actually logs in is the credential set's, and the job
+    log now says so — the operator should not have to read the device's own
+    auth log to find out which account was tried."""
+    job = service.submit_test_credentials("default", "spark-01")
+    _run(service)
+    assert store.get_job(job.id).status is JobStatus.SUCCEEDED
+    messages = " ".join(e.message for e in store.events(job.id))
+    assert "as 'admin' (credential set)" in messages
+
+
+def test_test_credentials_warns_when_the_set_names_no_username(
+    store: Store,
+    creds: CredentialStore,
+    packages: PackageStore,
+    inventory: Inventory,
+) -> None:
+    """A set with no ssh_username authenticates as whatever stale value sits in
+    Host.ssh_user, and the only evidence used to be a rejected login in the
+    DEVICE's auth log naming an account the operator never chose (real report,
+    2026-08-27: an SG1800 refusing `admin`). put_set now refuses to store such a
+    set, but rows predating that rule still exist, so the job says which account
+    it fell back to and why."""
+    row = store.get_credential_set_by_name("default", "spark-primary")
+    assert row is not None
+    row.ssh_username = None  # a row stored before the username became mandatory
+    store.upsert_credential_set(row)
+
+    _assign(store, inventory, "spark-01", "spark-primary")
+    registry = EnvironmentRegistry()
+    registry.add("default", HostConnector(inventory, creds, make_factory(FakeTransport())))
+    service = SparkPatchingService(
+        registry=registry,
+        packages=packages,
+        runner=JobRunner(store),
+        vault=JobCredentialVault(),
+        store=store,
+    )
+    job = service.submit_test_credentials("default", "spark-01")
+    _run(service)
+
+    events = store.events(job.id)
+    warning = next((e for e in events if e.level == "warning"), None)
+    assert warning is not None, [e.message for e in events]
+    assert "has no SSH username" in warning.message
+    # ...and names the value it actually fell back to, so the account showing up
+    # in the device's auth log is identifiable from this line alone.
+    assert "'admin'" in warning.message
+
+
 # -- transfer job -------------------------------------------------------------------
 
 
