@@ -124,7 +124,6 @@ These gates define the major version releases - the milestones may change in the
 ✨ Handle S1C API endpoint URL  
 🤞 API creds should not be required for 
 ✨ Separate bootstrapping flow for API-only scenarios  
-✨ While entering passwords on credential sets, provide an eyelid-style button inside the text field to show the password while typing  
 ✨ Are there any character limitations for passwords?
 
 #### Packages

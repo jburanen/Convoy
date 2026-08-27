@@ -44,6 +44,83 @@ function onBackdropClick(modalId, close) {
   });
 }
 
+/* ---------- 0b. password reveal ---------- */
+
+// Eye / eye-with-a-slash, drawn inline rather than pulled from an icon font:
+// the page loads no external assets (see the CSP note in web/app.py) and two
+// paths are cheaper than either.
+const EYE_OPEN_SVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M1.5 12S5 5.5 12 5.5 22.5 12 22.5 12 19 18.5 12 18.5 1.5 12 1.5 12Z"/>' +
+  '<circle cx="12" cy="12" r="3.2"/></svg>';
+const EYE_CLOSED_SVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M1.5 12S5 5.5 12 5.5 22.5 12 22.5 12 19 18.5 12 18.5 1.5 12 1.5 12Z"/>' +
+  '<circle cx="12" cy="12" r="3.2"/><path d="M3 3l18 18"/></svg>';
+
+// Put a show/hide toggle inside a password field, so a long secret can be
+// checked while it is being typed instead of pasted blind.
+//
+// Deliberately not a checkbox beside the field: the whole point is to keep it
+// within the input's own bounds. type="button" matters — a bare <button> in a
+// form defaults to submit, which here would save the set on the first peek.
+//
+// The revealed state is per-field and never sticky: resetPasswordReveals()
+// puts every field back to masked when its dialog opens or closes, so a
+// secret can't be left on screen for whoever walks past next.
+function addPasswordReveal(input) {
+  if (input.dataset.revealWired) return;
+  input.dataset.revealWired = "1";
+
+  const wrap = document.createElement("span");
+  wrap.className = "pw-field";
+  input.parentNode.insertBefore(wrap, input);
+  wrap.appendChild(input);
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "pw-reveal";
+  btn.tabIndex = -1; // tabbing through a form shouldn't stop on every eye
+  const paint = () => {
+    const shown = input.type === "text";
+    btn.innerHTML = shown ? EYE_CLOSED_SVG : EYE_OPEN_SVG;
+    btn.title = shown ? "Hide" : "Show";
+    btn.setAttribute("aria-label", shown ? "Hide password" : "Show password");
+    btn.setAttribute("aria-pressed", String(shown));
+  };
+  btn.addEventListener("click", () => {
+    input.type = input.type === "password" ? "text" : "password";
+    paint();
+    input.focus();
+  });
+  paint();
+  wrap.appendChild(btn);
+}
+
+// Wire every password field in `root` (a form or dialog) for reveal. Safe to
+// call repeatedly — addPasswordReveal() no-ops on a field it already wrapped.
+function addPasswordReveals(root) {
+  for (const input of root.querySelectorAll('input[type="password"]')) addPasswordReveal(input);
+}
+
+// Back to masked. form.reset() does NOT do this: it clears values but leaves
+// the input's type alone, so a field revealed before a save would still be
+// readable the next time the dialog opened.
+function resetPasswordReveals(root) {
+  for (const input of root.querySelectorAll(".pw-field input")) {
+    input.type = "password";
+    const btn = input.parentNode.querySelector(".pw-reveal");
+    if (btn) {
+      btn.innerHTML = EYE_OPEN_SVG;
+      btn.title = "Show";
+      btn.setAttribute("aria-label", "Show password");
+      btn.setAttribute("aria-pressed", "false");
+    }
+  }
+}
+
 /* ---------- 1. fetch helper ---------- */
 
 async function api(path, options = {}) {
@@ -4742,6 +4819,13 @@ document.getElementById("credential-form").addEventListener("submit", async (ev)
       return;
     }
   }
+  // The username is what actually logs in, and a blank one falls back to the
+  // host's own stale SSH user — so it is required alongside any SSH secret,
+  // on an edit too. Checked outside the !credEditMode block above because
+  // "unchanged" still has to end up non-blank here: an older set stored
+  // without a username has to gain one before it can be saved again.
+  const sshUser = document.getElementById("cs-ssh-user").value.trim();
+  if ((password || key) && !sshUser) { toast("Enter the SSH username this set logs in as."); return; }
   try {
     // Executes immediately (services/cred_ops.py) — the response is already
     // the finished cred.add/cred.edit job, tracked on the Jobs tab for audit
@@ -4751,7 +4835,7 @@ document.getElementById("credential-form").addEventListener("submit", async (ev)
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         name: document.getElementById("cs-name").value.trim(),
-        ssh_username: document.getElementById("cs-ssh-user").value.trim() || null,
+        ssh_username: sshUser || null,
         ssh_password: password || null,
         ssh_private_key: key || null,
         expert_password: expertInput.value || null,
@@ -4783,7 +4867,7 @@ function updateCredFormApiOnlyVisibility() {
       "password — SSH logs in as a plain clish user and elevates to expert only when " +
       "a job needs it. An API key alone is also a valid set.";
   document.querySelector("#cs-ssh-user-label .cs-label-text").textContent =
-    api ? "Username (SSH, or the API user)" : "SSH username";
+    api ? "Username (required with SSH credentials, or the API user)" : "SSH username";
   document.getElementById("cs-ssh-user").placeholder = "admin";
 }
 
@@ -4791,6 +4875,8 @@ function updateCredFormApiOnlyVisibility() {
 function openCredAddModal() {
   const form = document.getElementById("credential-form");
   form.reset(); // fresh, empty each open
+  addPasswordReveals(form);
+  resetPasswordReveals(form); // never inherit the last visit's revealed state
   credEditMode = false;
   document.getElementById("cred-add-title").textContent = "Add credential set";
   document.getElementById("cred-add-hint").classList.remove("hidden");
@@ -4805,6 +4891,8 @@ function openCredAddModal() {
 function openCredEditModal(set) {
   const form = document.getElementById("credential-form");
   form.reset();
+  addPasswordReveals(form);
+  resetPasswordReveals(form);
   credEditMode = true;
   document.getElementById("cred-add-title").textContent = "Edit credential set";
   document.getElementById("cred-add-hint").classList.add("hidden");
@@ -4822,7 +4910,9 @@ function openCredEditModal(set) {
 }
 function closeCredAddModal() {
   document.getElementById("cred-add-modal").classList.add("hidden");
-  document.getElementById("credential-form").reset(); // never leave secrets in the DOM
+  const form = document.getElementById("credential-form");
+  form.reset(); // never leave secrets in the DOM
+  resetPasswordReveals(form); // ...nor a revealed field waiting for the next open
   document.getElementById("cs-name").readOnly = false;
   credEditMode = false;
 }
