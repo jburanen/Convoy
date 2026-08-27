@@ -9,6 +9,10 @@ Known issues and planned work live under Roadmap / Punch List in
 [README.md](README.md); a fix that closes an item there moves it into this file
 in the same commit as the fix and the version bump.
 
+## v0.79.5
+
+`scripts/deploy.sh` now seeds `data/config.yaml` from `examples/config.example.yaml` when it is missing. `Config.load()` treats a missing `/data/config.yaml` as fatal, so a first deploy from a fresh checkout built and started a container that then died on boot - surfacing as an unexplained health-check timeout rather than as "you have no config". The seed only ever creates what is absent; an existing config.yaml is operator-edited state and is never overwritten, which is what makes it safe on every deploy. The `--reset` branch's own copy of that step is gone: it ran *before* `git pull`, so a reset restored the example as it stood before the pull, and reset deletes config.yaml anyway - so the seed picks it up like any other first deploy. One code path instead of two
+
 ## v0.79.4
 
 Password fields in the credential-set modal (SSH password, expert password, API key) now carry an eye button inside the field, so a long secret can be checked while it is typed instead of pasted blind. Wired generically - the form is scanned for `input[type="password"]`, so a field added later gets one for free - with inline SVG icons, since the page loads no external assets. `type="button"` on the toggle matters: a bare `<button>` in a form defaults to submit, which would have saved the set on the first peek. The revealed state is never sticky either: `form.reset()` clears values but leaves the input's `type` alone, so a field revealed before saving would still be readable the next time the modal opened - it is put back to masked on both open and close. The eye is skipped in the tab order (it is still reachable by mouse, and carries `aria-pressed`/`aria-label`). Also carries the JS half of v0.79.3, which shares this file: the credential form now requires an SSH username alongside any SSH secret
