@@ -45,6 +45,25 @@ const PANEL_HELP = {
       "These are used to orchestrate bulk patching of firewalls owned by this environment, " +
       "and can also be patched directly with this tool on the <strong>CPUSE</strong> tab.",
   },
+  smart1cloud: {
+    title: "Smart-1 Cloud",
+    brief:
+      "Connect this environment to its Smart-1 Cloud tenant — the hosted management " +
+      "server, reached only by Management API key.",
+    full: [
+      "Check Point hosts the management server for a Smart-1 Cloud environment, so there " +
+      "is no SSH to it: no service account to bootstrap, no Connect to Primary, no CPUSE " +
+      "patching of the management server, and no estate to discover. This one connection " +
+      "replaces all of it.",
+      "Everything comes off <strong>Settings → API &amp; SmartConsole</strong> in Smart-1 " +
+      "Cloud: the maas URL prefix and tenant UUID from the login request it prints, plus " +
+      "the Management API key. Connecting logs in to prove all three before storing " +
+      "anything, then registers the tenant as this environment's management server with " +
+      "the key held in a credential set.",
+      "The environment's <strong>firewalls</strong> are unaffected — they are still " +
+      "reached over SSH and patched exactly as anywhere else.",
+    ],
+  },
   packages: {
     title: "Packages",
     brief:

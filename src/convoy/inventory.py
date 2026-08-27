@@ -96,6 +96,31 @@ class Host(BaseModel):
     # DB (env_hosts) at registry build time, not from inventory YAML.
     credential_set_id: str | None = None
     notes: str | None = None
+    # Smart-1 Cloud only: the tenant UUID that sits between the host and
+    # /web_api in that estate's Management API URL —
+    # https://<prefix>.maas.checkpoint.com/<tenant-uuid>/web_api. None for every
+    # on-prem server, where the API is served straight off the host itself.
+    mgmt_api_context: str | None = None
+
+    @field_validator("mgmt_api_context", mode="before")
+    @classmethod
+    def _check_mgmt_api_context(cls, value: object) -> object:
+        """This is interpolated straight into a URL path, so it is held to the
+        shape Smart-1 Cloud actually issues — a bare identifier. Anything
+        carrying a slash, a scheme, or whitespace could point the Management API
+        somewhere other than what the row says, and the API key assigned to this
+        row goes wherever that URL leads."""
+        if not isinstance(value, str):
+            return value
+        context = value.strip().strip("/")
+        if not context:
+            return None
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", context):
+            raise ValueError(
+                f"{value!r} is not a valid Management API context — it must be a bare "
+                "identifier (the tenant UUID), with no scheme, slashes, or whitespace"
+            )
+        return context
 
     @field_validator("name", "ssh_user", mode="before")
     @classmethod

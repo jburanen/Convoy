@@ -555,9 +555,9 @@ document.getElementById("env-picker").addEventListener("change", async (ev) => {
 
 /* ---------- 1a-welcome. first run ---------- */
 
-// On a brand-new deployment — exactly one environment named "default" with no
-// servers, and no credentials or packages anywhere — open the Manage
-// Environments modal with an extra first-run note.
+// On a brand-new deployment — one environment, still named "default", still on
+// every default setting, with no servers, packages or credentials anywhere —
+// open the Manage Environments modal with an extra first-run note.
 //
 // This used to be its own dialog offering only a rename, which meant the very
 // first thing an operator configured was the one environment setting presented
@@ -565,14 +565,30 @@ document.getElementById("env-picker").addEventListener("change", async (ev) => {
 // now (operator-directed 2026-08-27), so every option for the environment is in
 // front of them while they are naming it.
 //
-// Remembered per browser only once the operator closes the modal — they have
-// seen the options by then. It is always reachable again from the picker.
-const WELCOME_KEY = "welcomeChoiceMade"; // old accidental "welcomeDismissed" flags are ignored
+// The condition is the deployment's own state, not a "seen" flag in
+// localStorage. That flag lived in the browser, and a clean install goes back
+// to exactly this state — so once it had been set, a later `deploy.sh --reset`
+// on the same machine never showed the guidance again, which is the one case it
+// exists for. Configuring anything — a rename, a type, credential storage —
+// makes this false on the next load, so it stops on its own without any flag.
+const LEGACY_WELCOME_KEYS = ["welcomeChoiceMade", "welcomeDismissed"];
 let envModalIsFirstRun = false;
 
+// Untouched: still the seeded name, still every default setting. Deliberately
+// checks the settings and not just the name, so an operator who configures the
+// environment but keeps calling it "default" isn't shown the note forever.
+function environmentIsPristine(env) {
+  return env.name === "default" &&
+    env.management_servers === 0 &&
+    !env.is_mds &&
+    !env.api_only &&
+    !env.credential_storage_enabled &&
+    !env.skip_verify_by_default;
+}
+
 async function maybeShowWelcome(envs) {
-  if (localStorage.getItem(WELCOME_KEY)) return;
-  if (envs.length !== 1 || envs[0].name !== "default" || envs[0].management_servers !== 0) return;
+  for (const key of LEGACY_WELCOME_KEYS) localStorage.removeItem(key); // superseded
+  if (envs.length !== 1 || !environmentIsPristine(envs[0])) return;
   try {
     if ((await api("/api/packages")).length) return;
     if ((await api("/api/env/default/credentials")).length) return;
@@ -597,9 +613,11 @@ const ENV_TYPE_NOTES = {
   sms: "A single Security Management Server estate, reached over SSH and the Management API.",
   mds: "One environment for the whole Multi-Domain system — not one per domain. Discovery and " +
     "other commands use their MDS variants against every server in it.",
-  s1c: "No SSH or SCP to the management server at all — only an operator-supplied Management " +
-    "API key. Hides Bootstrap, Connect to Primary, CPUSE patching of management servers and " +
-    "Upload to Mgmt. Firewall patching is unaffected: those are still reached over SSH.",
+  s1c: "Check Point hosts the management server, so there is no SSH or SCP to it at all — " +
+    "only a Management API key. The Provisioning tab shows a Smart-1 Cloud panel in place of " +
+    "Management Servers, and Bootstrap, Connect to Primary, CPUSE patching of management " +
+    "servers and Upload to Mgmt all disappear. Firewall patching is unaffected: those are " +
+    "still reached over SSH.",
 };
 
 
@@ -614,18 +632,17 @@ async function openEnvModal() {
 }
 function closeEnvModal() {
   // Soft close: the first-run note returns on the next load while the
-  // deployment is still untouched. Carried over from the dialog this replaced —
-  // only an explicit choice was ever remembered there, so a stray Escape or
-  // backdrop click can't suppress the guidance permanently.
+  // deployment is still untouched, so a stray Escape or backdrop click can't
+  // skip past the one prompt to configure the environment before servers and
+  // credentials are attached to it.
   document.getElementById("env-modal").classList.add("hidden");
 }
 
-// ...and an explicit choice is configuring the environment: renaming it or
-// setting its type. Either means the operator engaged with the options rather
-// than dismissing them, so the note is not shown again on this browser.
+// Configuring anything retires the note immediately, rather than leaving it up
+// while the operator works down the rest of the row. The next load won't show
+// it either — the deployment is no longer pristine.
 function noteFirstRunChoice() {
   if (!envModalIsFirstRun) return;
-  localStorage.setItem(WELCOME_KEY, "1");
   envModalIsFirstRun = false;
   document.getElementById("env-first-run-hint").classList.add("hidden");
 }
@@ -744,6 +761,7 @@ async function renderEnvManageList() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ enabled: enable }),
         });
+        noteFirstRunChoice();
         cacheClearCreds(); // storage mode changed — drop any cached session creds
         await loadEnvironments();
         if (env.name === currentEnv) await selectEnvironment(currentEnv); // refresh views
@@ -768,6 +786,7 @@ async function renderEnvManageList() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ skip_verify_by_default: skip }),
         });
+        noteFirstRunChoice();
         await loadEnvironments();
         if (env.name === currentEnv) await loadServers(); // re-check existing rows' boxes
       } catch (e) {
@@ -1220,6 +1239,128 @@ function closeApiKeyRevealModal() {
 document.getElementById("api-key-reveal-close").addEventListener("click", closeApiKeyRevealModal);
 document.getElementById("api-key-reveal-done").addEventListener("click", closeApiKeyRevealModal);
 onBackdropClick("api-key-reveal-modal", () => closeApiKeyRevealModal());
+
+/* ---------- 1c-s1c. smart-1 cloud ---------- */
+
+// Check Point hosts the management server for a Smart-1 Cloud environment, so
+// this panel stands in for Management Servers there — updateApiOnlyVisibility
+// shows exactly one of the two, never both. There is no SSH to a hosted
+// management server: nothing to bootstrap, no Connect to Primary, and no estate
+// to discover behind it. One tenant reached by Management API key is the whole
+// management plane, and once connected it is stored as an ordinary management
+// server row carrying the tenant UUID, so discovery and package pushes need to
+// know nothing about Smart-1 Cloud. See services/s1c.py.
+
+function s1cUrl(path = "") {
+  return `/api/environments/${encodeURIComponent(currentEnv)}/smart1cloud${path}`;
+}
+
+function s1cLine(label, value) {
+  const p = document.createElement("p");
+  const strong = document.createElement("strong");
+  strong.textContent = `${label}: `;
+  p.appendChild(strong);
+  p.appendChild(document.createTextNode(value)); // never innerHTML — tenant-supplied
+  return p;
+}
+
+async function loadSmart1Cloud() {
+  if (!currentEnv || !apiOnly()) return;
+  const status = document.getElementById("s1c-status");
+  const btn = document.getElementById("s1c-connect-btn");
+  let conn = null;
+  try {
+    conn = await api(s1cUrl());
+  } catch (e) {
+    status.replaceChildren(s1cLine("Could not read the connection", e.message));
+    return;
+  }
+  if (!conn) {
+    btn.textContent = "Connect to Smart-1 Cloud";
+    status.replaceChildren(s1cLine(
+      "Not connected",
+      "nothing in this environment can reach its management server until you connect. " +
+      "Firewalls are unaffected — they are reached over SSH either way.",
+    ));
+    return;
+  }
+  btn.textContent = "Reconnect or replace key";
+  status.replaceChildren(
+    s1cLine("Tenant", conn.maas_host),
+    s1cLine("Login URL", conn.login_url),
+    s1cLine("Credential set", conn.credential_set ?? "none assigned"),
+    s1cLine(
+      "Management API key",
+      conn.has_api_key ? "stored, encrypted at rest" : "missing — reconnect to store one",
+    ),
+  );
+}
+
+async function openS1cModal() {
+  const form = document.getElementById("s1c-form");
+  form.reset();
+  addPasswordReveals(form);
+  resetPasswordReveals(form); // never inherit the last visit's revealed state
+  const status = document.getElementById("s1c-modal-status");
+  status.textContent = "";
+  status.classList.add("hidden");
+  document.getElementById("s1c-modal").classList.remove("hidden");
+  // Prefill the two non-secret fields from the stored connection, so rotating
+  // a key is one field rather than three retyped identifiers.
+  try {
+    const conn = await api(s1cUrl());
+    if (conn) {
+      document.getElementById("s1c-prefix").value = conn.maas_host;
+      document.getElementById("s1c-tenant").value = conn.tenant_uuid;
+    }
+  } catch { /* first-time connect, or a read that failed — leave it blank */ }
+}
+
+function closeS1cModal() {
+  document.getElementById("s1c-modal").classList.add("hidden");
+  document.getElementById("s1c-form").reset(); // no API key left sitting in the DOM
+}
+
+document.getElementById("s1c-connect-btn").addEventListener("click", openS1cModal);
+document.getElementById("s1c-modal-close").addEventListener("click", closeS1cModal);
+document.getElementById("s1c-cancel").addEventListener("click", closeS1cModal);
+onBackdropClick("s1c-modal", closeS1cModal);
+
+document.getElementById("s1c-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const submit = document.getElementById("s1c-submit");
+  const status = document.getElementById("s1c-modal-status");
+  status.classList.remove("hidden");
+  status.textContent = "Logging in to the tenant…";
+  submit.disabled = true;
+  try {
+    const job = await api(s1cUrl("/connect"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        maas_prefix: document.getElementById("s1c-prefix").value.trim(),
+        tenant_uuid: document.getElementById("s1c-tenant").value.trim(),
+        api_key: document.getElementById("s1c-key").value,
+      }),
+    });
+    lastJobStatus.set(job.id, job.status);
+    // Executes synchronously (services/s1c.py), so the job that comes back is
+    // already finished and its own status IS the result — nothing to poll. A
+    // failure keeps the modal open with the reason, since the fix is almost
+    // always one of the three fields still on screen.
+    if (job.status !== "succeeded") {
+      status.textContent = job.error || "Could not connect — see the Jobs tab.";
+      await loadJobs();
+      return;
+    }
+    closeS1cModal();
+    await Promise.all([loadJobs(), loadServers(), loadCredentialSets(), loadSmart1Cloud()]);
+  } catch (e) {
+    status.textContent = "Connect failed: " + e.message;
+  } finally {
+    submit.disabled = false;
+  }
+});
 
 /* ---------- 1c. discover servers ---------- */
 
@@ -1866,8 +2007,9 @@ function updateServersInfoControls(provisioned) {
   hasProvisionedPrimary = provisioned;
   document.getElementById("discover-btn").classList.toggle("hidden", !provisioned);
   // API-only environments have no Connect to Primary step to seed the first
-  // (primary) server — "Manually add a server" is the only way to create
-  // one, so it can't wait on a primary that will never otherwise appear.
+  // (primary) server, so this can't wait on a primary that will never
+  // otherwise appear. Moot for Smart-1 Cloud, whose own panel replaces this
+  // whole one (updateApiOnlyVisibility) — kept for any other API-only estate.
   document.getElementById("add-server-btn").classList.toggle("hidden", !provisioned && !apiOnly());
 }
 
@@ -4779,11 +4921,21 @@ function updateProvisionCollapse() {
 // patching them is independent of how the environment's management server
 // is reached. Called on every environment load/switch and whenever the
 // access-mode toggle changes.
+//
+// The Provisioning tab's Management Servers table swaps for the Smart-1 Cloud
+// panel rather than just hiding: that table's columns (SSH user, port,
+// credential set) and both its buttons describe servers the operator owns and
+// reaches over SSH, none of which is true of a hosted tenant — and an
+// API-only environment left with neither panel has nowhere at all to configure
+// its management access.
 function updateApiOnlyVisibility() {
   const hide = apiOnly();
   document.getElementById("provision").classList.toggle("hidden", hide);
   document.getElementById("connect-primary").classList.toggle("hidden", hide);
   document.getElementById("servers").classList.toggle("hidden", hide);
+  document.getElementById("servers-info").classList.toggle("hidden", hide);
+  document.getElementById("smart1cloud").classList.toggle("hidden", !hide);
+  if (hide) loadSmart1Cloud();
 }
 
 // Whether the credential modal is editing an existing set (vs. adding a new one).

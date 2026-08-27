@@ -11,7 +11,10 @@ Patching is supported for:
 ✅ On-Premise Smart Center (SMS) servers  
 ✅ On-Premise Multi-Domain Management (MDM/MDSM) servers  
 ✅ Quantum Force and Spark firewalls managed by on-prem environments  
-✅ Quantum Force and Spark firewalls managed by Smart-1 Cloud (manual patching only, no CDT)  
+✅ Quantum Force and Spark firewalls managed by Smart-1 Cloud  
+>tested Mgmt versions: R82.10  
+>tested Force versions: R82.10  
+>tested Spark versions: R81.10.XX, R82.00.XX  
 
 ### NOT Supported
 By design, this tool does NOT support patching:  
@@ -23,6 +26,8 @@ By design, this tool does NOT support patching:
 This tool does not CURRENTLY support but may one day support:  
 ⏳ Maestro  
 ⏳ ElasticXL  
+
+### Tested Versions
 
 ## What it does
 
@@ -81,9 +86,8 @@ These gates define the major version releases - the milestones may change in the
 ✅ Test firewall discovery in MDS/Multi-Domain environment  
 ✅ Test Gaia/Force Gateway patching via CPUSE  
 ✅ Test Spark (Gaia Embedded) firmware patching via upgrade_revert_image.sh  
-◻️ Test Spark major version patching - ie 80.20.X > 81.10.X  
 ✅ Independent agentic code security review  
-◻️ Re-test of functionality  
+✅ Re-test of functionality  
 ◻️ Containerized deployment release that doesn't require git clone and --build  
 
 ### Milestones to reach v2
@@ -96,11 +100,6 @@ These gates define the major version releases - the milestones may change in the
 ✨ Add logic to display a warning on mobile devices that the UI of this tool does not scale down well (by design) and you should use it on a larger display.   
 🤞 RADIUS auth option  
 🤞 Timed/scheduled install actions  
-⏫ Improve the initial management naming modal to include all the checkboxes from the manage environments modal  
-
-#### Provisioning
-✨ Handle S1C API endpoint URL  
-✨ Separate bootstrapping flow for API-only scenarios  
 
 #### Packages
 🤞 If disk space check fails, parse for large folders, suggest things to clean  

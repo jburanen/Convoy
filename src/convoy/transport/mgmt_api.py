@@ -17,9 +17,18 @@ reads and avoids taking a global write lock. Pass ``read_only=False`` for
 commands that actually write (e.g. ``add_repository_package``, used by
 services/pkg_repo_ops.py).
 
-TLS: management servers present a self-signed certificate by default, so
-``verify_tls`` defaults to ``False`` (with a logged note). Set it True when the
-server presents a CA-trusted certificate.
+TLS: an on-prem management server presents a self-signed certificate by default,
+so ``verify_tls`` defaults to ``False`` there (with a logged note). It defaults
+to **True** for a Smart-1 Cloud tenant, which is a public Check Point host with a
+CA-trusted certificate — there is nothing to accommodate, and the API key would
+otherwise cross the public internet unverified. Pass the flag explicitly to
+override either default.
+
+Smart-1 Cloud: the tenant's API lives behind a path segment rather than on the
+host root — ``https://<prefix>.maas.checkpoint.com/<tenant-uuid>/web_api``. That
+segment is ``Host.mgmt_api_context``; everything else (the ``{"api-key": ...}``
+login, ``X-chkp-sid`` thereafter, the commands themselves) is identical to
+on-prem, which is why S1C needs no separate client.
 
 Set ``CONVOY_LOG_API_CALLS`` to log every request/response through
 ``docker compose logs`` — off by default (this is every Management API call in
@@ -112,7 +121,7 @@ class ManagementAPIClient:
         password: str | None = None,
         domain: str | None = None,
         port: int = 443,
-        verify_tls: bool = False,
+        verify_tls: bool | None = None,
         read_only: bool = True,
         timeout: float = 30.0,
         transport: httpx.BaseTransport | None = None,
@@ -126,8 +135,14 @@ class ManagementAPIClient:
         # Multi-Domain Server login only: which Domain (CMA) or the "Global" domain
         # to log into. Ignored on a single-domain SMS.
         self._domain = domain
-        self._base_url = f"https://{server.address}:{port}/web_api"
-        self._verify_tls = verify_tls
+        # Smart-1 Cloud reaches web_api through a tenant path segment; on-prem
+        # servers serve it from the root. Validated to a bare identifier by the
+        # Host model, so it cannot smuggle a path or a host in here.
+        context = f"/{server.mgmt_api_context}" if server.mgmt_api_context else ""
+        self._base_url = f"https://{server.address}:{port}{context}/web_api"
+        # Verify by default only where there is a real certificate to verify:
+        # a Smart-1 Cloud tenant. See the TLS note in the module docstring.
+        self._verify_tls = server.mgmt_api_context is not None if verify_tls is None else verify_tls
         self._read_only = read_only
         self._timeout = timeout
         self._transport = transport  # tests inject an httpx.MockTransport
