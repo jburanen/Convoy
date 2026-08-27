@@ -9,6 +9,12 @@ Known issues and planned work live under Roadmap / Punch List in
 [README.md](README.md); a fix that closes an item there moves it into this file
 in the same commit as the fix and the version bump.
 
+## v0.82.1
+
+No API key field in the credential-set editor on a Smart-1 Cloud environment (operator-specified 2026-08-27). The one API key such an environment has is the tenant's, captured and stored by Connect to Smart-1 Cloud in v0.82.0 — offering the field here only invited a second, unused copy of a management credential inside a set that exists to log in to *firewalls* over SSH, where it is never used. The field is hidden, `api_key` is never sent from the hidden input, a new set now requires an SSH password or private key (an API-key-only set is no longer something this form can create), and the hint says where the Management API key actually lives. The SSH username label drops its "or the API user" wording, which no longer describes anything.
+
+Blank still means *unchanged* on an edit, and the payload sends null rather than an empty string, so opening the tenant's own `smart-1-cloud` set in this editor and saving cannot wipe the key that reaches the tenant. The Credentials table keeps its API column: on these environments it ticks exactly one row — the tenant's set — which is a true statement about a secret that is stored, and hiding it would make that invisible
+
 ## v0.82.0
 
 **Smart-1 Cloud environments get their own Provisioning panel**, replacing Management Servers there entirely (operator-specified 2026-08-27). Check Point hosts the management server for these estates, so there is nothing to bootstrap, no Connect to Primary, no SSH user, port or credential set to assign, and no estate behind it to discover — the Management Servers table describes servers the operator owns and reaches over SSH, none of which is true of a hosted tenant. Connect to Smart-1 Cloud collects the three facts printed on one screen in Smart-1 Cloud (Settings → API & SmartConsole), which shows the login request verbatim: the maas URL prefix, the tenant UUID, and the Management API key. The prefix field accepts the bare prefix, the full hostname, or that whole URL pasted. Auth is the classic `{"api-key": ...}` → `X-chkp-sid` flow — deliberately not the Infinity Portal `clientId`/`accessKey` → bearer-token flow, which is a different key for different services and which Check Point's own documentation does not establish as accepted at `web_api`.
