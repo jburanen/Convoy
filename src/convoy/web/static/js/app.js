@@ -14,6 +14,36 @@
 
 "use strict";
 
+/* ---------- 0. modal backdrop dismissal ---------- */
+
+// Close `modalId` when its backdrop is clicked — but only when the click both
+// STARTED and ended out there.
+//
+// The obvious version (a click handler testing `ev.target === modal`) also
+// fires at the end of a drag that began inside the dialog: press inside a text
+// field, drag past the dialog's edge to extend the selection, release on the
+// backdrop, and the browser reports the click against the nearest common
+// ancestor of press and release — which is the modal container itself. So
+// selecting text in a field could dismiss the dialog and discard what was
+// typed (reported against the credential-set editor, 2026-08-27; every modal
+// here had the same shape).
+//
+// Tracking where the press landed separates "clicked the backdrop" from
+// "finished a drag out there". Cleared after every click so a press inside
+// can never leave the flag armed for a later one.
+function onBackdropClick(modalId, close) {
+  const modal = document.getElementById(modalId);
+  let pressedOnBackdrop = false;
+  modal.addEventListener("mousedown", (ev) => {
+    pressedOnBackdrop = ev.target === modal;
+  });
+  modal.addEventListener("click", (ev) => {
+    const dismiss = pressedOnBackdrop && ev.target === modal;
+    pressedOnBackdrop = false;
+    if (dismiss) close();
+  });
+}
+
 /* ---------- 1. fetch helper ---------- */
 
 async function api(path, options = {}) {
@@ -193,9 +223,7 @@ document.getElementById("user-settings-form").addEventListener("submit", async (
 });
 document.getElementById("user-settings-cancel").addEventListener("click", closeUserSettingsModal);
 document.getElementById("user-settings-close").addEventListener("click", closeUserSettingsModal);
-document.getElementById("user-settings-modal").addEventListener("click", (ev) => {
-  if (ev.target.id === "user-settings-modal") closeUserSettingsModal(); // backdrop click cancels
-});
+onBackdropClick("user-settings-modal", () => closeUserSettingsModal()); // backdrop click cancels
 
 /* ---------- 1a. environments ---------- */
 
@@ -355,9 +383,7 @@ document.getElementById("cred-modal-form").addEventListener("submit", (ev) => {
 });
 document.getElementById("cred-modal-cancel").addEventListener("click", () => closeCredModal(null));
 document.getElementById("cred-modal-close").addEventListener("click", () => closeCredModal(null));
-document.getElementById("cred-modal").addEventListener("click", (ev) => {
-  if (ev.target.id === "cred-modal") closeCredModal(null); // backdrop click cancels
-});
+onBackdropClick("cred-modal", () => closeCredModal(null)); // backdrop click cancels
 document.getElementById("cred-cache-forget").addEventListener("click", () => {
   cacheClearCreds();
   toast("Session credentials cleared from this tab.");
@@ -501,9 +527,7 @@ document.getElementById("welcome-form").addEventListener("submit", async (ev) =>
 });
 document.getElementById("welcome-keep").addEventListener("click", dismissWelcome);
 document.getElementById("welcome-close").addEventListener("click", hideWelcome);
-document.getElementById("welcome-modal").addEventListener("click", (ev) => {
-  if (ev.target.id === "welcome-modal") hideWelcome(); // backdrop click
-});
+onBackdropClick("welcome-modal", () => hideWelcome()); // backdrop click
 
 /* ---------- 1a-modal. manage environments (create + rename) ---------- */
 
@@ -682,9 +706,7 @@ async function renderEnvManageList() {
 }
 
 document.getElementById("env-modal-close").addEventListener("click", closeEnvModal);
-document.getElementById("env-modal").addEventListener("click", (ev) => {
-  if (ev.target.id === "env-modal") closeEnvModal(); // click on backdrop closes
-});
+onBackdropClick("env-modal", () => closeEnvModal()); // click on backdrop closes
 document.addEventListener("keydown", (ev) => {
   if (ev.key !== "Escape") return;
   closeCredModal(null); // cancels a pending credential prompt (no-op otherwise)
@@ -839,9 +861,7 @@ document.getElementById("server-form").addEventListener("submit", async (ev) => 
 });
 document.getElementById("server-modal-close").addEventListener("click", closeServerModal);
 document.getElementById("server-modal-cancel").addEventListener("click", closeServerModal);
-document.getElementById("server-modal").addEventListener("click", (ev) => {
-  if (ev.target.id === "server-modal") closeServerModal(); // backdrop closes
-});
+onBackdropClick("server-modal", () => closeServerModal()); // backdrop closes
 
 /* ---------- 1c-primary. connect to primary (inline panel + confirm/reveal modals) ---------- */
 
@@ -935,9 +955,7 @@ function closeConnectPrimaryConfirmModal() {
 }
 document.getElementById("connect-primary-confirm-close").addEventListener("click", closeConnectPrimaryConfirmModal);
 document.getElementById("connect-primary-confirm-cancel").addEventListener("click", closeConnectPrimaryConfirmModal);
-document.getElementById("connect-primary-confirm-modal").addEventListener("click", (ev) => {
-  if (ev.target.id === "connect-primary-confirm-modal") closeConnectPrimaryConfirmModal();
-});
+onBackdropClick("connect-primary-confirm-modal", () => closeConnectPrimaryConfirmModal());
 
 document.getElementById("connect-primary-confirm-run").addEventListener("click", async () => {
   if (!_connectPrimaryPayload || !currentEnv) return;
@@ -1071,9 +1089,7 @@ document.getElementById("api-access-repair-confirm-close").addEventListener(
 document.getElementById("api-access-repair-confirm-cancel").addEventListener(
   "click", closeApiAccessRepairConfirmModal,
 );
-document.getElementById("api-access-repair-confirm-modal").addEventListener("click", (ev) => {
-  if (ev.target.id === "api-access-repair-confirm-modal") closeApiAccessRepairConfirmModal();
-});
+onBackdropClick("api-access-repair-confirm-modal", () => closeApiAccessRepairConfirmModal());
 
 document.getElementById("api-access-repair-confirm-run").addEventListener("click", async () => {
   if (!currentEnv) return;
@@ -1127,9 +1143,7 @@ function closeApiKeyRevealModal() {
 }
 document.getElementById("api-key-reveal-close").addEventListener("click", closeApiKeyRevealModal);
 document.getElementById("api-key-reveal-done").addEventListener("click", closeApiKeyRevealModal);
-document.getElementById("api-key-reveal-modal").addEventListener("click", (ev) => {
-  if (ev.target.id === "api-key-reveal-modal") closeApiKeyRevealModal();
-});
+onBackdropClick("api-key-reveal-modal", () => closeApiKeyRevealModal());
 
 /* ---------- 1c. discover servers ---------- */
 
@@ -1325,9 +1339,7 @@ document.getElementById("discover-import").addEventListener("click", async () =>
 document.getElementById("discover-btn").addEventListener("click", () => openDiscoverModal());
 document.getElementById("discover-close").addEventListener("click", closeDiscoverModal);
 document.getElementById("discover-cancel").addEventListener("click", closeDiscoverModal);
-document.getElementById("discover-modal").addEventListener("click", (ev) => {
-  if (ev.target.id === "discover-modal") closeDiscoverModal(); // backdrop click closes
-});
+onBackdropClick("discover-modal", () => closeDiscoverModal()); // backdrop click closes
 
 /* ---------- 1a-header. sticky header scroll state ---------- */
 
@@ -1441,9 +1453,7 @@ function closeHelpModal() {
   document.getElementById("help-modal").classList.add("hidden");
 }
 document.getElementById("help-modal-close").addEventListener("click", closeHelpModal);
-document.getElementById("help-modal").addEventListener("click", (ev) => {
-  if (ev.target.id === "help-modal") closeHelpModal(); // backdrop click closes
-});
+onBackdropClick("help-modal", () => closeHelpModal()); // backdrop click closes
 // Delegated: covers every panel's help button (and any added later) with one
 // listener instead of wiring each individually.
 document.addEventListener("click", (ev) => {
@@ -1586,9 +1596,7 @@ document.getElementById("prov-overwrite-new").addEventListener("click", () => cl
 document.getElementById("prov-overwrite-overwrite").addEventListener("click", () => closeProvOverwriteModal("overwrite"));
 document.getElementById("prov-overwrite-skip").addEventListener("click", () => closeProvOverwriteModal("skip"));
 document.getElementById("prov-overwrite-close").addEventListener("click", () => closeProvOverwriteModal("skip"));
-document.getElementById("prov-overwrite-modal").addEventListener("click", (ev) => {
-  if (ev.target.id === "prov-overwrite-modal") closeProvOverwriteModal("skip"); // backdrop click cancels
-});
+onBackdropClick("prov-overwrite-modal", () => closeProvOverwriteModal("skip")); // backdrop click cancels
 
 // Save the bootstrap username/password as a named credential set so the operator
 // doesn't re-enter them. Best-effort: needs a current environment with credential
@@ -2423,9 +2431,7 @@ document.getElementById("uninstall-modal-form").addEventListener("submit", async
 
 document.getElementById("uninstall-modal-close").addEventListener("click", closeUninstallModal);
 document.getElementById("uninstall-modal-cancel").addEventListener("click", closeUninstallModal);
-document.getElementById("uninstall-modal").addEventListener("click", (ev) => {
-  if (ev.target.id === "uninstall-modal") closeUninstallModal(); // backdrop click cancels
-});
+onBackdropClick("uninstall-modal", () => closeUninstallModal()); // backdrop click cancels
 
 /* ---------- 3a. bulk import (above the servers table) ---------- */
 
@@ -2948,9 +2954,7 @@ document.getElementById("fw-bootstrap-creds-confirm-close").addEventListener(
 document.getElementById("fw-bootstrap-creds-confirm-cancel").addEventListener(
   "click", closeBootstrapCredsConfirmModal,
 );
-document.getElementById("fw-bootstrap-creds-confirm-modal").addEventListener("click", (ev) => {
-  if (ev.target.id === "fw-bootstrap-creds-confirm-modal") closeBootstrapCredsConfirmModal();
-});
+onBackdropClick("fw-bootstrap-creds-confirm-modal", () => closeBootstrapCredsConfirmModal());
 
 // The push itself, split out of the confirm modal's Run handler so the
 // Bootstrap-all batch can drive it too having confirmed once for the whole set.
@@ -3028,9 +3032,7 @@ function closeSparkBootstrapModal() {
 }
 document.getElementById("fw-spark-bootstrap-close").addEventListener("click", closeSparkBootstrapModal);
 document.getElementById("fw-spark-bootstrap-ok").addEventListener("click", closeSparkBootstrapModal);
-document.getElementById("fw-spark-bootstrap-modal").addEventListener("click", (ev) => {
-  if (ev.target.id === "fw-spark-bootstrap-modal") closeSparkBootstrapModal();
-});
+onBackdropClick("fw-spark-bootstrap-modal", () => closeSparkBootstrapModal());
 
 // ---- Spark firewall credential scenario modal ------------------------------
 // Shared by the Add Firewall modal (role changed to Spark Firewall) and the
@@ -3130,9 +3132,7 @@ document.getElementById("fw-spark-cred-form").addEventListener("submit", async (
 });
 document.getElementById("fw-spark-cred-cancel").addEventListener("click", () => closeSparkCredModal(null));
 document.getElementById("fw-spark-cred-close").addEventListener("click", () => closeSparkCredModal(null));
-document.getElementById("fw-spark-cred-modal").addEventListener("click", (ev) => {
-  if (ev.target.id === "fw-spark-cred-modal") closeSparkCredModal(null); // backdrop click cancels
-});
+onBackdropClick("fw-spark-cred-modal", () => closeSparkCredModal(null)); // backdrop click cancels
 
 document.getElementById("fw-refresh-all-btn").addEventListener("click", async () => {
   const btn = document.getElementById("fw-refresh-all-btn");
@@ -3180,9 +3180,7 @@ function closeSparkMajorVersionModal(result) {
 document.getElementById("spark-major-version-close").addEventListener("click", () => closeSparkMajorVersionModal(false));
 document.getElementById("spark-major-version-cancel").addEventListener("click", () => closeSparkMajorVersionModal(false));
 document.getElementById("spark-major-version-confirm").addEventListener("click", () => closeSparkMajorVersionModal(true));
-document.getElementById("spark-major-version-modal").addEventListener("click", (ev) => {
-  if (ev.target.id === "spark-major-version-modal") closeSparkMajorVersionModal(false); // backdrop click cancels
-});
+onBackdropClick("spark-major-version-modal", () => closeSparkMajorVersionModal(false)); // backdrop click cancels
 
 async function installFirewallPackage(name, row) {
   const select = row.querySelector(".install-select");
@@ -3697,9 +3695,7 @@ document.getElementById("firewall-modal-remove").addEventListener("click", async
 });
 document.getElementById("firewall-modal-close").addEventListener("click", closeFirewallModal);
 document.getElementById("firewall-modal-cancel").addEventListener("click", closeFirewallModal);
-document.getElementById("firewall-modal").addEventListener("click", (ev) => {
-  if (ev.target.id === "firewall-modal") closeFirewallModal(); // backdrop closes
-});
+onBackdropClick("firewall-modal", () => closeFirewallModal()); // backdrop closes
 
 /* ---------- 3d. discover firewalls ---------- */
 
@@ -4129,9 +4125,7 @@ function closeBootstrapAllModal() {
 }
 document.getElementById("disc-bootstrap-all-close").addEventListener("click", closeBootstrapAllModal);
 document.getElementById("disc-bootstrap-all-cancel").addEventListener("click", closeBootstrapAllModal);
-document.getElementById("disc-bootstrap-all-modal").addEventListener("click", (ev) => {
-  if (ev.target.id === "disc-bootstrap-all-modal") closeBootstrapAllModal();
-});
+onBackdropClick("disc-bootstrap-all-modal", () => closeBootstrapAllModal());
 
 // One confirmation for the whole set, then a push per firewall. Spark can't be
 // pushed to at all, so it's called out here and handled after the rest by
@@ -4188,9 +4182,7 @@ document.getElementById("disc-bootstrap-all-run").addEventListener("click", asyn
 document.getElementById("discover-firewalls-btn").addEventListener("click", openDiscoverFirewallsModal);
 document.getElementById("discover-firewalls-close").addEventListener("click", closeDiscoverFirewallsModal);
 document.getElementById("discover-firewalls-cancel").addEventListener("click", closeDiscoverFirewallsModal);
-document.getElementById("discover-firewalls-modal").addEventListener("click", (ev) => {
-  if (ev.target.id === "discover-firewalls-modal") closeDiscoverFirewallsModal(); // backdrop click closes
-});
+onBackdropClick("discover-firewalls-modal", () => closeDiscoverFirewallsModal()); // backdrop click closes
 
 /* ---------- 3e. gateway deployment (CDT) ---------- */
 
@@ -4730,20 +4722,25 @@ document.getElementById("credential-form").addEventListener("submit", async (ev)
   const key = keyInput.value.trim();
   const expertInput = document.getElementById("cs-expert");
   const apiInput = document.getElementById("cs-api");
-  // API-only: no SSH service account exists at all — the only thing this set
-  // needs is an API key (see credentials.py's put_set(api_only=...)).
-  if (apiOnly()) {
-    if (!apiInput.value && !credEditMode) { toast("Enter an API key."); return; }
-  } else {
-    // Adding a new set needs an SSH secret; editing may leave them blank to keep
-    // the existing ones (e.g. adding only the API key to a bootstrap entry).
-    if (!password && !key && !credEditMode) { toast("Enter an SSH password or a private key."); return; }
-    if (password && key) { toast("Enter an SSH password OR a private key, not both."); return; }
-    // Same relaxed-on-edit rule as the SSH secret above: a new set needs an
-    // expert password up front (every host may need to escalate to expert
-    // mode — see .claude/memory/gaia-shell-posture.md); editing may leave it
-    // blank to keep the set's current value.
-    if (!expertInput.value && !credEditMode) { toast("Enter an expert-mode password."); return; }
+  // Mirrors put_set's rules, which key off what the SET carries rather than the
+  // environment's access mode: a set needs an SSH secret or an API key, and one
+  // carrying an SSH secret needs exactly one of them plus an expert password.
+  // Every check is relaxed while editing — a blank field there keeps the stored
+  // value, so blank means "unchanged", not "empty" (e.g. pasting only the API
+  // key into a bootstrapped entry). The backend is the arbiter either way;
+  // these only save a round trip on the obvious mistakes.
+  if (password && key) { toast("Enter an SSH password OR a private key, not both."); return; }
+  if (!credEditMode) {
+    if (!password && !key && !apiInput.value) {
+      toast("Enter an SSH password or a private key, or an API key.");
+      return;
+    }
+    // Only what can log in over SSH needs somewhere to escalate to — see
+    // .claude/memory/gaia-shell-posture.md. An API-key-only set needs neither.
+    if ((password || key) && !expertInput.value) {
+      toast("Enter an expert-mode password.");
+      return;
+    }
   }
   try {
     // Executes immediately (services/cred_ops.py) — the response is already
@@ -4769,25 +4766,25 @@ document.getElementById("credential-form").addEventListener("submit", async (ev)
   }
 });
 
-// API-only environments have no SSH service account at all — hide the SSH/
-// expert fields and relabel the username field, since the only thing such a
-// set needs is an API key (see credentials.py's put_set(api_only=...)).
+// API-only describes how this environment's MANAGEMENT SERVERS are reached —
+// it never covered its firewalls, which are still patched over SSH (see
+// HostConnector._check_ssh_reachable). So the SSH fields stay on offer here:
+// hiding them left an API-only environment with no way to store the very
+// credentials its firewall jobs need. Only the guidance changes with the mode.
 function updateCredFormApiOnlyVisibility() {
-  const hide = apiOnly();
-  for (const field of document.querySelectorAll(".cs-ssh-field")) field.classList.toggle("hidden", hide);
-  document.getElementById("cred-add-hint").textContent = hide
+  const api = apiOnly();
+  document.getElementById("cred-add-hint").textContent = api
     ? "A named login set, stored encrypted at rest; secrets are never displayed again " +
-      "after saving. This environment is API-only — give it the Management API key " +
-      "(and, optionally, the username it belongs to)."
+      "after saving. This environment reaches its management servers by API key — but " +
+      "its firewalls are still patched over SSH, so a set can carry the API key, SSH " +
+      "credentials (password or private key, plus an expert-mode password), or both."
     : "A named login set, stored encrypted at rest; secrets are never displayed again " +
       "after saving. Give it an SSH password or a private key, plus an expert-mode " +
       "password — SSH logs in as a plain clish user and elevates to expert only when " +
-      "a job needs it.";
+      "a job needs it. An API key alone is also a valid set.";
   document.querySelector("#cs-ssh-user-label .cs-label-text").textContent =
-    hide ? "API username (optional)" : "SSH username";
-  document.getElementById("cs-ssh-user").placeholder = hide ? "" : "admin";
-  document.querySelector("#cs-api-label .cs-label-text").textContent =
-    hide ? "API key" : "API key (optional)";
+    api ? "Username (SSH, or the API user)" : "SSH username";
+  document.getElementById("cs-ssh-user").placeholder = "admin";
 }
 
 // The credential-set editor lives in a modal opened from the panel's header.
@@ -4832,9 +4829,7 @@ function closeCredAddModal() {
 document.getElementById("cred-add-btn").addEventListener("click", openCredAddModal);
 document.getElementById("cred-add-close").addEventListener("click", closeCredAddModal);
 document.getElementById("cred-add-cancel").addEventListener("click", closeCredAddModal);
-document.getElementById("cred-add-modal").addEventListener("click", (ev) => {
-  if (ev.target.id === "cred-add-modal") closeCredAddModal(); // backdrop click closes
-});
+onBackdropClick("cred-add-modal", () => closeCredAddModal()); // backdrop click closes
 
 /* ---------- 6. jobs ---------- */
 
