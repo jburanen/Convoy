@@ -24,8 +24,10 @@ from convoy.services.spark_patching import (
     SparkPatchingService,
     builds_match,
     parse_fw_ver,
+    read_fw_ver,
 )
 from convoy.store import JobStatus, Store
+from convoy.transport.ssh import CommandResult, GaiaShell
 
 from .fakes import FakeTransport, make_factory
 
@@ -325,6 +327,70 @@ def test_test_credentials_warns_when_the_set_names_no_username(
 # -- transfer job -------------------------------------------------------------------
 
 
+class _ShellAwareClient:
+    """Records the exact wire string, and answers only the form a device with
+    the given login shell would actually accept."""
+
+    def __init__(self, shell: GaiaShell, *, login_shell_works: bool = True) -> None:
+        self.shell = shell
+        self._login_shell_works = login_shell_works
+        self.commands: list[str] = []
+
+    def run(self, command: str, *, timeout: float | None = None) -> CommandResult:
+        self.commands.append(command)
+        if command == "fw ver" and self.shell is GaiaShell.CLISH:
+            return CommandResult(command=command, exit_status=0, stdout=FW_VER_MATCH, stderr="")
+        if command == "bash -lc 'fw ver'" and self._login_shell_works:
+            return CommandResult(command=command, exit_status=0, stdout=FW_VER_MATCH, stderr="")
+        if command == "clish -c 'fw ver'":
+            return CommandResult(command=command, exit_status=0, stdout=FW_VER_MATCH, stderr="")
+        # What the real device said: a non-login bash has no Check Point PATH.
+        return CommandResult(
+            command=command,
+            exit_status=127,
+            stdout="",
+            stderr="bash: line 1: fw: command not found",
+        )
+
+    def run_bash(self, command: str, *, timeout: float | None = None) -> CommandResult:
+        raise AssertionError("read_fw_ver must not use run_bash")
+
+
+def test_read_fw_ver_sends_it_bare_when_the_login_shell_is_clish() -> None:
+    client = _ShellAwareClient(GaiaShell.CLISH)
+    assert read_fw_ver(client).stdout == FW_VER_MATCH
+    assert client.commands == ["fw ver"]
+
+
+def test_read_fw_ver_uses_a_login_shell_when_the_login_shell_is_bash() -> None:
+    """`fw ver` is fine in clish AND expert — the shell is not the variable.
+    What breaks is exec'ing it into a NON-login bash, which `bashUser on` makes
+    the default: no profile runs, so Check Point's PATH is never set and it
+    fails rc 127 `fw: command not found`, while the operator logged in
+    interactively at the same moment runs it fine (real device, 2026-08-27).
+    A login shell sources the profile first."""
+    client = _ShellAwareClient(GaiaShell.EXPERT)
+    assert read_fw_ver(client).stdout == FW_VER_MATCH
+    assert client.commands == ["bash -lc 'fw ver'"]  # never the bare form
+
+
+def test_read_fw_ver_falls_back_to_clish() -> None:
+    """`fw ver` is equally valid in clish, and this one call decides whether a
+    completed upgrade gets reported as a success — worth a second attempt."""
+    client = _ShellAwareClient(GaiaShell.EXPERT, login_shell_works=False)
+    assert read_fw_ver(client).stdout == FW_VER_MATCH
+    assert client.commands == ["bash -lc 'fw ver'", "clish -c 'fw ver'"]
+
+
+def test_read_fw_ver_raises_when_every_form_fails() -> None:
+    client = _ShellAwareClient(GaiaShell.EXPERT, login_shell_works=False)
+    client.run = lambda command, timeout=None: CommandResult(  # type: ignore[method-assign]
+        command=command, exit_status=127, stdout="", stderr="fw: command not found"
+    )
+    with pytest.raises(TransportError):
+        read_fw_ver(client)
+
+
 def test_transfer_happy_path(
     service: SparkPatchingService, store: Store, transport: FakeTransport
 ) -> None:
@@ -346,6 +412,55 @@ def test_transfer_happy_path(
     assert any("staged in /storage" in e and "Install button" in e for e in events)
     cached = store.get_server_state("default", "spark-01")
     assert cached is not None and cached.installable == [IMG]
+
+
+def test_transfer_leaves_bash_user_on_when_it_was_already_on(
+    store: Store,
+    creds: CredentialStore,
+    packages: PackageStore,
+    inventory: Inventory,
+) -> None:
+    """A device the operator deliberately left with bashUser enabled has to come
+    out of a transfer the way it went in (operator-specified 2026-08-27):
+    neither turned on redundantly nor — the part that would actually hurt —
+    silently turned off, revoking shell access they never asked this tool to
+    manage.
+
+    Detected without a probe command: `bashUser on` makes the account's login
+    shell bash, so the session lands in expert with no clish prompt, which is
+    what enter_expert() reports back."""
+    transport = FakeTransport(
+        expert_already_expert=True,
+        responses={
+            "sha1sum": f"{IMG_SHA1}  /storage/{IMG}",
+            "fw ver": FW_VER_MATCH,
+        },
+        expert_command_outputs={"bashUser on": "Done.", "bashUser off": "Done."},
+    )
+    _assign(store, inventory, "spark-01", "spark-primary")
+    registry = EnvironmentRegistry()
+    registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
+    service = SparkPatchingService(
+        registry=registry,
+        packages=packages,
+        runner=JobRunner(store),
+        vault=JobCredentialVault(),
+        store=store,
+    )
+
+    job = service.submit_transfer("default", "spark-01", IMG)
+    _run(service)
+    assert store.get_job(job.id).status is JobStatus.SUCCEEDED
+    assert len(transport.puts) == 1  # the transfer itself still happened
+
+    # Neither command was ever sent, on any of the sessions this job opened.
+    sent = [line for shell in transport.interactive_shells for line in shell.sent]
+    assert not any("bashUser" in line for line in sent), sent
+    # One session to look, not two: there is no disable phase to come back for.
+    assert len(transport.interactive_shells) == 1
+    events = [e.message for e in store.events(job.id)]
+    assert any("bashUser is already on" in e for e in events), events
+    assert any("leaving bashUser on" in e for e in events), events
 
 
 def test_transfer_fails_on_sha1_mismatch(
@@ -758,7 +873,10 @@ def test_detect_runs_fw_ver_not_cpuse(
     transport.responses["fw ver"] = "This is Check Point's 1550 Appliance R81.10.17 - Build 892"
     version = service.detect("default", "spark-01")
     assert version == "1550 Appliance R81.10.17 - Build 892"
-    assert any(c == "fw ver" for c in transport.commands)
+    # FakeTransport models a bash login shell (GaiaShell.EXPERT), where the bare
+    # form would hit a non-login bash with no Check Point PATH — so it goes
+    # through a login shell. See read_fw_ver.
+    assert any(c == "bash -lc 'fw ver'" for c in transport.commands), transport.commands
     assert not any("installer" in c or "cluster state" in c for c in transport.commands)
 
 
