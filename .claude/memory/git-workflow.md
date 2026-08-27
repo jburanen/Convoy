@@ -50,7 +50,7 @@ in memory at the time. Treat "commit this batch" as a single checklist, not
 independent habits to remember separately: (1) did the operator actually ask
 for this commit, (2) is `__version__` bumped in this same commit, (3 — new,
 see [[punchlist-workflow]]) if this closes a README Punch List item, has it
-moved to Squashed Bugs with the new version number, in this same commit. All
+moved into CHANGELOG.md with the new version number, in this same commit. All
 three or none — don't let fixing one bug fix leave the other two undone.
 
 ## Bump the version every batch

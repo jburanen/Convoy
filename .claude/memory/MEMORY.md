@@ -30,7 +30,7 @@ Load this at the start of each session; read a linked file when its hook looks r
 - [Project rename to Convoy](project-rename-convoy.md) — rename to Convoy complete 2026-08-26; credential canary + CHKP_CPUSE_* env fallback deliberately keep the old spelling
 - [Mgmt API SMS System Data domain](mgmt-api-sms-system-data-domain.md) — standalone SMS bootstrap login needs `--domain "System Data"` or add administrator/add api-key fail with err_inappropriate_domain_type
 - [API access repair flow](api-access-repair-flow.md) — proactive SSH diagnose right after Connect to Primary succeeds; repair stays confirm-gated, not folded into the provisioning command sequence
-- [Punch list workflow](punchlist-workflow.md) — closing a README Punch List bug moves it to Squashed Bugs w/ version, same commit as the fix
+- [Punch list workflow](punchlist-workflow.md) — closing a README Punch List bug moves it into CHANGELOG.md w/ version, same commit as the fix
 - [Spark firewall credential scenarios](spark-firewall-credential-scenarios.md) — adding a Spark firewall prompts direct-vs-bootstrap credentials, requires expert password; modal-on-modal needs explicit z-index (DOM order ≠ nesting order)
 - [Table reload race](table-reload-race.md) — loadServers()/loadFirewalls() need a bump-token guard against overlapping calls, or every row silently doubles; recurred once after a partial 2026-07-23 fix
 - [SSH username source of truth](ssh-username-source-of-truth.md) — connect() resolves the SSH username from the assigned credential set live (default_client_factory), never from Host.ssh_user, which only survives for storage-disabled hosts
