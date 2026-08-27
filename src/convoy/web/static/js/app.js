@@ -4957,10 +4957,15 @@ document.getElementById("credential-form").addEventListener("submit", async (ev)
   // value, so blank means "unchanged", not "empty" (e.g. pasting only the API
   // key into a bootstrapped entry). The backend is the arbiter either way;
   // these only save a round trip on the obvious mistakes.
+  // A Smart-1 Cloud environment has no API key field (see
+  // updateCredFormApiOnlyVisibility), so a set here is an SSH login or nothing.
+  const apiOffered = !apiOnly();
   if (password && key) { toast("Enter an SSH password OR a private key, not both."); return; }
   if (!credEditMode) {
-    if (!password && !key && !apiInput.value) {
-      toast("Enter an SSH password or a private key, or an API key.");
+    if (!password && !key && !(apiOffered && apiInput.value)) {
+      toast(apiOffered
+        ? "Enter an SSH password or a private key, or an API key."
+        : "Enter an SSH password or a private key.");
       return;
     }
     // Only what can log in over SSH needs somewhere to escalate to — see
@@ -4990,7 +4995,9 @@ document.getElementById("credential-form").addEventListener("submit", async (ev)
         ssh_password: password || null,
         ssh_private_key: key || null,
         expert_password: expertInput.value || null,
-        api_key: apiInput.value || null,
+        // Never from a hidden field: null means "unchanged" on an edit, so the
+        // tenant's own set keeps its key if it is ever opened here.
+        api_key: (apiOffered && apiInput.value) || null,
       }),
     });
     lastJobStatus.set(job.id, job.status);
@@ -5010,15 +5017,21 @@ function updateCredFormApiOnlyVisibility() {
   const api = apiOnly();
   document.getElementById("cred-add-hint").textContent = api
     ? "A named login set, stored encrypted at rest; secrets are never displayed again " +
-      "after saving. This environment reaches its management servers by API key — but " +
-      "its firewalls are still patched over SSH, so a set can carry the API key, SSH " +
-      "credentials (password or private key, plus an expert-mode password), or both."
+      "after saving. These are the SSH logins for this environment's firewalls — an " +
+      "SSH password or a private key, plus an expert-mode password. The Management API " +
+      "key is not entered here: it belongs to the Smart-1 Cloud connection on the " +
+      "Provisioning tab, and is never used on a firewall."
     : "A named login set, stored encrypted at rest; secrets are never displayed again " +
       "after saving. Give it an SSH password or a private key, plus an expert-mode " +
       "password — SSH logs in as a plain clish user and elevates to expert only when " +
       "a job needs it. An API key alone is also a valid set.";
-  document.querySelector("#cs-ssh-user-label .cs-label-text").textContent =
-    api ? "Username (required with SSH credentials, or the API user)" : "SSH username";
+  // No API key field on a Smart-1 Cloud environment (operator-specified
+  // 2026-08-27). The one API key such an environment has is the tenant's, and
+  // it is captured and stored by Connect to Smart-1 Cloud — offering the field
+  // here invites a second, unused copy of a management credential in a set
+  // that exists to log in to firewalls over SSH.
+  document.getElementById("cs-api-label").classList.toggle("hidden", api);
+  document.querySelector("#cs-ssh-user-label .cs-label-text").textContent = "SSH username";
   document.getElementById("cs-ssh-user").placeholder = "admin";
 }
 
