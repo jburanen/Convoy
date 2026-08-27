@@ -111,9 +111,16 @@
             <label for="prov-cred-name">Credential name</label>
             <label for="prov-username">Username</label>
             <label for="prov-password">Password</label>
+            <!-- The box's OWN expert password (`set expert-password`), not tied to
+                 the account being created above. Optional here because the operator
+                 may not have it to hand while bootstrapping, but a credential set
+                 cannot be stored without one (credentials.py's put_set), so leaving
+                 it blank skips the save rather than attempting a doomed one. -->
+            <label for="prov-expert">Expert password</label>
             <input type="text" id="prov-cred-name" placeholder="e.g. primary-admin">
             <input type="text" id="prov-username" placeholder="e.g. svc-patch" required>
             <input type="password" id="prov-password" placeholder="8+ characters" required>
+            <input type="password" id="prov-expert" placeholder="to save these credentials" autocomplete="new-password">
           </div>
         </form>
         <div id="prov-clish-notes" class="prov-notes hidden"></div>

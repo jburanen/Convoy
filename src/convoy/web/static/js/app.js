@@ -1580,9 +1580,16 @@ document.getElementById("prov-overwrite-modal").addEventListener("click", (ev) =
 // storage enabled. If the username already backs another stored set, the operator
 // is asked to overwrite it, save these as a new (auto-uniquified) entry, or skip
 // saving altogether. Returns a status for the notes area.
-async function saveBootstrapCredential(setName, username, password) {
+async function saveBootstrapCredential(setName, username, password, expertPassword) {
   if (!currentEnv) return { ok: false, reason: "no environment selected" };
   if (!storageEnabled()) return { ok: false, reason: "credential storage is disabled for this environment" };
+  // put_set refuses a set with no expert-mode password (credentials.py), so
+  // without one this request cannot succeed — bail here rather than firing it
+  // and leaving a failed cred.add in the Jobs tab. The field is optional
+  // because the box's expert password isn't always to hand at bootstrap time.
+  if (!expertPassword) {
+    return { ok: false, reason: "no expert password given — a credential set can't be stored without one" };
+  }
   await loadCredentialSets(); // refresh before checking for a username collision
   const existing = credentialSets.find((s) => s.ssh_username === username);
   let name = setName;
@@ -1602,6 +1609,7 @@ async function saveBootstrapCredential(setName, username, password) {
         name,
         ssh_username: username,
         ssh_password: password,
+        expert_password: expertPassword,
         default_if_none: true, // first credentials become the environment default
       }),
     });
@@ -1638,8 +1646,10 @@ document.getElementById("prov-generate").addEventListener("click", (ev) => {
 document.getElementById("provision-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const passwordInput = document.getElementById("prov-password");
+  const expertInput = document.getElementById("prov-expert");
   const username = document.getElementById("prov-username").value.trim();
   const password = passwordInput.value;
+  const expertPassword = expertInput.value;
   // Credential-set label; defaults to the username when left blank.
   const credName = document.getElementById("prov-cred-name").value.trim() || username;
   try {
@@ -1652,8 +1662,11 @@ document.getElementById("provision-form").addEventListener("submit", async (ev) 
       body: JSON.stringify({ username, password }),
     });
     passwordInput.value = ""; // plaintext leaves the page as soon as possible
+    expertInput.value = "";
     // Save the same credentials to the table so the operator needn't re-enter them.
-    const credStatus = await saveBootstrapCredential(credName, username, password);
+    const credStatus = await saveBootstrapCredential(
+      credName, username, password, expertPassword,
+    );
     renderProvNotes(resp, credStatus);
     // Commands only (no comment lines).
     document.getElementById("prov-clish-output").textContent = resp.commands.join("\n");
