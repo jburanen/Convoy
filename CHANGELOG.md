@@ -9,6 +9,12 @@ Known issues and planned work live under Roadmap / Punch List in
 [README.md](README.md); a fix that closes an item there moves it into this file
 in the same commit as the fix and the version bump.
 
+## v1.0.0-rc.2
+
+The image now carries `CONVOY_CONFIG=/data/config.yaml` itself. rc.1 seeded a config into the data volume and then only read it if the *caller* pointed at it — which `docker-compose.yml` does, so the documented path worked, but a bare `docker run ghcr.io/jburanen/convoy` (the most natural first thing anyone tries) fell back to built-in defaults whose relative paths resolve against `WORKDIR`. That is root-owned, so the container died as uid 1001 with `PermissionError: [Errno 13] Permission denied: 'state'` while a perfectly good config.yaml sat in /data, unread. Found by smoke-testing the published rc.1 image before releasing it, which is what that step is for. The path is now one fact in the image, used by both the entrypoint that seeds it and the app that reads it; compose still sets it explicitly, where it now agrees with the image rather than rescuing it.
+
+rc.1 is left published and unreleased rather than being silently rebuilt under the same tag: a published image tag that changes content underneath its consumers is precisely the habit worth not starting on the first release
+
 ## v1.0.0-rc.1
 
 **First release candidate, and the first release that is a container rather than a checkout.** `docker-compose.yml` now pulls `ghcr.io/jburanen/convoy` instead of building: an operator takes that one file and runs `docker compose up -d`. No clone, no `--build`, no toolchain.
