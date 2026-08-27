@@ -1,22 +1,25 @@
 ---
 name: punchlist-workflow
-description: When a fix closes a README Punch List item, move it to Squashed Bugs with the shipping version, in the same commit
+description: When a fix closes a README Punch List item, move it to CHANGELOG.md with the shipping version, in the same commit
 metadata:
   type: feedback
 ---
 
 `README.md` tracks known issues under **Roadmap / Punch List** (organized by
-tab/section, 🪲 marks bugs specifically) and already-fixed ones under
-**Squashed Bugs** (flat list, newest first, each line prefixed `vX.Y.Z`).
+tab/section, 🪲 marks bugs specifically). Already-fixed ones live in
+**`CHANGELOG.md`** at the repo root — newest first, one `## vX.Y.Z` section per
+entry. It used to be a "Squashed Bugs" section inside README.md; moved out
+2026-08-27 (operator-directed) once it had grown to 42 entries and dwarfed the
+forward-looking list it sat under. README keeps a pointer to it.
 
 **Whenever a fix in this session closes something listed in the Punch List**
 (check the list — a bug report from the operator often already has a 🪲 entry
 there, verbatim or close to it):
 1. Remove that line from its Punch List subsection.
-2. Add a line to the top of **Squashed Bugs**, prefixed with the version this
-   fix is shipping as (see [[git-workflow]]'s version-bump rule — same version
-   that goes in `__version__` and the commit subject). Phrase it as what was
-   wrong and the effect, similar length/tone to the existing entries — not a
+2. Add a `## vX.Y.Z` section at the **top of `CHANGELOG.md`**, using the version
+   this fix is shipping as (see [[git-workflow]]'s version-bump rule — same
+   version that goes in `__version__` and the commit subject). Phrase it as what
+   was wrong and the effect, similar length/tone to the existing entries — not a
    copy of the Punch List's terse one-liner, and not the full commit message.
 3. Both edits ride in the **same commit** as the fix and the version bump —
    never a follow-up commit.
