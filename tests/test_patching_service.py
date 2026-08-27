@@ -978,6 +978,69 @@ def test_install_job_logs_raw_command_output_and_poll_detail(
     assert store.get_job(job.id).install_log_path == "/var/log/x"
 
 
+def test_install_job_surfaces_cpuse_progress_as_the_output_headline(
+    store: Store,
+    creds: CredentialStore,
+    packages: PackageStore,
+    inventory: Inventory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CPUSE reports its own "Installing NN%" on every poll and it was only ever
+    going into the job log, so following an install meant expanding the row.
+    Those percentages are now the Jobs tab's Output-column headline, the same
+    mechanism the SCP/upload reporters and Spark install already used."""
+    written: list[str | None] = []
+    original = store.set_status_text
+
+    def spy(job_id: str, text: str | None) -> None:
+        written.append(text)
+        original(job_id, text)
+
+    monkeypatch.setattr(store, "set_status_text", spy)
+
+    transport = FakeTransport(
+        responses={
+            "show installer package ": [
+                "Status:           Installing 10%",
+                "Status:           Installing 10%",  # unchanged — must not rewrite
+                "Status:           Installing 90%",
+                "Status:           Installed",
+            ]
+        }
+    )
+    _assign(store, inventory, "mgmt-01")
+    registry = EnvironmentRegistry()
+    registry.add("default", HostConnector(inventory, creds, make_factory(transport)))
+    service = PatchingService(
+        registry=registry,
+        packages=packages,
+        runner=JobRunner(store),
+        vault=JobCredentialVault(),
+        store=store,
+        install_verify_attempts=1,
+        install_verify_delay=0,
+        install_stall_seconds=0,
+    )
+
+    job = service.submit_install(
+        "default", "mgmt-01", "Check_Point_R81_20_T89", confirmed=True, verify_first=False
+    )
+    _run(service)
+    assert store.get_job(job.id).status is JobStatus.SUCCEEDED
+
+    # "installing" covers the gap before CPUSE reports any percentage of its
+    # own; the percentages then replace it verbatim.
+    assert "installing" in written
+    assert "Installing 10%" in written
+    assert "Installing 90%" in written
+    # Written on change only, matching the log-on-change rule — a long install
+    # parked at one percentage must not rewrite the same value every poll.
+    assert written.count("Installing 10%") == 1
+    # And the headline describes work in progress, so it cannot outlive the job.
+    assert written[-1] is None
+    assert store.get_job(job.id).status_text is None
+
+
 def test_install_job_ignores_attempts_budget_once_percentage_progress_seen(
     store: Store, creds: CredentialStore, packages: PackageStore, inventory: Inventory
 ) -> None:

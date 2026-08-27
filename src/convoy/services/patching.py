@@ -957,12 +957,17 @@ class PatchingService:
             package_id = self._cpuse_handle(ctx, package_id, client)
             if verify_first:
                 ctx.log(f"verifying {package_id} (installer verify)")
+                ctx.set_status("verifying")
                 output = cpuse.verify(package_id)
                 if output:
                     ctx.log(f"installer verify output:\n{output}")
                 ctx.log("verify passed")
             ctx.raise_if_cancelled()  # last safe stop; install may reboot the host
             ctx.log(f"installing {package_id} — host may reboot when this completes")
+            # Covers the gap before CPUSE reports a percentage of its own: the
+            # install command itself can sit for a while, and a blank Output
+            # column there reads as nothing happening.
+            ctx.set_status("installing")
             output = cpuse.install(package_id)
             if output:
                 ctx.log(f"installer install output:\n{output}")
@@ -1025,6 +1030,7 @@ class PatchingService:
             package_id = self._cpuse_handle(ctx, package_id, client)
             ctx.raise_if_cancelled()  # last safe stop; uninstall may reboot the host
             ctx.log(f"uninstalling {package_id} — host may reboot when this completes")
+            ctx.set_status("uninstalling")
             output = cpuse.uninstall(package_id)
             if output:
                 ctx.log(f"installer uninstall output:\n{output}")
@@ -1127,11 +1133,13 @@ class PatchingService:
 
                 if match.status != last_logged_status:
                     ctx.log(f"status: {match.status}")
+                    ctx.set_status(match.status)
                     last_logged_status = match.status
                 if will_continue:
                     time.sleep(self._install_verify_delay)
             return False, last_detail
         finally:
+            ctx.set_status(None)
             if client is not None:
                 client.close()
 
@@ -1223,6 +1231,13 @@ class PatchingService:
 
                 if detail.status != last_logged_status:
                     ctx.log(f"status: {detail.status}")
+                    # Same headline mechanism the SCP/upload reporters and Spark
+                    # install use: CPUSE's own "Installing 45%" becomes the Jobs
+                    # tab's Output column, so watching an install doesn't mean
+                    # expanding the log. Set on change only, like the log line
+                    # above — a long install sitting at one percentage would
+                    # otherwise rewrite the same value every poll.
+                    ctx.set_status(detail.status)
                     last_logged_status = detail.status
                 if "%" in detail.status:
                     uncapped = True
@@ -1243,6 +1258,9 @@ class PatchingService:
                     time.sleep(self._install_verify_delay)
             return False, last_detail
         finally:
+            # The headline describes work in progress; it must not outlive the
+            # job whatever way this exits (installed, gave up, cancelled, raised).
+            ctx.set_status(None)
             if client is not None:
                 client.close()
 
