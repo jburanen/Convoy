@@ -3973,6 +3973,7 @@ document.getElementById("discover-firewalls-import").addEventListener("click", a
   for (const r of document.querySelectorAll("#discover-firewalls-table tbody tr")) {
     if (!picks.includes(r)) r.remove();
   }
+  convertNotesToRows();
   // The modal deliberately no longer closes itself on success: the credential
   // test below reports per row, and a row that fails on authentication grows
   // its own Bootstrap button. The operator closes it when done.
@@ -3981,6 +3982,41 @@ document.getElementById("discover-firewalls-import").addEventListener("click", a
     "#discover-firewalls-table tbody .disc-pick:not(:disabled)",
   );
 });
+
+// A firewall's note text and Bootstrap button live in its own row's Notes cell
+// before the import and in the full-width note row beneath it afterwards (see
+// convertNotesToRows). Everything that reads or writes them goes through here
+// so neither layout has to be special-cased at each call site.
+function discNoteEls(row) {
+  const next = row.nextElementSibling;
+  const scope = next && next.classList.contains("disc-note-row") ? next : row;
+  return {
+    note: scope.querySelector(".disc-note-text"),
+    btn: scope.querySelector(".disc-bootstrap"),
+  };
+}
+
+// After the import the table describes what was imported, and the Notes column
+// costs width the modal does not have. Drop it, and give each firewall a
+// full-width row underneath carrying the same span and button — moved, not
+// re-created, so there is exactly one of each per firewall.
+function convertNotesToRows() {
+  const table = document.getElementById("discover-firewalls-table");
+  for (const cell of table.querySelectorAll(".disc-note-col")) cell.classList.add("hidden");
+  for (const row of [...table.querySelectorAll("tbody tr")]) {
+    if (row.classList.contains("disc-note-row")) continue;
+    const noteRow = el("tpl-discovered-firewall-note-row");
+    const cell = noteRow.querySelector("td");
+    // Span the columns that are actually still visible — the credential column
+    // is itself hidden on a storage-disabled environment.
+    cell.colSpan = [...row.children].filter((c) => !c.classList.contains("hidden")).length;
+    for (const node of [...row.querySelectorAll(".disc-note-text, .disc-bootstrap")]) {
+      cell.appendChild(node);
+    }
+    row.classList.add("disc-has-note");
+    row.after(noteRow);
+  }
+}
 
 // Post-import credential check: the same POST /firewalls/{name}/state the
 // Firewalls table's Refresh link uses, run once per imported row.
@@ -3991,7 +4027,7 @@ async function testImportedFirewallCredentials(imported) {
   status.textContent = `Imported ${n} — testing credentials…`;
   let passed = 0;
   for (const { name, row, role } of imported) {
-    row.querySelector(".disc-note-text").textContent = "testing credentials…";
+    discNoteEls(row).note.textContent = "testing credentials…";
     if (await runDiscoverCredentialTest(name, role, row)) passed++;
   }
   status.textContent =
@@ -4006,9 +4042,9 @@ async function testImportedFirewallCredentials(imported) {
 // failed on authentication. Drives both the Bootstrap-all button's visibility
 // and what that button acts on.
 function rowsNeedingBootstrap() {
-  return [...document.querySelectorAll("#discover-firewalls-table tbody tr")].filter(
-    (r) => !r.querySelector(".disc-bootstrap").classList.contains("hidden"),
-  );
+  return [...document.querySelectorAll("#discover-firewalls-table tbody tr")]
+    .filter((r) => !r.classList.contains("disc-note-row")) // detail rows aren't firewalls
+    .filter((r) => !discNoteEls(r).btn.classList.contains("hidden"));
 }
 
 function updateBootstrapAllButton() {
@@ -4025,8 +4061,7 @@ function updateBootstrapAllButton() {
 // down the wrong path. Loose /auth/i match rather than a literal string —
 // paramiko's exact wording isn't a stable contract to pin one to.
 async function runDiscoverCredentialTest(name, role, row) {
-  const note = row.querySelector(".disc-note-text");
-  const btn = row.querySelector(".disc-bootstrap");
+  const { note, btn } = discNoteEls(row);
   btn.classList.add("hidden");
   const extra = await operationCredentials(name, "test credentials");
   if (extra === null) { note.textContent = "credential prompt cancelled"; return false; }
@@ -4071,7 +4106,7 @@ async function startDiscoverBootstrap(name, role, row) {
 // shared by the single-row confirm and the Bootstrap-all batch.
 function discoverBootstrapHandlers(name, role, row) {
   return {
-    setStatus: (text) => { row.querySelector(".disc-note-text").textContent = text; },
+    setStatus: (text) => { discNoteEls(row).note.textContent = text; },
     verify: () => runDiscoverCredentialTest(name, role, row),
   };
 }

@@ -885,6 +885,11 @@ button.link-btn.fw-name-link {
    from every other column's. */
 #discover-firewalls-table .disc-note-text { display: block; }
 #discover-firewalls-table .disc-bootstrap { margin-top: 0.3rem; }
+/* Post-import: a firewall's row and its note row read as one unit, so only the
+   note row carries the divider — the same pairing tr.srv-row uses in the
+   Firewalls table. */
+#discover-firewalls-table tr.disc-has-note > td { border-bottom: none; }
+#discover-firewalls-table tr.disc-note-row > td { padding-top: 0.15rem; }
 
 /* Bootstrap-all confirmation: the list of firewalls about to be pushed to. */
 .disc-bootstrap-all-list {

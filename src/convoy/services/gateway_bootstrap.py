@@ -25,6 +25,12 @@ gear 2026-08-18 before this was written: a single-target task's ``show-task``
 response carries a ``task-details`` list (one entry per target), each with
 ``statusCode`` ("succeeded" on success), ``responseError`` (empty string on
 success), and ``responseMessage`` (the script's stdout, **base64-encoded**).
+
+``task-details`` only comes back at ``details-level: full``, which
+``ManagementAPIClient.show_task`` now requests by default. Without it the
+response carries a task-level ``status: succeeded`` and nothing else usable,
+and this module correctly refused to confirm a bootstrap it had no evidence
+for — observed on an MDS 2026-08-27.
 The polling loop/status-set convention below mirrors
 services/pkg_repo_ops.py's ``add-repository-package`` polling, which uses the
 same generic Management API task mechanism.
@@ -170,7 +176,16 @@ def _decode_task_output(task: dict[str, Any]) -> tuple[bool, str]:
     the raw task attached, not a crash."""
     details = task.get("task-details")
     if not isinstance(details, list) or not details or not isinstance(details[0], dict):
-        return False, f"no usable task-details in show-task response: {task!r}"
+        # Deliberately NOT treated as success even when the task itself says
+        # "succeeded": task-details is the only evidence of the SCRIPT's exit
+        # status, and confirming on its absence is exactly the confirmed-on-no-
+        # evidence failure the security review's M4 closed elsewhere. The raw
+        # response goes to the job log rather than into this message — it is a
+        # wall of text, and this string is what the UI shows inline.
+        return False, (
+            "show-task returned no per-target task-details, so the script's own "
+            "exit status could not be confirmed (raw response in the job log)"
+        )
     detail = details[0]
     status_code = str(detail.get("statusCode") or "").strip()
     error = str(detail.get("responseError") or "").strip()
@@ -336,11 +351,13 @@ class GatewayBootstrapService:
             if status.lower() in _TASK_SUCCESS:
                 ok, message = _decode_task_output(task)
                 if not ok:
+                    ctx.log(f"raw show-task response: {task!r}", level="warning")
                     raise TransportError(f"bootstrap script reported a failure: {message}")
                 ctx.log(f"gateway response: {message}")
                 return
             if status.lower() in _TASK_FAILURE:
                 _, message = _decode_task_output(task)
+                ctx.log(f"raw show-task response: {task!r}", level="warning")
                 raise TransportError(f"bootstrap task failed: {message}")
             ctx.raise_if_cancelled()
 
