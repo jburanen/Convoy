@@ -23,7 +23,7 @@ def store(tmp_path: Path) -> Store:
 @pytest.fixture
 def creds(store: Store) -> CredentialStore:
     cs = CredentialStore(store, master_key="unit test master key")
-    cs.put_set("default", "api-set", api_key="key123", api_only=True)
+    cs.put_set("default", "api-set", api_key="key123")
     cs.put_set(
         "default", "ssh-set", ssh_username="admin", ssh_password="pw", expert_password="expert-pw"
     )
