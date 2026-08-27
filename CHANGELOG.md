@@ -9,6 +9,10 @@ Known issues and planned work live under Roadmap / Punch List in
 [README.md](README.md); a fix that closes an item there moves it into this file
 in the same commit as the fix and the version bump.
 
+## v0.78.4
+
+Switching tabs kept the page's scroll position, so going from a long tab to a short one (CPUSE to Jobs, say) landed you partway down the new tab - or past its end, staring at whitespace - instead of at the top of what you'd just opened. The panels swap in place and nothing ever touched `window.scrollY`. `selectTab` now resets the scroll on an actual tab change, reading the outgoing tab from the DOM rather than tracking it separately so the two can't drift; clicking the tab you're already on still leaves your position alone. The reset is instant rather than smooth - the content has already been swapped by then, so an animated scroll would only blur through a tab you never asked to look at - and it nudges the header's scroll state directly, because `scrollTo(0, 0)` fires no scroll event when you were already at the top and the fade strip would otherwise linger on an unscrolled tab
+
 ## v0.78.2
 
 `cpuse.install` and `cpuse.uninstall` left the Jobs tab's Output column empty for the whole run, so the only way to see how far an install had got was to expand the row and read the log - despite CPUSE reporting its own progress (`Installing 45%`) on every poll, which was already being written to that log. Those jobs now set the same Output-column headline the SCP/upload reporters and Spark install already used: `verifying`, then `installing` while the install command itself is running (which can sit for a while before CPUSE reports anything), then CPUSE's own status line verbatim once percentages start arriving. Written only when the value actually changes, matching the existing log-on-change rule - a long install parked at one percentage would otherwise rewrite the same value every poll - and cleared however the job ends, so a stale `Installing 45%` can't outlive it

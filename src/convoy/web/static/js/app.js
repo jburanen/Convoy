@@ -1359,11 +1359,24 @@ function selectTab(name) {
   // Disabled/WIP tabs can't be opened — including via a #tab- deep link.
   const target = document.querySelector(`#tabs .tab-btn[data-tab="${name}"]`);
   if (target && target.disabled) return;
+  // Panels swap in place, so the window keeps whatever scroll offset the tab
+  // you came from had — landing you partway down the new tab, or past its end.
+  // Read the outgoing tab from the DOM rather than tracking it separately so
+  // the two can't drift; only an actual change resets the scroll, so clicking
+  // the tab you're already on doesn't yank you away from what you're reading.
+  const current = document.querySelector("#tabs .tab-btn.active");
+  const changed = !current || current.dataset.tab !== name;
   for (const btn of document.querySelectorAll("#tabs .tab-btn")) {
     btn.classList.toggle("active", btn.dataset.tab === name);
   }
   for (const panel of document.querySelectorAll(".tab-panel")) {
     panel.classList.toggle("active", panel.id === "tab-" + name);
+  }
+  if (changed) {
+    // Instant, not smooth: the panel content has already been swapped, so an
+    // animated scroll would just be a blur through content you never asked for.
+    window.scrollTo(0, 0);
+    updateHeaderScrolled(); // scrollTo doesn't fire a scroll event when already at 0
   }
   tabChosen = true;
 }
