@@ -265,7 +265,9 @@ def test_show_task_returns_first_task() -> None:
             return httpx.Response(200, json={"sid": "SID-123"})
         if request.url.path.endswith("/show-task"):
             body = json.loads(request.content or b"{}")
-            assert body == {"task-id": "TASK-1"}
+            # details-level full is what makes `task-details` — the per-target
+            # script exit status — come back at all; standard omits it.
+            assert body == {"task-id": "TASK-1", "details-level": "full"}
             return httpx.Response(
                 200, json={"tasks": [{"status": "succeeded", "task-id": "TASK-1"}]}
             )

@@ -323,10 +323,19 @@ class ManagementAPIClient:
             raise TransportError(f"run-script returned no task-id: {data!r}")
         return task_id
 
-    def show_task(self, task_id: str) -> dict[str, Any]:
+    def show_task(self, task_id: str, *, details_level: str = "full") -> dict[str, Any]:
         """Poll one async task's status/progress (e.g. from
-        ``add_repository_package``)."""
-        data = self._post("show-task", {"task-id": task_id})
+        ``add_repository_package``).
+
+        ``details-level`` defaults to ``full`` because the standard level omits
+        ``task-details`` entirely — the per-target list carrying the script's
+        own exit status, which is the only evidence a run-script task actually
+        did what it was asked. Observed live 2026-08-27 on an MDS: a
+        bootstrap task came back ``status: succeeded, progress-percentage:
+        100`` with no ``task-details`` at all, so the run could not be
+        confirmed and was correctly (but confusingly) reported as a failure.
+        """
+        data = self._post("show-task", {"task-id": task_id, "details-level": details_level})
         tasks = data.get("tasks") or []
         if not tasks:
             raise TransportError(f"show-task returned no tasks for {task_id}")

@@ -427,6 +427,21 @@ def test_do_bootstrap_rejects_private_key_only_set_before_any_api_call(
     assert calls == []  # never even opened a Management API session
 
 
+def test_decode_task_output_refuses_to_confirm_without_task_details() -> None:
+    """A task-level "succeeded" is not evidence the SCRIPT succeeded — that
+    lives in task-details, and confirming without it would be the same
+    confirmed-on-no-evidence bug the security review closed elsewhere."""
+    from convoy.services.gateway_bootstrap import _decode_task_output
+
+    ok, message = _decode_task_output(
+        {"status": "succeeded", "progress-percentage": 100, "comments": "Completed"}
+    )
+    assert ok is False
+    assert "task-details" in message
+    # The raw response belongs in the job log, not inline in the UI's error.
+    assert "progress-percentage" not in message
+
+
 def test_decode_task_output_handles_unexpected_shape() -> None:
     from convoy.services.gateway_bootstrap import _decode_task_output
 

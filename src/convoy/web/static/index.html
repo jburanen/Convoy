@@ -1077,7 +1077,10 @@
       <thead>
         <tr>
           <th></th><th>Name</th><th>Address</th><th>Detected role</th>
-          <th class="disc-cred-col hidden">Credential set</th><th>Notes</th>
+          <th class="disc-cred-col hidden">Credential set</th>
+          <!-- Dropped once the import has run — the notes move to their own
+               full-width row under each firewall (app.js convertNotesToRows). -->
+          <th class="disc-note-col">Notes</th>
         </tr>
       </thead>
       <tbody><!-- tpl-discovered-firewall-row instances --></tbody>
@@ -1323,10 +1326,22 @@
          button appears only when that test failed on authentication (app.js) —
          full Gaia gets the confirm-gated Management-API push, Spark the
          display-only commands modal. -->
-    <td class="disc-note muted">
+    <td class="disc-note disc-note-col muted">
       <span class="disc-note-text"></span>
       <button type="button" class="disc-bootstrap small hidden">Bootstrap credentials</button>
     </td>
+  </tr>
+</template>
+
+<!-- Post-import note row: the Notes column is dropped after Import selected
+     (the modal has no width for it once a paramiko error or a Management API
+     response is in there) and each firewall's note becomes a full-width row
+     directly under its own fields. Same main-row/detail-row pairing the
+     Firewalls table uses. app.js moves the existing span/button in here rather
+     than rendering a second copy, so there is one of each per firewall. -->
+<template id="tpl-discovered-firewall-note-row">
+  <tr class="disc-note-row">
+    <td class="disc-note muted"></td>
   </tr>
 </template>
 
