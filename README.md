@@ -55,7 +55,7 @@ First run seeds a default environment; use the default env or manage your enviro
 
 ### Best Practice Deployment w/Basic Auth
 
-Download the compose file and example .env file and add a randomly generated master key to the .env file in order to enable credential storage. That pulls `ghcr.io/jburanen/convoy:latest` and serves the UI on **http://localhost:8080**, with a default login of `admin` / `admin` that you should change immediately. See the next section for information about enabling TLS encryption and LDAP authentication.
+Create a folder to contain the project. Then from inside that folder use these commands to download the compose file and example .env file, create and add a randomly generated master key to the .env file, set appropriate permissions and start the container. The default docker compose pulls `ghcr.io/jburanen/convoy:latest` and serves the UI on **http://localhost:8080**, with a default login of `admin` / `admin` that you should change immediately. `docker-compose.yml` if needed before bringing up the container. See the next section for information about enabling TLS encryption and LDAP authentication.
 
 ```bash
 curl -O https://raw.githubusercontent.com/jburanen/Convoy/main/docker-compose.yml
