@@ -9,6 +9,14 @@ Known issues and planned work live under Roadmap / Punch List in
 [README.md](README.md); a fix that closes an item there moves it into this file
 in the same commit as the fix and the version bump.
 
+## v1.0.1
+
+Documentation only. The best-practice install now downloads `.env.example`,
+copies it to `.env`, generates the master key into that file and locks it down,
+rather than editing the key into `docker-compose.yml` — which left the secret in
+the file an operator is most likely to re-download, and contradicted the section
+right below telling them to move it into `.env` afterwards.
+
 ## v1.0.0
 
 **First stable release.** No new subsystem since rc.2 — the version number
