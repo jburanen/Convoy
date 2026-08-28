@@ -42,12 +42,16 @@ job").
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Final
 
 from ..errors import InventoryError
+from ..reporting import get_logger
 from ..store import JobRecord, JobStatus, Store, utcnow
 from .environments import EnvironmentManager
 from .firewalls import FirewallManager
+
+logger = get_logger(__name__)
 
 JOB_ADD = "prov.add"
 JOB_EDIT = "prov.edit"
@@ -74,10 +78,18 @@ class ProvisioningJobService:
         store: Store,
         env_manager: EnvironmentManager,
         firewall_manager: FirewallManager,
+        on_host_added: Callable[[str, str], None] | None = None,
     ) -> None:
         self._store = store
         self._env_manager = env_manager
         self._firewall_manager = firewall_manager
+        # Called with (environment, host name) after a server or firewall is
+        # genuinely created — not on an edit. The web app points it at
+        # StateRefreshService, so a freshly added or discovered host is queried
+        # once instead of sitting at "Not yet checked." until someone clicks
+        # Refresh. Optional so the CLI/tests can leave it off; never allowed to
+        # fail the add itself (see _do_put).
+        self._on_host_added = on_host_added
 
     # -- submit: management servers ----------------------------------------------
 
@@ -230,6 +242,18 @@ class ProvisioningJobService:
             noun = "firewall"
         verb = "added" if job.kind == JOB_ADD else "updated"
         self._succeed(job, f"{verb} {noun} {name!r}")
+        if job.kind == JOB_ADD and self._on_host_added is not None:
+            # After the job is recorded as succeeded: this is a follow-on
+            # nicety, and a hiccup in it must never turn a completed add into
+            # a failed one.
+            try:
+                self._on_host_added(environment, name)
+            except Exception as exc:  # pragma: no cover — defensive
+                logger.warning(
+                    "post-add state refresh could not be scheduled",
+                    host=name,
+                    error=str(exc),
+                )
 
     def _do_delete(self, job: JobRecord) -> None:
         name = job.target

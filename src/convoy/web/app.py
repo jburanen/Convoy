@@ -58,6 +58,7 @@ from ..errors import (
 )
 from ..jobs import JobRunner
 from ..packages import PackageStore, check_filename
+from ..release_check import ReleaseChecker
 from ..reporting import configure_logging, get_logger, resolve_log_level
 from ..services.api_access import ApiAccessService
 from ..services.cdt_ops import CDTService
@@ -81,6 +82,7 @@ from ..services.provisioning import (
 )
 from ..services.s1c import Smart1CloudService
 from ..services.spark_patching import SparkPatchingService
+from ..services.state_refresh import StateRefreshService
 from ..store import JobEvent, JobRecord, JobStatus, PackageRecord, Store, utcnow
 from ..transport.ssh import forget_host_key, set_known_hosts_path
 from .auth import (
@@ -597,9 +599,21 @@ def create_app(
                     hint="configure LDAP auth (CONVOY_LDAP_*) to enable it",
                 )
 
-        # Purge a job's in-memory credentials the moment it reaches any terminal
-        # state (success/failure/cancel), guaranteed by the runner.
-        runner = JobRunner(store, on_job_finished=vault.discard)
+        # Two things happen the moment a job reaches any terminal state
+        # (success/failure/cancel), both guaranteed by the runner: its
+        # in-memory credentials are purged, and — for the job kinds that can
+        # have changed what is on the host — that host's detected state is
+        # refreshed in the background (services/state_refresh.py). The
+        # refresher is built further down (it needs the patching services), so
+        # it is read at call time rather than captured here.
+        state_refresh: StateRefreshService | None = None
+
+        def job_finished(job_id: str) -> None:
+            vault.discard(job_id)
+            if state_refresh is not None:
+                state_refresh.after_job(job_id)
+
+        runner = JobRunner(store, on_job_finished=job_finished)
         service = PatchingService(
             registry=registry, packages=packages, runner=runner, vault=vault, store=store
         )
@@ -629,8 +643,15 @@ def create_app(
         # No credential store dependency (no secrets involved), unlike cred_jobs —
         # always constructed. No runner: server/firewall CRUD runs synchronously
         # (services/prov_ops.py).
+        # Built here, before prov_jobs, so a newly added or discovered host can
+        # be queried straight away — the same refresher the runner hook above
+        # uses for finished jobs.
+        state_refresh = StateRefreshService(patching=service, spark=spark_service, store=store)
         prov_jobs = ProvisioningJobService(
-            store=store, env_manager=env_manager, firewall_manager=firewall_manager
+            store=store,
+            env_manager=env_manager,
+            firewall_manager=firewall_manager,
+            on_host_added=state_refresh.after_host_added,
         )
         primary_connect = PrimaryConnectService(
             registry=registry,
@@ -690,6 +711,11 @@ def create_app(
         app.state.api_access = api_access
         app.state.gateway_bootstrap = gateway_bootstrap
         app.state.pkg_repo = pkg_repo
+        # Cached, best-effort "is a newer release published?" for the footer —
+        # see release_check.py. Never called at startup: the first page load
+        # pays for it, and only if the operator hasn't turned it off.
+        app.state.release_checker = ReleaseChecker()
+        app.state.state_refresh = state_refresh
 
         interrupted = runner.recover()
         if interrupted:
@@ -952,6 +978,21 @@ def _register_routes(app: FastAPI) -> None:
             ),
             "packages": len(request.app.state.packages.list()),
             "job_archive_path": request.app.state.job_archive_path,
+        }
+
+    @app.get("/api/update")
+    def update_check(request: Request) -> dict[str, Any]:
+        """Is a newer release published on GitHub? Best-effort by design (see
+        release_check.py): unreachable, blocked, rate-limited, or turned off all
+        answer the same "nothing to show", so the footer just prints the running
+        version and nothing else."""
+        checker: ReleaseChecker = request.app.state.release_checker
+        release = checker.update_available(__version__)
+        return {
+            "current": __version__,
+            "update_available": release is not None,
+            "version": release.version if release is not None else None,
+            "url": release.url if release is not None else None,
         }
 
     # -- authentication ---------------------------------------------------------
@@ -1583,6 +1624,19 @@ def _register_routes(app: FastAPI) -> None:
             return result
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
+
+    @app.get("/api/env/{env}/state-version")
+    def state_version(env: str, request: Request) -> dict[str, Any]:
+        """Change-detection token for this environment's cached host state: the
+        newest ``checked_at`` across its servers and firewalls, or null when
+        nothing has been checked yet.
+
+        The UI polls this only in the seconds after something that triggers a
+        background refresh (a finished import/install job, a host just added —
+        see services/state_refresh.py), and reloads its tables when the value
+        moves. Cheap on purpose: one indexed MAX(), no SSH, no host contact."""
+        store: Store = request.app.state.store
+        return {"checked_at": store.latest_state_check(env)}
 
     @app.post("/api/env/{env}/servers/{name}/state")
     async def server_state(

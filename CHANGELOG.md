@@ -9,6 +9,57 @@ Known issues and planned work live under Roadmap / Punch List in
 [README.md](README.md); a fix that closes an item there moves it into this file
 in the same commit as the fix and the version bump.
 
+## v1.0.0
+
+**First stable release.** No new subsystem since rc.2 — the version number
+promotes the release-candidate series, which has been deployed from the published
+image and driven against real gear. What follows is what changed on top of rc.2.
+
+**Hosts refresh themselves when they should.** Detected state (version, JHF,
+CPUSE agent build, packages ready to install) was refreshed by the operator's
+own Refresh link and, on the way out, by a *successful* import or install. That
+left two blind spots: a host just added or discovered read "Not yet checked."
+until someone clicked Refresh, and a job that failed, timed out or was cancelled
+— exactly the case where the host is most likely to have changed under you —
+never refreshed at all, because the in-job refresh cannot run when the failure
+IS the connection. A new `services/state_refresh.py` covers both, out of band:
+one background query per host after it is added, and after any
+import/install/uninstall/transfer/push job on it, whatever the outcome. Every
+refresh is read-only, never blocks the job or the request that triggered it, and
+stays silent where there is nothing to connect with (credential storage disabled,
+or a Smart-1 Cloud management server with no SSH account). The UI notices one
+landing through a new `state-version` token rather than by polling the tables.
+
+**The footer says when a newer build is published.** It now reads
+"Build x.y.z is available" beside the running version, linked to that release's
+notes, when GitHub has a higher tagged release. Cached for hours, 5s timeout,
+every failure swallowed — an instance with no route to github.com simply shows
+the version it always did. `CONVOY_DISABLE_UPDATE_CHECK` turns the outbound call
+off entirely.
+
+**The Jobs table stays inside its panel.** A long target — a Smart-1 Cloud
+tenant's `<tenant>.maas.checkpoint.com` is 40-plus characters — widened the whole
+table until the Output column was drawn past the panel's right edge. The Target
+column now ellipses like Output (full value on hover), and the table scrolls
+inside its own box rather than over the border if the columns still do not fit.
+A Smart-1 Cloud connect job also shows its environment name there instead of the
+tenant hostname: there is exactly one tenant per environment, so the name
+identifies it just as precisely and in a fraction of the width.
+
+**Smaller UI corrections.** Editing a credential set showed its name — which
+cannot be changed, it is what identifies the set being updated — in a read-only
+text field that still looked typeable; it is plain text now. The Packages table's
+expandable "Compatibility note" row is gone: it restated what the Package Info
+column already shows. The Management Servers and Firewalls panels each gained one
+line between the package-import controls and the host table, saying that the
+controls act on whatever is selected below — which was not obvious from either
+half on its own.
+
+**Documentation.** The comments in `docker-compose.yml` and `.env.example` are
+roughly half their previous length, and `.env.example` is now grouped in the
+order a deployment needs it: core, authentication, LDAP, sessions, HTTPS,
+packages, logging.
+
 ## v1.0.0-rc.2
 
 The image now carries `CONVOY_CONFIG=/data/config.yaml` itself. rc.1 seeded a config into the data volume and then only read it if the *caller* pointed at it — which `docker-compose.yml` does, so the documented path worked, but a bare `docker run ghcr.io/jburanen/convoy` (the most natural first thing anyone tries) fell back to built-in defaults whose relative paths resolve against `WORKDIR`. That is root-owned, so the container died as uid 1001 with `PermissionError: [Errno 13] Permission denied: 'state'` while a perfectly good config.yaml sat in /data, unread. Found by smoke-testing the published rc.1 image before releasing it, which is what that step is for. The path is now one fact in the image, used by both the entrypoint that seeds it and the app that reads it; compose still sets it explicitly, where it now agrees with the image rather than rescuing it.

@@ -1064,6 +1064,21 @@ class Store:
             ).fetchall()
         return {r["host"]: _server_state_from_row(r) for r in rows}
 
+    def latest_state_check(self, environment: str) -> str | None:
+        """The newest ``checked_at`` across every cached host state in an
+        environment, as its stored ISO string, or None when nothing has been
+        checked yet. A change-detection token, not a timestamp to display: the
+        web UI polls it after a job (or an add) that triggers a background
+        refresh, so the tables reload once the fresh state actually lands —
+        see services/state_refresh.py."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT MAX(checked_at) AS newest FROM server_state WHERE environment = ?",
+                (environment,),
+            ).fetchone()
+        newest: str | None = None if row is None else row["newest"]
+        return newest
+
     def upsert_server_state(self, rec: ServerStateRow) -> None:
         with self._connect() as conn:
             conn.execute(
