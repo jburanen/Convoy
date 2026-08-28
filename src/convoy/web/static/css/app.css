@@ -385,6 +385,24 @@ tr.job-row:hover td { background: var(--badge-bg); }
   white-space: nowrap;
 }
 
+/* Target is the other cell whose content has no natural bound — a hostname
+   can run to 40-plus characters (a Smart-1 Cloud tenant's maas address), and
+   nowrap alone let one such row widen the whole table past the panel's right
+   edge. Ellipse it like Output; renderJobRow puts the full value in the
+   cell's title. */
+.job-target {
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Backstop for everything the two ellipsed columns can't absorb (a narrow
+   window, many nowrap columns): the table scrolls sideways inside its own
+   box rather than drawing outside the section's border. */
+.table-scroll {
+  overflow-x: auto;
+}
+
 /* Uniform row text: every Jobs cell (and the Status badge) renders at the Env
    column's size (0.85rem, the .muted size). Font-size only — colors unchanged. */
 #jobs-table td,
@@ -418,19 +436,6 @@ tr.job-install-log-row td { padding-top: 0; padding-bottom: 0.5rem; }
   /* pre-wrap only breaks at whitespace — CPUSE's own log lines are full of
      long, unbroken filesystem paths, which otherwise spill past the panel's
      right edge instead of wrapping. */
-  overflow-wrap: anywhere;
-}
-
-/* Packages tab: collapsed-by-default compatibility/prerequisite note row —
-   same shape as .job-install-log above, just without the max-height/scroll
-   (this is a short prose statement, not a growing log). */
-.pkg-note-summary { cursor: pointer; }
-.pkg-note {
-  margin: 0.4rem 0 0;
-  padding: 0.5rem 0.75rem;
-  background: var(--bg);
-  border-radius: 6px;
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
@@ -749,6 +754,12 @@ button.link-btn.fw-name-link {
   margin: 0.5rem 0;
 }
 #bulk-import-cloud-id, #fw-bulk-import-cloud-id { min-width: 22rem; }
+
+/* The line that ties a panel's import controls to the host table below it
+   (Management Servers and Firewalls both) — its own breathing room on either
+   side so it reads as the divider between the panel's two halves rather than
+   as a caption on one of them. */
+.table-intro { margin: 0.9rem 0 0.6rem; }
 
 /* ---- firewalls-table free-text filter ---- */
 .fw-filter-row {
@@ -1161,6 +1172,22 @@ button.link-btn.fw-name-link {
 .pw-reveal:hover { color: var(--text); filter: none; }
 .pw-reveal:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .pw-reveal svg { display: block; width: 1.05rem; height: 1.05rem; }
+
+/* A value that cannot be changed is shown as text rather than as a locked
+   input — a readOnly field still looks like something you can type into
+   (operator-reported, 2026-08-28: the credential set's Name on an edit).
+   Matches the label/value rhythm of the stacked fields around it. */
+.stacked-readout {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.9rem;
+}
+.stacked-readout.hidden { display: none; } /* out-rank the rule above, as .stacked label.hidden does */
+.stacked-readout-value {
+  padding: 0.35rem 0; /* same vertical rhythm as the inputs' own padding */
+  font-weight: 600;
+}
 
 .stacked input:not([type="checkbox"]):not([type="radio"]),
 .stacked select,

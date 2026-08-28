@@ -1,16 +1,5 @@
-# Convoy — deployment from the published image.
-#
-# This file is all an operator needs. No clone, no build:
-#
-#   curl -O https://raw.githubusercontent.com/jburanen/Convoy/main/docker-compose.yml
-#   docker compose up -d
-#
-# It pulls ghcr.io/jburanen/convoy:latest. Pin a release instead by setting
-# CONVOY_TAG (in .env or the shell) to a published tag, e.g. 1.0.0-rc.1 — worth
-# doing anywhere you care that a redeploy gets the same build back.
-#
-# To run from source instead (the dev/test path this repo itself uses), see
-# docker-compose.dev.yml and scripts/deploy.sh.
+# Set CONVOY_TAG (in .env or the shell) to pin a published release instead of
+# :latest. To run from source, see docker-compose.dev.yml and scripts/deploy.sh.
 services:
   web:
     image: ghcr.io/jburanen/convoy:${CONVOY_TAG:-latest}
@@ -18,63 +7,31 @@ services:
     ports:
       - "8080:8080"
     env_file:
-      # Runtime secrets/config, git-ignored, next to this compose file. Holds the
-      # credential-store master key (CONVOY_MASTER_KEY) and — when the web UI's
-      # LDAP authentication is enabled — the CONVOY_LDAP_* settings (see
-      # .env.example). NEVER commit .env. required:false so the stack still comes
-      # up on a host that hasn't created one yet (auth stays off, storage disabled).
+      # Master key, LDAP settings and the rest — see .env.example. Optional so 
+      # the stack still comes up on a host without one defined.
       - path: .env
         required: false
     environment:
-      # Config/inventory are read from the data volume at runtime. The image
-      # seeds config.yaml from its packaged example on first run — see
-      # docker-entrypoint.sh.
       CONVOY_CONFIG: /data/config.yaml
-      # Fallback for supplying the master key via the shell env instead of .env;
-      # a value in .env (loaded above) is used when this is empty.
+      # Used when .env doesn't set it. Master key MUST be set to enable cred store.
       CONVOY_MASTER_KEY: ${CONVOY_MASTER_KEY:-}
     volumes:
-      # A NAMED volume, not a bind mount, so `docker compose up -d` works on any
-      # host with no preparation. /data inside the image is owned by uid 1001
-      # (the account the container runs as), and Docker initializes a fresh named
-      # volume with the image's ownership — a bind-mounted host directory instead
-      # arrives owned by whoever ran compose, and the container cannot write it.
-      #
-      # To use a directory you can browse and tar instead, replace this with
-      #   - ./data:/data:rw
-      # and add `user: "${DEPLOY_UID:-1001}:${DEPLOY_GID:-1001}"` to this service,
-      # with DEPLOY_UID/DEPLOY_GID set to your own `id -u`/`id -g` in .env.
-      # Otherwise back this volume up with, e.g.:
-      #   docker run --rm -v convoy_convoy-data:/data -v "$PWD:/backup" \
-      #     busybox tar czf /backup/convoy-data.tgz -C /data .
+      # This works on any host with no preparation. The named volume can be 
+      # replaced by a bind-mounted directory instead, but this is owned by 
+      # whoever ran compose, and the container cannot write it — to use one 
+      # anyway, replace this with
+      # - ./data:/data:rw
+      # and add 
+      # `user: "${DEPLOY_UID:-1001}:${DEPLOY_GID:-1001}"` 
+      # to this service. 
       - convoy-data:/data
     restart: unless-stopped
-    # Container hardening. This service holds the credential store and can drive
-    # root-level change across a firewall fleet, so it should hold no capability
-    # it does not use — it opens outbound SSH/HTTPS and listens on one port, none
-    # of which needs a Linux capability once the port is >1024.
     cap_drop:
       - ALL
     security_opt:
-      # Blocks setuid/setcap escalation inside the container even if something
-      # in the image is (or becomes) setuid.
       - no-new-privileges:true
-    # Bounds a runaway job/upload: without these, an unbounded package upload or
-    # a fork loop takes the whole host down, not just this service.
     mem_limit: 2g
     pids_limit: 512
-    # NOT set here, deliberately:
-    #   read_only: true  — the app writes to /data (SQLite WAL, packages, the job
-    #     archive) and mgmt_cli/CDT staging expects a writable /tmp; a read-only
-    #     rootfs needs both carved out as tmpfs and has not been tested.
-    #   ports: "127.0.0.1:8080:8080" — the UI is reached from operators' browsers
-    #     over the network and there is no reverse proxy in this stack, so
-    #     binding to loopback would simply make it unreachable.
-    # No healthcheck override here — the image's own HEALTHCHECK already covers
-    # this (and follows CONVOY_SSL_CERTFILE to probe https:// when native TLS is
-    # on). A duplicate here previously went stale and always probed plain
-    # http://, so a TLS-enabled deploy showed "unhealthy" even though the app was
-    # serving fine over https.
 
 volumes:
   convoy-data:

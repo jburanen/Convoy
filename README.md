@@ -12,9 +12,11 @@ Patching is supported for:
 ✅ On-Premise Multi-Domain Management (MDM/MDSM) servers  
 ✅ Quantum Force and Spark firewalls managed by on-prem environments  
 ✅ Quantum Force and Spark firewalls managed by Smart-1 Cloud  
->tested Mgmt versions: R82.10  
->tested Force versions: R82.10  
->tested Spark versions: R81.10.XX, R82.00.XX  
+
+#### Tested Versions:  
+Management: R82.10  
+Force/Maintrain: R82.10  
+Spark/Embedded: R81.10.XX, R82.00.XX  
 
 ### NOT Supported
 By design, this tool does NOT support patching:  
@@ -26,8 +28,6 @@ By design, this tool does NOT support patching:
 This tool does not CURRENTLY support but may one day support:  
 ⏳ Maestro  
 ⏳ ElasticXL  
-
-### Tested Versions
 
 ## What it does
 
@@ -43,26 +43,26 @@ Two patching subsystems over one shared core (see
 Supporting features, all in the UI:
 
 - **Bootstrapping.** Generates the clish commands to create the tool's service account on a primary management server, then discovery the remaining management servers and firewalls.
-- **Independent environments.** Separate management estates, each with its own inventory and its own credential namespace; package repo is shared.
-- **Web UI authentication.** On by default: a local admin/admin login (change the password from the User Settings modal, or disable it with `BASIC_AUTH_DISABLE`), or LDAP/Active Directory when configured (LDAP always takes priority). See `.env.example`.
-- **Encrypted credential store.** SSH/API/Expert credential store, encrypted at rest with argon2id; the master key is supplied at startup and never persisted. Storing credentials for *any* environment additionally requires authentication to be configured (basic auth or LDAP) — without it, every environment behaves as storage-disabled, regardless of its own setting.
-- **Package store.** Upload CPUSE packages for temporary or permanent storage; upload once, distribute to many.
+- **Multiple environments.** Separate management estates, each with its own inventory and its own credential namespace; package repo is shared.
+- **Authentication and TLS.** On by default: a local admin/admin login (change the password from the Web UI), or LDAP/Active Directory when configured (LDAP always takes priority). See `.env.example` to configure LDAP or disable auth altogether or to configure optional TLS encryption.
+- **Encrypted credential store.** Optional credential store, encrypted at rest with argon2id; the master key is supplied at startup and never persisted. Storing credentials for *any* environment additionally requires authentication to be configured (basic auth or LDAP).
+- **Package store.** Upload CPUSE and Spark packages to a staging repo; upload once, distribute to many.
 - **Background jobs.** Every import/install/CDT action runs as a persisted job with a live progress log, cancellation, and restart recovery.
 
 ## 🚀 Run it (Docker Compose)
 
-First run seeds `config.yaml` into the volume, then seeds environments from it (plus any inventory files) into the database; after that the database is authoritative and environments are managed in the UI. On an empty inventory the UI opens on the **Provisioning** tab.
+First run seeds a default environment; use the default env or manage your environments using the Env picker.
 
 ### Basic Testing
 
-Grab the compose file and start it in the most basic form without credential storage and using built-in single-user authentication:
+Download the compose file and start it in the most basic form without credential storage and using built-in single-user authentication:
 
 ```bash
 curl -O https://raw.githubusercontent.com/jburanen/Convoy/main/docker-compose.yml
 docker compose up -d
 ```
 
-That pulls `ghcr.io/jburanen/convoy:latest` and serves the UI on **http://localhost:8080**, with a default login of `admin` / `admin` that you should change immediately. Application state lives in a Docker named volume (`convoy-data`) — the compose file's comments cover pinning a release with `CONVOY_TAG`, using a bind mount instead, and backing the volume up.
+That pulls `ghcr.io/jburanen/convoy:latest` and serves the UI on **http://localhost:8080**, with a default login of `admin` / `admin` that you should change immediately.
 
 ### Production Capable
 
@@ -74,7 +74,7 @@ sed -i "s|CONVOY_MASTER_KEY: .*|CONVOY_MASTER_KEY: \"$(openssl rand -base64 48 |
 docker compose up -d
 ```
 
-> **Back that key up somewhere else, now.** It is the only thing that can decrypt the credential store — lose it and every stored credential is unrecoverable, and no amount of access to the volume gets them back. It also means this `docker-compose.yml` is now a secret: `chmod 600` it, keep it out of version control, and do **not** re-run the `curl` above — it would overwrite the file, taking the key with it. To keep the key out of a file you might re-download, put `CONVOY_MASTER_KEY=…` in a `.env` beside the compose file instead; it is read from there too.
+**Back that key up somewhere else, now.** It is the only thing that can decrypt the credential store — lose it and every stored credential is unrecoverable. It also means this `docker-compose.yml` is now a secret: `chmod 600` it and do **not** re-run the `curl` above — it would overwrite the file, taking the key with it.  
 
 ### Multi-user and Best-Practice Secret Storage
 
@@ -105,6 +105,8 @@ These gates define the major version releases - the milestones may change in the
 ### Milestones to reach v2
 
 ◻️ CDT deployment to Gaia/Force gateways  
+◻️ Export report of current patching state of full env state  
+◻️ Export report of job history (with filtering)  
 
 ### Roadmap / Punch List
 🪲 Functional bugfix ⏫ v2 Release gate 🤞 Non-blocking nice-to-have ✨ Cosmetic only  
@@ -114,6 +116,9 @@ These gates define the major version releases - the milestones may change in the
 ✨ Add logic to display a warning on mobile devices that the UI of this tool does not scale down well (by design) and you should use it on a larger display.   
 🤞 RADIUS auth option  
 🤞 Timed/scheduled install actions  
+✨ Standarize firewall nomenclature (discard Gateway terminology)  
+✨ Standarize all user questions or confirmations to the modal UI and avoid using browser UI elements  
+🤞 Separate AD group auth per environment?  
 
 #### Provisioning
 All clear here!  
@@ -126,6 +131,8 @@ All clear here!
 🤞 Some kind of sledgehammer to swing to release config/job lock from management server and firewalls if a job gets stranded/stuck  
 ✨ Separate firewalls into two panels? Spark and non-Spark  
 🤞 Leverage the gateway family identifier built into Spark filenames to limit choices  
+🤞 Change "test creds" to "test connectivity" and also test ping, suggest to allow ping if it fails  
+✨ Make test connectivity/creds hidded after successful test  
 
 #### CDT Patching
 Plan coming soon.  
@@ -135,7 +142,7 @@ Plan coming soon.
 🤞 Add a download or a copy button for the install log  
 🤞 Allow import jobs to be cancelled during file copy stage - clean up partial file on target  
 ✨ Affirm in a push_to_repo job output that the temp storage was cleaned up  
-✨ On jobs with error output, never let the error output spill outside the table boundary - direct the user to view details in the output box or something like that  
+✨ Improve refresh behavior to more promptly display running jobs after they start  
 
 Shipped fixes are documented in [CHANGELOG.md](CHANGELOG.md) — an item closed here moves into that file under the version that resolves it.  
 

@@ -88,8 +88,12 @@ const PANEL_HELP = {
       "all</strong> above) to query live state over SSH.",
     full:
       "CDT does not patch management servers. The detected state shown below (last row " +
-      "per server) stays cached until refreshed. Assign or change a server's credential " +
-      "set from the <strong>Edit</strong> button on the Provisioning tab.",
+      "per server) stays cached until refreshed — automatically when a server is first " +
+      "added, and after any import, install or uninstall job on it (whether or not the job " +
+      "succeeded), or on demand with <strong>Refresh</strong>. An automatic refresh needs a " +
+      "stored credential set; environments with credential storage disabled always refresh " +
+      "by hand. Assign or change a server's credential set from the <strong>Edit</strong> " +
+      "button on the Provisioning tab.",
   },
   firewalls: {
     title: "Firewalls",
@@ -102,7 +106,11 @@ const PANEL_HELP = {
       "target=\"_blank\" rel=\"noopener\">sk170314</a>. For large numbers of gateways, use the " +
       "<strong>Gateways</strong> tab (CDT bulk fleet push, planned for version 2). Add " +
       "firewalls manually or discover them from a Primary SMS/MDS. The detected state shown " +
-      "below (last row per firewall) stays cached until refreshed.",
+      "below (last row per firewall) stays cached until refreshed — automatically when a " +
+      "firewall is first added or imported from a discovery scan, and after any package " +
+      "transfer, import or install job on it (whether or not the job succeeded), or on " +
+      "demand with <strong>Refresh</strong>. An automatic refresh needs a stored credential " +
+      "set; environments with credential storage disabled always refresh by hand.",
   },
   cdt: {
     title: "Gateway deployment (CDT)",

@@ -10,8 +10,10 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from convoy import __version__ as convoy_version
 from convoy.config import Config, EnvironmentDef, Paths
 from convoy.credentials import MASTER_KEY_ENV
+from convoy.release_check import ReleaseChecker
 from convoy.store import JobRecord, JobStatus
 from convoy.web import app as web_app
 from convoy.web.app import create_app
@@ -234,6 +236,39 @@ def test_status_reports_unlocked_and_counts(client: TestClient) -> None:
     assert body["management_servers"] == 1  # fw-01 is a gateway, not counted
     assert body["environments"] == ["default"]
     assert body["job_archive_path"]  # Jobs tab points the operator here
+
+
+def test_update_check_reports_a_newer_published_release(client: TestClient) -> None:
+    # The real checker would reach out to GitHub; swap in one with a canned
+    # payload so the test stays offline (see test_release_check.py for the
+    # checker's own behaviour).
+    client.app.state.release_checker = ReleaseChecker(  # type: ignore[attr-defined]
+        fetch=lambda: [{"tag_name": "v99.0.0", "html_url": "https://example.invalid/rel"}],
+        environ={},
+    )
+    body = client.get("/api/update").json()
+    assert body["update_available"] is True
+    assert body["version"] == "99.0.0"
+    assert body["url"] == "https://example.invalid/rel"
+    assert body["current"] == convoy_version
+
+
+def test_update_check_is_silent_when_the_running_build_is_current(client: TestClient) -> None:
+    client.app.state.release_checker = ReleaseChecker(  # type: ignore[attr-defined]
+        fetch=lambda: [{"tag_name": "v0.0.1"}], environ={}
+    )
+    body = client.get("/api/update").json()
+    assert body["update_available"] is False
+    assert body["version"] is None and body["url"] is None
+
+
+def test_update_check_survives_an_unreachable_github(client: TestClient) -> None:
+    def boom() -> list[object]:
+        raise RuntimeError("connection refused")
+
+    client.app.state.release_checker = ReleaseChecker(fetch=boom, environ={})  # type: ignore[attr-defined]
+    body = client.get("/api/update").json()
+    assert body["update_available"] is False
 
 
 def test_environments_endpoint(client: TestClient) -> None:
@@ -747,6 +782,20 @@ def test_servers_lists_management_only_with_assigned_set(client: TestClient) -> 
     _add_ssh_credential(client)
     servers = client.get("/api/env/default/servers").json()
     assert servers[0]["credential_set"] == "primary"
+
+
+def test_state_version_tracks_the_newest_cached_check(client: TestClient) -> None:
+    # The token the UI polls while waiting for a background refresh to land
+    # (services/state_refresh.py) — null until any host has been checked.
+    assert client.get("/api/env/default/state-version").json() == {"checked_at": None}
+    _add_ssh_credential(client)
+    state = client.post("/api/env/default/servers/mgmt-01/state")
+    assert state.status_code == 200, state.text
+    token = client.get("/api/env/default/state-version").json()["checked_at"]
+    assert token is not None
+    # Same value as the row's own checked_at — it IS that timestamp, so a later
+    # refresh of any host in the environment moves it.
+    assert token.startswith(state.json()["checked_at"][:19])
 
 
 def test_server_state_detects_live_packages(client: TestClient) -> None:

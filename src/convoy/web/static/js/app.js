@@ -951,6 +951,11 @@ document.getElementById("server-form").addEventListener("submit", async (ev) => 
       return;
     }
     closeServerModal();
+    // A brand-new server has never been queried — the server kicks off one
+    // background refresh for it (services/state_refresh.py); this is what
+    // notices it landing and redraws the row with real state instead of
+    // "Not yet checked." An edit changes nothing on the host, so no watch.
+    if (job.kind === "prov.add") await watchForStateRefresh();
     await Promise.all([loadJobs(), loadServers(), refreshStatus()]);
   } catch (e) { toast("Save failed: " + e.message); }
 });
@@ -1541,6 +1546,7 @@ document.getElementById("discover-import").addEventListener("click", async () =>
       else failed.push(`${name}: ${job.error || "unknown error"}`);
     } catch (e) { failed.push(`${name}: ${e.message}`); }
   }
+  if (ok) await watchForStateRefresh(); // each import is queried once — see saveServer
   await Promise.all([loadJobs(), loadServers(), refreshStatus()]);
   if (failed.length) {
     toast(`Imported ${ok}. Failed: ${failed.join("; ")}`);
@@ -1693,6 +1699,25 @@ async function refreshStatus() {
     }
   } catch (e) {
     addChip(box, "API unreachable: " + e.message, "warn");
+  }
+}
+
+// Footer: "Build x.y.z is available", linked to that release's notes, when
+// GitHub has a newer tagged release than the running version. The server does
+// the (cached, best-effort) check — see release_check.py — and answers
+// update_available:false for offline/blocked/rate-limited/disabled alike, so
+// there is nothing to distinguish here: no notice is the normal state.
+async function refreshUpdateNotice() {
+  const box = document.getElementById("footer-update");
+  try {
+    const info = await api("/api/update");
+    if (!info.update_available || !info.url) { box.classList.add("hidden"); return; }
+    const link = document.getElementById("footer-update-link");
+    link.href = info.url;
+    link.textContent = `Build ${info.version} is available`;
+    box.classList.remove("hidden");
+  } catch {
+    box.classList.add("hidden"); // same as "no update" — never a visible error
   }
 }
 
@@ -3887,6 +3912,7 @@ document.getElementById("firewall-form").addEventListener("submit", async (ev) =
       return;
     }
     closeFirewallModal();
+    if (job.kind === "prov.add") await watchForStateRefresh(); // newly added — see saveServer
     await Promise.all([loadJobs(), loadFirewalls()]);
     if (pendingSparkBootstrap) {
       pendingSparkBootstrap = false;
@@ -4192,6 +4218,7 @@ document.getElementById("discover-firewalls-import").addEventListener("click", a
       r.querySelector(".disc-note-text").textContent = "import failed: " + e.message;
     }
   }
+  if (ok) await watchForStateRefresh(); // each imported firewall is queried once
   await Promise.all([loadJobs(), loadFirewalls()]);
   if (failed.length) toast(`Imported ${ok}. Failed: ${failed.join("; ")}`);
   // The table now represents the import, not the scan: drop every row that
@@ -4728,8 +4755,6 @@ async function loadPackages() {
     applyPushProgress(row, pkg.filename); // in case a push-to-repo job is already in flight
     tbody.appendChild(row);
     tbody.appendChild(sha1Row);
-    const noteRow = buildPackageNoteRow(pkg);
-    if (noteRow) tbody.appendChild(noteRow);
   }
   await populateCdtSelectors(); // keep the CDT dropdowns in sync with packages/servers
   // Also keep the CPUSE/Firewalls panels' own bulk-import pickers in sync —
@@ -4738,18 +4763,6 @@ async function loadPackages() {
   // switching tabs alone doesn't re-fetch anything (see selectTab()).
   populatePackageSelect(document.getElementById("bulk-import-package"), packages);
   populatePackageSelect(document.getElementById("fw-bulk-import-package"), packages);
-}
-
-// Collapsed detail row for the package's compatibility/prerequisite note
-// (hfconfig.extract_package_metadata's conditions_set.json read) — same
-// presence-gated pattern as syncInstallLogRow on the Jobs tab, simplified
-// since loadPackages() rebuilds the whole table every call (no existing row
-// to find/update): just skip the row entirely when there's no note.
-function buildPackageNoteRow(pkg) {
-  if (!pkg.compatibility_note) return null;
-  const row = el("tpl-package-note-row");
-  row.querySelector(".pkg-note").textContent = pkg.compatibility_note;
-  return row;
 }
 
 // Shared upload path for the form and drag & drop. The multipart body itself
@@ -5045,10 +5058,20 @@ function openCredAddModal() {
   document.getElementById("cred-add-title").textContent = "Add credential set";
   document.getElementById("cred-add-hint").classList.remove("hidden");
   document.getElementById("cred-edit-hint").classList.add("hidden");
-  document.getElementById("cs-name").readOnly = false;
+  setCredNameEditable(true);
   updateCredFormApiOnlyVisibility();
   document.getElementById("cred-add-modal").classList.remove("hidden");
   document.getElementById("cs-name").focus();
+}
+// Add takes a typed name; Edit cannot change it, so it shows the stored name
+// as text (#cs-name-static) instead of a field that looks typeable but isn't
+// (operator-reported, 2026-08-28). The input itself is only hidden, never
+// emptied — it is still what the submit handler reads the name from.
+function setCredNameEditable(editable) {
+  const input = document.getElementById("cs-name");
+  input.readOnly = !editable;
+  document.getElementById("cs-name-label").classList.toggle("hidden", !editable);
+  document.getElementById("cs-name-static").classList.toggle("hidden", editable);
 }
 // Edit an existing set: prefill name (locked) + SSH username; blank secret fields
 // are kept. Handy for pasting the API key into a bootstrapped entry afterwards.
@@ -5064,9 +5087,10 @@ function openCredEditModal(set) {
   editHint.textContent =
     `Editing "${set.name}". Leave a secret field blank to keep its current value.`;
   editHint.classList.remove("hidden");
-  const nameInput = document.getElementById("cs-name");
-  nameInput.value = set.name;
-  nameInput.readOnly = true; // name identifies the set being updated
+  // Set the input's value before hiding it — it stays the submitted name.
+  document.getElementById("cs-name").value = set.name;
+  document.getElementById("cs-name-static-value").textContent = set.name;
+  setCredNameEditable(false); // name identifies the set being updated
   document.getElementById("cs-ssh-user").value = set.ssh_username ?? "";
   updateCredFormApiOnlyVisibility();
   document.getElementById("cred-add-modal").classList.remove("hidden");
@@ -5077,7 +5101,7 @@ function closeCredAddModal() {
   const form = document.getElementById("credential-form");
   form.reset(); // never leave secrets in the DOM
   resetPasswordReveals(form); // ...nor a revealed field waiting for the next open
-  document.getElementById("cs-name").readOnly = false;
+  setCredNameEditable(true); // next open starts as Add unless it says otherwise
   credEditMode = false;
 }
 document.getElementById("cred-add-btn").addEventListener("click", openCredAddModal);
@@ -5089,12 +5113,19 @@ onBackdropClick("cred-add-modal", () => closeCredAddModal()); // backdrop click 
 
 const openJobLogs = new Set(); // job ids whose progress log is expanded
 
-// Last-seen status per job id, so pollJobs() can notice an import job
-// finishing and reload the Management tab (see pollJobs()) — otherwise the
-// server's newly-cached "refreshed …" timestamp and install picker only
-// show up after a manual reload/tab switch, since nothing else re-fetches
-// #servers-table on a timer.
-const IMPORT_JOB_KINDS = ["cpuse.import", "cpuse.import_cloud"];
+// Last-seen status per job id, so pollJobs() can notice one of these jobs
+// finishing and reload the Management/Firewalls tables (see pollJobs()) —
+// otherwise the server's newly-cached "refreshed …" timestamp and install
+// picker only show up after a manual reload/tab switch, since nothing else
+// re-fetches #servers-table on a timer.
+// Every kind here also triggers a background state refresh on the server, for
+// ANY terminal status — see services/state_refresh.py and
+// watchForStateRefresh() below, which is what picks that up once it lands.
+// Keep in step with REFRESH_AFTER_JOB_KINDS there.
+const STATE_REFRESH_JOB_KINDS = [
+  "cpuse.import", "cpuse.import_cloud", "cpuse.install", "cpuse.uninstall",
+  "spark.scp", "spark.install", "pkgs.push_to_repo", "prov.connect_primary",
+];
 // pkgs.* (services/pkgs_ops.py) executes immediately, so its own call sites
 // already reload the Packages table directly — this only exists as a
 // fallback for another tab/session polling in the narrow window between a
@@ -5177,8 +5208,22 @@ function renderJobRow(row, job) {
   // the Env column always shows the actual environment name for them
   // (previously cred.* showed a synthetic "Credentials" label here instead;
   // operator-directed, 2026-07-23 — the real environment is more useful).
-  row.querySelector(".job-target").textContent =
-    isPkgs && !isPkgsWithHostTarget ? "" : (job.target ?? "");
+  // A Smart-1 Cloud connect job's target is the tenant's maas hostname
+  // (services/s1c.py) — a 40-plus-character string that dominated the table's
+  // width. There is exactly one tenant per Smart-1 Cloud environment, so the
+  // environment name names it just as precisely; the hostname stays one hover
+  // away in the cell's title (operator-directed, 2026-08-28).
+  const isS1cConnect = job.kind === "prov.connect_s1c";
+  const targetCell = row.querySelector(".job-target");
+  targetCell.textContent = isS1cConnect
+    ? (job.environment ?? job.target ?? "")
+    : isPkgs && !isPkgsWithHostTarget
+      ? ""
+      : (job.target ?? "");
+  // Full value on hover — the column ellipses long targets (see .job-target
+  // in app.css), and for a Smart-1 Cloud row this is the tenant hostname the
+  // cell no longer prints.
+  targetCell.title = isPkgs && !isPkgsWithHostTarget ? "" : (job.target ?? "");
   row.querySelector(".job-env").textContent = isPkgs ? "Packages" : (job.environment ?? "");
   row.querySelector(".job-user").textContent = job.username ?? "";
   const badge = row.querySelector(".job-status .badge");
@@ -5545,6 +5590,53 @@ async function refreshJobLogRow(jobId) {
   if (wasAtBottom) pre.scrollTop = pre.scrollHeight;
 }
 
+// The server refreshes a host's detected state out-of-band — after any job
+// that can have changed it, whatever the outcome, and after a host is added or
+// discovered (services/state_refresh.py). That SSH round trip lands seconds
+// after the thing that triggered it, so the tables need a way to notice:
+// /api/env/<env>/state-version is a MAX(checked_at) token that moves when a
+// refresh lands. It is polled only inside a bounded window after something
+// that triggers one, never continuously.
+const STATE_REFRESH_WATCH_MS = 90000; // covers a slow SSH connect/timeout
+let stateRefreshWatchUntil = 0;
+let stateRefreshWatchEnv = null;
+let stateRefreshBaseline = null; // the token as it stood when the watch began
+
+async function stateVersion() {
+  const body = await api(envUrl("/state-version"));
+  return body.checked_at ?? null;
+}
+
+// Start (or restart) the watch. Callers that also reload the tables right away
+// should do so — this covers the refresh that hasn't happened yet, not one
+// that already has.
+async function watchForStateRefresh() {
+  if (!currentEnv) return;
+  try {
+    stateRefreshBaseline = await stateVersion();
+  } catch {
+    stateRefreshBaseline = null; // any later value then reads as "landed"
+  }
+  stateRefreshWatchEnv = currentEnv;
+  stateRefreshWatchUntil = Date.now() + STATE_REFRESH_WATCH_MS;
+}
+
+// One poll tick of that watch: true once fresh state has landed (and then the
+// watch stops until something starts a new one).
+async function stateRefreshLanded() {
+  if (Date.now() > stateRefreshWatchUntil) return false;
+  if (stateRefreshWatchEnv !== currentEnv) { stateRefreshWatchUntil = 0; return false; }
+  let token;
+  try {
+    token = await stateVersion();
+  } catch {
+    return false; // transient — the next tick retries, within the window
+  }
+  if (token === stateRefreshBaseline) return false;
+  stateRefreshWatchUntil = 0;
+  return true;
+}
+
 /* Poll while any job is active so statuses and logs stay live. */
 async function pollJobs() {
   try {
@@ -5556,6 +5648,7 @@ async function pollJobs() {
     // one finishes so the operator sees it without a manual reload. Same idea
     // for pkgs.* jobs and the Packages tab.
     let reloadServers = false;
+    let watchState = false;
     let reloadPackages = false;
     let reloadCredentials = false;
     let reloadProv = false;
@@ -5563,7 +5656,13 @@ async function pollJobs() {
       const prev = lastJobStatus.get(job.id);
       const justFinished =
         (prev === "pending" || prev === "running") && TERMINAL_JOB_STATUSES.includes(job.status);
-      if (justFinished && IMPORT_JOB_KINDS.includes(job.kind)) reloadServers = true;
+      if (justFinished && STATE_REFRESH_JOB_KINDS.includes(job.kind)) {
+        // Reload now (the in-job refresh on the success path may already have
+        // landed) AND start watching, since the out-of-band one — the only
+        // refresh a failed/cancelled job gets — is still seconds away.
+        reloadServers = true;
+        watchState = true;
+      }
       if (justFinished && PKGS_JOB_KINDS.includes(job.kind)) reloadPackages = true;
       if (justFinished && CRED_JOB_KINDS.includes(job.kind)) reloadCredentials = true;
       if (justFinished && PROV_JOB_KINDS.includes(job.kind)) reloadProv = true;
@@ -5573,6 +5672,7 @@ async function pollJobs() {
       }
       lastJobStatus.set(job.id, job.status);
     }
+    if (watchState) await watchForStateRefresh();
     const currentIds = new Set(jobs.map((j) => j.id));
     for (const id of lastJobStatus.keys()) if (!currentIds.has(id)) lastJobStatus.delete(id);
 
@@ -5587,7 +5687,9 @@ async function pollJobs() {
     // rows are blocked (see markRowIfJobActive) — not just import jobs — so
     // this is checked independently of reloadServers above.
     const targetsChanged = await refreshActiveJobTargets();
-    if (reloadServers || targetsChanged) await loadServers();
+    // loadServers() reloads the firewalls table at its end too, so one call
+    // covers both tables whichever kind of host was refreshed.
+    if (reloadServers || targetsChanged || (await stateRefreshLanded())) await loadServers();
     if (reloadPackages) await loadPackages();
     // A credential set's name/default status can show up on the servers/
     // firewalls tables too (assigned-set column), not just the Credentials
@@ -5614,6 +5716,9 @@ async function pollJobs() {
   await initAuth(); // establish session state (logout control, idle timer) first
   const envs = await loadEnvironments(); // must resolve currentEnv before env-scoped loads
   await refreshStatus();
+  // Deliberately not awaited: the release check can reach out to GitHub, and
+  // nothing on the page depends on its answer (see refreshUpdateNotice).
+  void refreshUpdateNotice();
   await Promise.all([loadServers(), loadPackages(), loadCredentialSets(), loadJobs()]);
   updateProvisionCollapse();
   pollJobs();

@@ -51,6 +51,94 @@ def _credset(store: Store, name: str = "primary", *, is_default: bool = False) -
     )
 
 
+# -- the post-add hook (a new host gets queried once — see state_refresh.py) -----
+
+
+def _spy_service(
+    store: Store,
+    env_manager: EnvironmentManager,
+    firewall_manager: FirewallManager,
+    seen: list[tuple[str, str]],
+) -> ProvisioningJobService:
+    return ProvisioningJobService(
+        store=store,
+        env_manager=env_manager,
+        firewall_manager=firewall_manager,
+        on_host_added=lambda environment, name: seen.append((environment, name)),
+    )
+
+
+def test_adding_a_host_notifies_the_add_hook_but_editing_does_not(
+    store: Store, env_manager: EnvironmentManager, firewall_manager: FirewallManager
+) -> None:
+    seen: list[tuple[str, str]] = []
+    service = _spy_service(store, env_manager, firewall_manager, seen)
+    for _ in range(2):  # the second call is an edit — same name
+        service.submit_put_server(
+            ENV,
+            name="mgmt-01",
+            address="192.0.2.10",
+            role="primary_sms",
+            ssh_user="admin",
+            ssh_port=22,
+            notes=None,
+        )
+    service.submit_put_firewall(
+        ENV,
+        name="fw-01",
+        address="192.0.2.20",
+        role="gateway",
+        ssh_user="admin",
+        ssh_port=22,
+        notes=None,
+    )
+    service.submit_delete_firewall(ENV, "fw-01")
+    assert seen == [(ENV, "mgmt-01"), (ENV, "fw-01")]
+
+
+def test_a_failed_add_never_notifies_the_hook(
+    store: Store, env_manager: EnvironmentManager, firewall_manager: FirewallManager
+) -> None:
+    seen: list[tuple[str, str]] = []
+    service = _spy_service(store, env_manager, firewall_manager, seen)
+    job = service.submit_put_server(
+        ENV,
+        name="mgmt-01",
+        address="192.0.2.10",
+        role="not-a-role",  # fails inside _do_put
+        ssh_user="admin",
+        ssh_port=22,
+        notes=None,
+    )
+    assert job.status.value == "failed"
+    assert seen == []
+
+
+def test_a_raising_hook_never_fails_the_add(
+    store: Store, env_manager: EnvironmentManager, firewall_manager: FirewallManager
+) -> None:
+    def boom(environment: str, name: str) -> None:
+        raise RuntimeError("no thread available")
+
+    service = ProvisioningJobService(
+        store=store,
+        env_manager=env_manager,
+        firewall_manager=firewall_manager,
+        on_host_added=boom,
+    )
+    job = service.submit_put_server(
+        ENV,
+        name="mgmt-01",
+        address="192.0.2.10",
+        role="primary_sms",
+        ssh_user="admin",
+        ssh_port=22,
+        notes=None,
+    )
+    assert job.status.value == "succeeded"
+    assert [s.name for s in env_manager.list_servers(ENV)] == ["mgmt-01"]
+
+
 # -- servers: add / edit ---------------------------------------------------------
 
 
