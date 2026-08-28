@@ -64,21 +64,24 @@ docker compose up -d
 
 That pulls `ghcr.io/jburanen/convoy:latest` and serves the UI on **http://localhost:8080**, with a default login of `admin` / `admin` that you should change immediately.
 
-### Production Capable
+### Best Practice Deployment w/Basic Auth
 
-Modify the compose file to include a randomly generated master key in order to enable credential storage, still using the basic single-user auth:
+Download the compose file and example .env file and add a randomly generated master key to the .env file in order to enable credential storage. This deployment will still use basic single-user auth over unencrypted http on port 8080. See the next section for information about enabling TLS encryption and LDAP authentication.
 
 ```bash
 curl -O https://raw.githubusercontent.com/jburanen/Convoy/main/docker-compose.yml
-sed -i "s|CONVOY_MASTER_KEY: .*|CONVOY_MASTER_KEY: \"$(openssl rand -base64 48 | tr -d '[:space:]')\"|" docker-compose.yml
+curl -O https://raw.githubusercontent.com/jburanen/Convoy/main/.env.example
+cp .env.example .env
+sed -i "s|^# CONVOY_MASTER_KEY=.*|CONVOY_MASTER_KEY=$(openssl rand -base64 48 | tr -d '[:space:]')|" .env
+chmod 600 .env
 docker compose up -d
 ```
 
-**Back that key up somewhere else, now.** It is the only thing that can decrypt the credential store — lose it and every stored credential is unrecoverable. It also means this `docker-compose.yml` is now a secret: `chmod 600` it and do **not** re-run the `curl` above — it would overwrite the file, taking the key with it.  
+**Back that key up somewhere else, now.** It is the only thing that can decrypt the credential store — lose it and every stored credential is unrecoverable. `.env` now holds it, so treat that file as a secret (the `chmod` above is why it is there) and do **not** re-run these commands — the `cp` would overwrite `.env`, taking the key with it. Every other setting stays commented out in `.env` at its default; uncomment what you need.  
 
-### Multi-user and Best-Practice Secret Storage
+### Configuring LDAP Auth and TLS Encryption
 
-Store your `CONVOY_MASTER_KEY` in the `.env` file next to `docker-compose.yml` instead of the compose file, and add **`CONVOY_LDAP_*`** settings (see [.env.example](.env.example) for the full list of vars) to authenticate against your directory instead of the single built-in account. Note that every member of `CONVOY_LDAP_REQUIRED_GROUP` gets full destructive authority over every environment — there are no roles — so scope that group accordingly.
+Your `CONVOY_MASTER_KEY` already lives in `.env` from the step above; add **`CONVOY_LDAP_*`** settings (see [.env.example](.env.example) for the full list of vars) to authenticate against your directory instead of the single built-in account. Note that every member of `CONVOY_LDAP_REQUIRED_GROUP` gets full destructive authority over every environment — there are no roles — so scope that group accordingly.
 
 > **FOR DEVELOPMENT DEPLOYMENTS**  
 > To run from a checkout instead, `./scripts/deploy.sh` builds the image from source via `docker-compose.dev.yml` (bind-mounting `./data`), sets `DEPLOY_UID`/`DEPLOY_GID` for you, then pulls, rebuilds and health-checks. `./scripts/deploy.sh --reset` (dev only) wipes `./data` and `.env` first — every environment, server, firewall, credential, package, and job history entry, plus every runtime setting back to its built-in default — then deploys clean. Prompts for confirmation unless you also pass `-y`/`--yes`.
@@ -127,6 +130,7 @@ All clear here!
 🤞 If disk space check fails, parse for large folders, suggest things to clean  
 
 #### Manual Patching (CPUSE)
+⏫ During firewall discovery, collect all IPs from object topology and offer each as an option for the address, or manually entered  
 🤞 Add deployment agent upgrade option  
 🤞 Some kind of sledgehammer to swing to release config/job lock from management server and firewalls if a job gets stranded/stuck  
 ✨ Separate firewalls into two panels? Spark and non-Spark  
