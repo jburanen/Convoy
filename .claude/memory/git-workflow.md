@@ -61,3 +61,16 @@ version is user-visible (login + main footer, `/health`, `/api/status`). Patch b
 for fixes/UI tweaks, minor for feature batches; the commit subject convention is
 `vX.Y.Z: <summary>`. Stated 2026-07-21 after a batch shipped without a bump.
 **Why:** the running/deployed version must identify exactly what's live.
+
+### Exception: a docs-only batch does NOT bump
+No version bump — and no CHANGELOG section — when a batch changes nothing that
+ships in the image: README, CHANGELOG prose, `.env.example`, compose comments,
+`.claude/memory/`, workflow/CI comments. The version identifies what is *running*,
+and a docs edit changes nothing about that; bumping for one only invents a version
+that no release will ever carry. Use a plain descriptive commit subject (no
+`vX.Y.Z:` prefix) for those. Operator-directed 2026-08-28, after a README-only
+commit was shipped as v1.0.1 minutes after the v1.0.0 release, by applying the
+bump-every-batch rule literally.
+
+Any code, test, or dependency change in the batch means it is not docs-only —
+bump as normal, even if the code change is small next to the docs.
