@@ -53,20 +53,9 @@ Supporting features, all in the UI:
 
 First run seeds a default environment; use the default env or manage your environments using the Env picker.
 
-### Basic Testing
-
-Download the compose file and start it in the most basic form without credential storage and using built-in single-user authentication:
-
-```bash
-curl -O https://raw.githubusercontent.com/jburanen/Convoy/main/docker-compose.yml
-docker compose up -d
-```
-
-That pulls `ghcr.io/jburanen/convoy:latest` and serves the UI on **http://localhost:8080**, with a default login of `admin` / `admin` that you should change immediately.
-
 ### Best Practice Deployment w/Basic Auth
 
-Download the compose file and example .env file and add a randomly generated master key to the .env file in order to enable credential storage. This deployment will still use basic single-user auth over unencrypted http on port 8080. See the next section for information about enabling TLS encryption and LDAP authentication.
+Download the compose file and example .env file and add a randomly generated master key to the .env file in order to enable credential storage. That pulls `ghcr.io/jburanen/convoy:latest` and serves the UI on **http://localhost:8080**, with a default login of `admin` / `admin` that you should change immediately. See the next section for information about enabling TLS encryption and LDAP authentication.
 
 ```bash
 curl -O https://raw.githubusercontent.com/jburanen/Convoy/main/docker-compose.yml
