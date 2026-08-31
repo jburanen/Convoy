@@ -136,6 +136,7 @@ Plan coming soon.
 🤞 Allow import jobs to be cancelled during file copy stage - clean up partial file on target  
 ✨ Affirm in a push_to_repo job output that the temp storage was cleaned up  
 ✨ Improve refresh behavior to more promptly display running jobs after they start  
+✨ Prune/mask Spark job output to only relevant lines  
 
 Shipped fixes are documented in [CHANGELOG.md](CHANGELOG.md) — an item closed here moves into that file under the version that resolves it.  
 
