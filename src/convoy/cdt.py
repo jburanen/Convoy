@@ -1,6 +1,6 @@
 """CDT wrapper — drives Check Point's Central Deployment Tool on a management server.
 
-CDT pushes packages to *many* gateways at once. It runs ON the management server
+CDT pushes packages to *many* firewalls at once. It runs ON the management server
 (Expert mode, uid 0): binary ``$CDTDIR/CentralDeploymentTool``, config XML beside
 it, and a candidates CSV that carries target selection AND upgrade order — the
 CSV *is* the blast-radius/sequencing control. Long runs go under ``nohup`` so an

@@ -403,6 +403,23 @@ tr.job-row:hover td { background: var(--badge-bg); }
   overflow-x: auto;
 }
 
+/* The Cancel column is pinned to the right edge of that scrolling box. Without
+   this it sits at the table's own right edge, which on an overflowing table is
+   off-screen — the button on a running job was drawn half outside the panel and
+   clipped. Sticky keeps it inside the panel's bounds at any width; the opaque
+   background stops the Output column sliding visibly underneath it, and the
+   1% width keeps the column no wider than the button itself. */
+#jobs-table th.job-actions,
+#jobs-table td.job-actions {
+  position: sticky;
+  right: 0;
+  width: 1%;
+  text-align: right;
+  white-space: nowrap;
+  background: var(--panel);
+}
+tr.job-row:hover td.job-actions { background: var(--badge-bg); }
+
 /* Uniform row text: every Jobs cell (and the Status badge) renders at the Env
    column's size (0.85rem, the .muted size). Font-size only — colors unchanged. */
 #jobs-table td,
@@ -816,7 +833,7 @@ button.link-btn.fw-name-link {
   gap: 0.3rem;
 }
 
-/* ---- CDT (gateway deployment) controls ---- */
+/* ---- CDT (firewall deployment) controls ---- */
 .cdt-controls {
   display: flex;
   gap: 0.5rem;

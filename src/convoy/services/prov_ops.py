@@ -7,7 +7,7 @@ the async job queue the way a real device operation must (same rationale as
 ``services/cred_ops.py`` and ``services/pkgs_ops.py`` before it,
 operator-directed, 2026-08-18). The old queued shape shared ``JobRunner``'s
 concurrency slots with genuinely slow ``cpuse.*``/``cdt.*`` device jobs, so an
-unrelated prov.add (e.g. importing a gateway found by discovery) could sit
+unrelated prov.add (e.g. importing a firewall found by discovery) could sit
 behind an in-progress install with nothing to do with it. Each call still
 records a ``JobRecord`` (already terminal by the time it returns) purely for
 Jobs-tab visibility and audit history — no PENDING state, no background

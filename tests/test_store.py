@@ -362,7 +362,7 @@ def test_firewall_crud(store: Store) -> None:
     assert store.list_firewalls("corp") == []
 
     store.upsert_firewall(
-        FirewallRow(environment="corp", name="fw-01", address="10.0.0.1", role="gateway")
+        FirewallRow(environment="corp", name="fw-01", address="10.0.0.1", role="firewall")
     )
     # Upsert on (environment, name) updates in place.
     store.upsert_firewall(
@@ -370,7 +370,7 @@ def test_firewall_crud(store: Store) -> None:
             environment="corp",
             name="fw-01",
             address="10.0.0.9",
-            role="gateway",
+            role="firewall",
             ssh_user="svc",
         )
     )
@@ -389,7 +389,7 @@ def test_firewall_crud(store: Store) -> None:
 def test_firewall_credential_assignment_and_fk_set_null(store: Store) -> None:
     store.insert_environment("corp", credential_storage_enabled=True)
     store.upsert_firewall(
-        FirewallRow(environment="corp", name="fw-01", address="10.0.0.1", role="gateway")
+        FirewallRow(environment="corp", name="fw-01", address="10.0.0.1", role="firewall")
     )
     store.upsert_credential_set(
         CredentialSetRow(environment="corp", name="primary", ssh_password_ct=b"ct")
@@ -429,7 +429,7 @@ def test_set_firewall_cluster_name(store: Store) -> None:
 def test_set_firewall_mds_domain(store: Store) -> None:
     store.insert_environment("corp")
     store.upsert_firewall(
-        FirewallRow(environment="corp", name="fw-01", address="10.0.0.1", role="gateway")
+        FirewallRow(environment="corp", name="fw-01", address="10.0.0.1", role="firewall")
     )
     assert store.get_firewall("corp", "fw-01").mds_domain is None  # type: ignore[union-attr]
 
@@ -439,7 +439,7 @@ def test_set_firewall_mds_domain(store: Store) -> None:
     # upsert_firewall (an ordinary add/edit) never touches mds_domain — only
     # this targeted UPDATE does (mirrors set_firewall_cluster_name).
     store.upsert_firewall(
-        FirewallRow(environment="corp", name="fw-01", address="10.0.0.2", role="gateway")
+        FirewallRow(environment="corp", name="fw-01", address="10.0.0.2", role="firewall")
     )
     assert store.get_firewall("corp", "fw-01").mds_domain == "CustomerA"  # type: ignore[union-attr]
 
@@ -451,7 +451,7 @@ def test_set_firewall_mds_domain(store: Store) -> None:
 def test_deleting_environment_cascades_to_firewalls(store: Store) -> None:
     store.insert_environment("corp")
     store.upsert_firewall(
-        FirewallRow(environment="corp", name="fw-01", address="10.0.0.1", role="gateway")
+        FirewallRow(environment="corp", name="fw-01", address="10.0.0.1", role="firewall")
     )
     store.delete_environment("corp")
     store.insert_environment("corp")
@@ -576,3 +576,28 @@ def test_future_schema_version_refused(tmp_path: Path) -> None:
     conn.close()
     with pytest.raises(StoreError, match="newer"):
         Store(path)
+
+
+def test_v29_database_migrates_gateway_role_rows_to_firewall(tmp_path: Path) -> None:
+    # A row stored under the pre-rename "gateway" role must come back as
+    # "firewall" once the v30 migration has run, so the DB agrees with
+    # inventory.Role instead of leaning on its legacy-value fallback forever.
+    import sqlite3
+
+    path = tmp_path / "orch.db"
+    conn = sqlite3.connect(path)
+    for script in _MIGRATIONS[:29]:
+        conn.executescript(script)
+    conn.execute("PRAGMA user_version = 29")
+    conn.execute(
+        "INSERT INTO environments (name, created_at) VALUES ('corp', '2026-01-01T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO firewalls (id, environment, name, address, role) "
+        "VALUES ('fw-id-1', 'corp', 'fw-01', '10.0.0.1', 'gateway')"
+    )
+    conn.commit()
+    conn.close()
+
+    store = Store(path)
+    assert [f.role for f in store.list_firewalls("corp")] == ["firewall"]

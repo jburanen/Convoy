@@ -30,7 +30,7 @@ from ..transport.ssh import CommandResult, GaiaSession, GaiaShell
 _MGMT_ROLES = MANAGEMENT_PLANE_ROLES
 _FW_ROLES = FIREWALL_ROLES
 # Any host this tool can drive through the CPUSE import/install lifecycle
-# directly (management server or firewall) — CDT-only gateway fleets aren't
+# directly (management server or firewall) — CDT-only firewall fleets aren't
 # stored here at all, so this gate never needs to exclude them separately.
 # Spark firewalls (Gaia Embedded) are patchable directly too (operator-
 # directed, 2026-08-18) — previously excluded here, see git history/
@@ -177,7 +177,7 @@ class HostConnector:
         if host.role not in _MGMT_ROLES:
             raise InventoryError(
                 f"host {host_name!r} is a {host.role.value}, not a management server — "
-                "gateways are patched via CDT, not addressed directly"
+                "firewalls are patched via CDT, not addressed directly"
             )
         return host
 
@@ -194,7 +194,7 @@ class HostConnector:
         """Resolve a host that must specifically be a Spark (Gaia Embedded)
         firewall — stricter than patchable_host() (which accepts any
         CPUSE-patchable host, Spark included): the expert-mode SSH commands
-        the Spark patching service issues are meaningless on a Gaia gateway
+        the Spark patching service issues are meaningless on a Gaia firewall
         or management server, so this fails closed rather than let a
         mis-targeted job run them there."""
         host = self.inventory.host(host_name)  # raises InventoryError if unknown

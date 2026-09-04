@@ -1,4 +1,4 @@
-"""Inventory models: the estate of management servers, gateways, and clusters.
+"""Inventory models: the estate of management servers, firewalls, and clusters.
 
 Real inventory files name production infrastructure and are git-ignored; only
 ``*.example.yaml`` templates are tracked. See .claude/memory/security-hygiene.md.
@@ -44,20 +44,43 @@ class Role(StrEnum):
     MANAGEMENT = "management"  # legacy: Security Management Server → see PRIMARY_SMS
     MDS = "mds"  # legacy: Multi-Domain Server → see PRIMARY_MDS
     # Firewalls, patched directly via CPUSE (one host at a time — see
-    # FIREWALL_ROLES/firewalls.py). CDT's bulk gateway-fleet push is a separate
+    # FIREWALL_ROLES/firewalls.py). CDT's bulk firewall-fleet push is a separate
     # subsystem that discovers its own targets and never stores them here.
-    GATEWAY = "gateway"  # Security Gateway
-    CLUSTER_MEMBER = "cluster_member"  # Gateway that is part of a ClusterXL/HA cluster
+    # FIREWALL is the plain standalone case; the other two below are firewalls
+    # as well, which is why FIREWALL_ROLES exists and this member is not the
+    # whole category.
+    FIREWALL = "firewall"  # standalone firewall, not part of a cluster
+    CLUSTER_MEMBER = "cluster_member"  # firewall that is part of a ClusterXL/HA cluster
     # Quantum Spark (SMB) appliance, detected via operating-system == "Gaia
     # Embedded" (see services/discovery.py). Patched directly via CPUSE like
     # any other firewall (services/common.py) — still NOT wired into CDT
-    # bulk-deploy (orchestrator.py), which is a separate subsystem gateways
-    # opt into via Role.GATEWAY/CLUSTER_MEMBER only.
+    # bulk-deploy (orchestrator.py), which is a separate subsystem firewalls
+    # opt into via Role.FIREWALL/CLUSTER_MEMBER only.
     SPARK_FIREWALL = "spark_firewall"  # Quantum Spark (SMB) appliance
+
+    @classmethod
+    def _missing_(cls, value: object) -> Role | None:
+        """Resolve retired role spellings to the member that replaced them, so
+        inventory YAML and DB rows written by an older build keep loading.
+        Every construction path — pydantic validation, ``Role(row["role"])`` in
+        store.py, the UI's role picker — goes through here."""
+        if isinstance(value, str):
+            replacement = _RETIRED_ROLE_VALUES.get(value.strip().lower())
+            if replacement is not None:
+                return cls(replacement)
+        return None
+
+
+# Role values this tool used to write, mapped to the member that replaced them.
+# "gateway" was renamed to "firewall" in v1.1.0 when the estate-wide "Security
+# Gateway" wording was dropped; store.py's v30 migration rewrites the stored
+# rows, and this covers everything the migration cannot reach — inventory YAML
+# on disk, and a role string that arrives from an older client.
+_RETIRED_ROLE_VALUES: dict[str, str] = {"gateway": "firewall"}
 
 
 # Roles that make a host a "management-plane" box this tool connects to and patches
-# locally via CPUSE (as opposed to gateways, which CDT discovers at deploy time).
+# locally via CPUSE (as opposed to firewalls, which CDT discovers at deploy time).
 # The seven granular roles are offered in the UI; the two legacy coarse roles are
 # still accepted so pre-existing inventory/DB rows keep loading.
 MANAGEMENT_PLANE_ROLES: tuple[Role, ...] = (
@@ -73,10 +96,10 @@ MANAGEMENT_PLANE_ROLES: tuple[Role, ...] = (
 )
 
 # Roles for firewalls patched directly via CPUSE (one host at a time — distinct
-# from CDT's bulk gateway-fleet push, which discovers its own targets and never
+# from CDT's bulk firewall-fleet push, which discovers its own targets and never
 # stores them here).
 FIREWALL_ROLES: tuple[Role, ...] = (
-    Role.GATEWAY,
+    Role.FIREWALL,
     Role.CLUSTER_MEMBER,
     Role.SPARK_FIREWALL,
 )
@@ -132,7 +155,7 @@ class Host(BaseModel):
     def _check_address(cls, value: object) -> object:
         """``address`` is the only field tying an inventory row to a specific
         real device — every SSH connection, every stored-credential handoff,
-        and (via services/gateway_bootstrap.py) the confirmation that a
+        and (via services/firewall_bootstrap.py) the confirmation that a
         Management API target is the box we think it is, all rest on it. An
         unvalidated free-form string here means a row can be pointed at an
         arbitrary host, so require a syntactically real IP or hostname and

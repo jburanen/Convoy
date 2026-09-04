@@ -3,7 +3,7 @@
 
 defaults:
   dry_run: true                 # mutating ops preview by default
-  max_concurrent_gateways: 2    # blast-radius cap (CLI planner only, see below)
+  max_concurrent_firewalls: 2   # blast-radius cap (CLI planner only, see below)
 
 paths:
   # Relative paths here resolve against THIS FILE's own directory, not
@@ -20,7 +20,7 @@ paths:
   inventory_path: inventory.yaml
 
 # Independent management environments: each has its own inventory of management
-# servers (gateways are discovered per-environment via CDT) and its own
+# servers (firewalls are discovered per-environment via CDT) and its own
 # credential namespace. Packages and the database are shared. Omit this block
 # entirely for a single environment backed by paths.inventory_path.
 # environments:

@@ -60,7 +60,7 @@
     <button class="tab-btn" data-tab="provisioning">Provisioning</button>
     <button class="tab-btn" data-tab="packages">Packages</button>
     <button class="tab-btn" data-tab="management">Manual Patching (CPUSE)</button>
-    <button class="tab-btn wip" data-tab="gateways" disabled
+    <button class="tab-btn wip" data-tab="firewalls" disabled
             title="Work in progress — coming soon">Bulk Patching (CDT) Firewalls only</button>
     <button class="tab-btn" data-tab="jobs">Jobs<span id="jobs-badge" class="tab-badge hidden"></span></button>
     <div id="env-row">
@@ -359,7 +359,7 @@
     <section id="firewalls">
       <!-- Same collapsible UI factors as #servers-details, a distinct entity:
            firewalls patched directly via CPUSE, one host at a time (not CDT's
-           bulk gateway-fleet push, which stays on the Gateways tab). -->
+           bulk fleet push, which stays on the Bulk Patching tab). -->
       <details id="firewalls-details" class="collapsible-panel" open>
         <summary><h2>Firewalls</h2></summary>
         <div class="section-head-actions">
@@ -422,12 +422,12 @@
 
   </div>
 
-  <!-- ┌────────────────────── TAB 4: Gateways ──────────────────────────┐ -->
-  <div class="tab-panel" id="tab-gateways">
+  <!-- ┌────────────────────── TAB 4: Firewalls ─────────────────────────┐ -->
+  <div class="tab-panel" id="tab-firewalls">
 
     <section id="cdt">
       <div class="section-head">
-        <h2>Gateway deployment (CDT)</h2>
+        <h2>Firewall deployment (CDT)</h2>
         <div class="section-head-actions">
           <button type="button" class="help-btn" data-help="cdt" title="About this panel" aria-label="About this panel">?</button>
         </div>
@@ -512,7 +512,7 @@
               <th>Status</th>
               <th>Started</th>
               <th>Output</th>
-              <th></th>
+              <th class="job-actions"></th>
             </tr>
           </thead>
           <tbody><!-- tpl-job-row instances --></tbody>
@@ -783,7 +783,7 @@
     <p class="hint warn">
       These commands will run over SSH now, widening the API's accessibility off
       <code>require-local</code>. The final <code>api restart</code> briefly interrupts other
-      API/SmartConsole sessions — it does not affect gateway policy enforcement.
+      API/SmartConsole sessions — it does not affect firewall policy enforcement.
     </p>
     <div class="output-pane">
       <div class="output-body">
@@ -800,7 +800,7 @@
 <!-- ============ Bootstrap credentials confirm modal (CPUSE tab, Firewalls) === -->
 <!-- Opened from the Firewalls panel's "Bootstrap Credentials" link, shown
      only after a status-refresh SSH authentication failure. Pushes the
-     firewall's currently-assigned credential set onto the gateway via the
+     firewall's currently-assigned credential set onto the firewall via the
      Management API (run-script) instead of SSH — the same clish commands
      the Provisioning tab's bootstrap panel generates, since SSH is exactly
      what's broken here. Same preview-then-confirm pattern as
@@ -841,7 +841,7 @@
 <!-- Shown when adding a Spark (Gaia Embedded) firewall in a storage-enabled
      environment — manually (role changed to Spark Firewall) or per-row during
      Discover Firewalls import. Spark patching needs an expert-mode password
-     (services/gateway_bootstrap.py), so this is the one place a credential set's
+     (services/firewall_bootstrap.py), so this is the one place a credential set's
      expert password is required, not optional. Resolves to a credential set name
      either way: pick an existing one, or create a new one inline (same fields for
      both scenarios — the radio choice only changes the copy and whether the
@@ -1032,7 +1032,7 @@
       <label>Address / IP<input type="text" id="fm-address" required></label>
       <label>Role
         <select id="fm-role">
-          <option value="gateway">Gateway</option>
+          <option value="firewall">Firewall</option>
           <option value="cluster_member">Cluster Member</option>
           <option value="spark_firewall">Spark Firewall</option>
         </select>
@@ -1095,7 +1095,7 @@
 <!-- ============ Discover firewalls modal (CPUSE tab) ========================= -->
 <!-- Scans the estate from the environment's one primary management server (no
      source picker — see services/discovery.py) and lets the operator review/correct
-     the detected firewalls + roles before importing. On an MDS, gateways live inside
+     the detected firewalls + roles before importing. On an MDS, firewalls live inside
      a specific Domain/CMA, so the Domain picker above is required and populated from
      GET .../domains. Import reuses the add-firewall API. -->
 <div id="discover-firewalls-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="discover-firewalls-title">
@@ -1105,7 +1105,7 @@
       <button id="discover-firewalls-close" class="small" title="Close">✕</button>
     </div>
     <p class="hint">
-      Connects to the environment's primary management server and enumerates gateways
+      Connects to the environment's primary management server and enumerates firewalls
       and cluster members via the Management API — the scan itself uses the credential
       set assigned to the primary. Review the detected roles, choose the credential set
       each firewall should use, and import the ones you want. Imported firewalls are
@@ -1158,7 +1158,7 @@
      failed on authentication, instead of stepping through each row's own
      confirm. The server still re-checks confirmation per firewall (app.py's
      ConfirmRequest) — this sends it for each, having asked once here. Spark
-     firewalls cannot be pushed to at all (services/gateway_bootstrap.py), so
+     firewalls cannot be pushed to at all (services/firewall_bootstrap.py), so
      they are listed separately and their commands are shown to paste after the
      pushable ones finish. -->
 <div id="disc-bootstrap-all-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="disc-bootstrap-all-title">
@@ -1169,7 +1169,7 @@
     </div>
     <p class="hint">
       Pushes each firewall's assigned credential set onto the device itself via the
-      Management API. This rewrites the local admin account on every gateway listed —
+      Management API. This rewrites the local admin account on every firewall listed —
       the same action as each row's own Bootstrap credentials button, run once per
       firewall.
     </p>
@@ -1379,7 +1379,7 @@
     <td><input type="text" class="disc-address mono"></td>
     <td>
       <select class="disc-role">
-        <option value="gateway">Gateway</option>
+        <option value="firewall">Firewall</option>
         <option value="cluster_member">Cluster Member</option>
         <option value="spark_firewall">Spark Firewall</option>
       </select>
@@ -1482,7 +1482,7 @@
            PatchingService.retry_import_with_override. -->
       <button type="button" class="link-btn btn-retry-low-space hidden danger-link">Retry with override</button>
     </td>
-    <td><button class="btn-cancel small hidden">Cancel</button></td>
+    <td class="job-actions"><button class="btn-cancel small hidden">Cancel</button></td>
   </tr>
 </template>
 

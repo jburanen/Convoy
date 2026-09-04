@@ -9,7 +9,7 @@ This repo is **intended to become public**. It orchestrates real customer securi
 infrastructure, so leaking config is a genuine risk to the operators who use it.
 
 **Why:** a public commit history is forever. A single leaked inventory exposes
-management-server and gateway hostnames, IPs, and SIC/topology detail; a leaked key
+management-server and firewall hostnames, IPs, and SIC/topology detail; a leaked key
 or `.env` is a direct compromise path.
 
 **How to apply:**

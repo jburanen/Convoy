@@ -10,7 +10,7 @@ completed 2026-08-26.
 
 **Why:** `chkp-cpuse-orch` was a generic internal-tool slug. Convoy evokes a fleet
 moving together in staged, health-gated order — a direct fit for how this tool
-sequences patches/upgrades across management servers and gateways (see
+sequences patches/upgrades across management servers and firewalls (see
 [safety-constraints.md](safety-constraints.md)).
 
 ## What changed

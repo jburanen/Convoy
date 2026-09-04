@@ -9,6 +9,40 @@ Known issues and planned work live under Roadmap / Punch List in
 [README.md](README.md); a fix that closes an item there moves it into this file
 in the same commit as the fix and the version bump.
 
+## v1.1.0
+
+**"Gateway" is gone; the tool says "firewall" everywhere.** Closes the standardise-
+nomenclature punch-list item. The estate had two words for the same box — Check
+Point's "Security Gateway" in the older code and UI copy, "firewall" in everything
+written since — and the seam ran through the role picker, the CDT tab, panel help,
+the config file and the database. There is one vocabulary now: the `gateway` role
+is `firewall`, the "Gateway deployment (CDT)" panel is "Firewall deployment (CDT)",
+`services/gateway_bootstrap.py` is `services/firewall_bootstrap.py`, and the prose
+in every docstring, comment, README line and help panel follows.
+
+Nothing an operator already has stops working. A stored `gateway` role is rewritten
+to `firewall` by a new v30 schema migration; an inventory YAML on disk — out of that
+migration's reach — is resolved by `Role._missing_`, so the retired spelling still
+loads. `defaults.max_concurrent_gateways` in an existing `config.yaml` keeps
+applying under its new name, `max_concurrent_firewalls`, through a validation alias
+rather than silently reverting to the default of 2 — it caps blast radius, so a
+value quietly disappearing is exactly the wrong way to fail. Each of those three
+paths has its own test.
+
+Check Point's own wire vocabulary is deliberately untouched: the Management API
+command is still `show-gateways-and-servers`, the object types discovery matches on
+are still `simple-gateway` / `CpmiGatewayCluster`, and `run-script`'s task detail
+field is still `gatewayName`. Those are the vendor's names for their protocol, not
+ours, and renaming them would have broken discovery.
+
+**The Jobs table's Cancel button stays inside the panel.** When the columns did not
+fit — a long target name, a narrow window — the table scrolled sideways inside its
+own box, as intended, but the Cancel button on a running job sat at the *table's*
+right edge rather than the visible one, so it was drawn past the panel border and
+clipped. The actions column is now pinned to the right edge of the scrolling box,
+so the button stays whole and clickable at any width.
+
+
 ## v1.0.0
 
 **First stable release.** No new subsystem since rc.2 — the version number

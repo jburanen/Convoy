@@ -1587,7 +1587,7 @@ window.addEventListener("scroll", updateHeaderScrolled, { passive: true });
 
 // Default tab: Provisioning when the inventory has no management servers yet,
 // Management otherwise. Decided once at load (chooseDefaultTab); after that the
-// user's clicks rule. Deep-linking works too: open /#tab-gateways etc.
+// user's clicks rule. Deep-linking works too: open /#tab-firewalls etc.
 let tabChosen = false;
 
 function selectTab(name) {
@@ -1971,7 +1971,7 @@ const ROLE_LABELS = {
   smartevent: "SmartEvent",
   management: "Management (legacy)",
   mds: "MDS (legacy)",
-  gateway: "Gateway",
+  firewall: "Firewall",
   cluster_member: "Cluster Member",
   spark_firewall: "Spark Firewall",
 };
@@ -2799,7 +2799,7 @@ document.getElementById("bulk-import-cloud-btn").addEventListener("click", () =>
 /* ---------- 3b. firewalls (CPUSE tab; single combined CRUD+action table) ---------- */
 
 // Firewalls patched directly via CPUSE, one host at a time — distinct from the
-// CDT bulk gateway-fleet push below. Reuses renderStateRow/renderInstallSelect
+// CDT bulk firewall-fleet push below. Reuses renderStateRow/renderInstallSelect
 // (already generic over row/data shape) and the shared bulkImport() helper.
 
 // Mirrors packages.py's package_kind() — same three-line extension check,
@@ -3129,7 +3129,7 @@ async function refreshFirewallState(name, row, stateRow) {
     // gets the display-only "Show Bootstrap Commands" link instead of the
     // full-Gaia auto-push one — its clish speaks `add administrator`, not
     // `add user`/`set user password-hash`, and there's no automated push for
-    // it (see services/gateway_bootstrap.py's module docstring).
+    // it (see services/firewall_bootstrap.py's module docstring).
     // Checked first: a changed host key fails before authentication is even
     // attempted, so the fix is the host key, not the credentials — offering
     // "Bootstrap Credentials" here would send the operator down the wrong path
@@ -3242,7 +3242,7 @@ document.getElementById("fw-bootstrap-creds-confirm-run").addEventListener("clic
 
 // Spark (Gaia Embedded) equivalent of openBootstrapCredsConfirm above —
 // display-only, no Run button: the operator pastes the command into the
-// device's own clish shell themselves (services/gateway_bootstrap.py's
+// device's own clish shell themselves (services/firewall_bootstrap.py's
 // preview_spark_admin_commands has no matching submit_*).
 //
 // Resolves once the operator closes the modal, so a caller stepping through
@@ -4088,7 +4088,7 @@ function renderDiscoverFirewallsResults(result) {
     address.value = s.address;
     roleSel.value = s.role;
     // Stashed for the Import-selected handler below — Management API-
-    // resolved at scan time (see DiscoveryService.find_cluster_for_gateway),
+    // resolved at scan time (see DiscoveryService.find_cluster_for_firewall),
     // so it rides straight into the add-firewall payload without a second
     // round trip.
     row.dataset.clusterName = s.cluster_name || "";
@@ -4345,7 +4345,7 @@ async function runDiscoverCredentialTest(name, role, row) {
 
 // Bootstrap from a discovery row. Full Gaia runs the same confirm-gated
 // Management-API push the Firewalls table uses and re-tests on success; Spark
-// has no push path at all (services/gateway_bootstrap.py), so it shows the
+// has no push path at all (services/firewall_bootstrap.py), so it shows the
 // commands to paste and re-tests once that modal is closed.
 async function startDiscoverBootstrap(name, role, row) {
   if (role === "spark_firewall") {
@@ -4374,7 +4374,7 @@ onBackdropClick("disc-bootstrap-all-modal", () => closeBootstrapAllModal());
 
 // One confirmation for the whole set, then a push per firewall. Spark can't be
 // pushed to at all, so it's called out here and handled after the rest by
-// showing its commands to paste (services/gateway_bootstrap.py).
+// showing its commands to paste (services/firewall_bootstrap.py).
 document.getElementById("discover-firewalls-bootstrap-all").addEventListener("click", () => {
   const rows = rowsNeedingBootstrap();
   if (!rows.length) return;
@@ -4429,7 +4429,7 @@ document.getElementById("discover-firewalls-close").addEventListener("click", cl
 document.getElementById("discover-firewalls-cancel").addEventListener("click", closeDiscoverFirewallsModal);
 onBackdropClick("discover-firewalls-modal", () => closeDiscoverFirewallsModal()); // backdrop click closes
 
-/* ---------- 3e. gateway deployment (CDT) ---------- */
+/* ---------- 3e. firewall deployment (CDT) ---------- */
 
 // Candidate rows held in memory between Load and Save. Kept as
 // { header: [...], rows: [[...], ...] } exactly as the API speaks.
@@ -4584,10 +4584,10 @@ document.getElementById("cdt-status-btn").addEventListener("click", cdtRefreshSt
 document.getElementById("cdt-execute").addEventListener("click", () => {
   const name = document.getElementById("cdt-server").value;
   const count = cdtCandidates ? cdtCandidates.rows.length : "?";
-  // Executing deploys to EVERY gateway in the candidates list, in order.
+  // Executing deploys to EVERY firewall in the candidates list, in order.
   const sure = confirm(
     `Execute the CDT deployment from ${name || "?"}?\n\n` +
-    `This deploys to ${count} gateway(s) in the saved candidate order, ` +
+    `This deploys to ${count} firewall(s) in the saved candidate order, ` +
     "including automatic cluster failovers. Make sure this is inside a " +
     "maintenance window and the candidate list was reviewed and saved."
   );

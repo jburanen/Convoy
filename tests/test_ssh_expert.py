@@ -110,7 +110,7 @@ def test_enter_expert_fails_with_wrong_password() -> None:
 
 
 def test_enter_expert_skips_escalation_when_login_lands_in_expert() -> None:
-    """A Spark gateway whose user is configured `bashUser on` drops you
+    """A Spark firewall whose user is configured `bashUser on` drops you
     straight into expert at login. Sending `expert` there asks for a password
     the session does not need, so the greeting decides it (operator-specified
     2026-08-27)."""
@@ -219,7 +219,7 @@ def test_full_expert_conversation() -> None:
 
 # -- the silent expert-password reader (live bug, 2026-08-26) ----------------------
 #
-# Confirmed against a real R81.x Gaia gateway: its `expert` password reader does
+# Confirmed against a real R81.x Gaia firewall: its `expert` password reader does
 # not act on the newline send_secret() already sent. The password sits unread and
 # the escalation hangs to its full timeout with ZERO bytes received -- which is
 # what "Disk space check ... timed out ... output so far: ''" was. A further

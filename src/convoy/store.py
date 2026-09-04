@@ -158,7 +158,7 @@ class EnvironmentRow(BaseModel):
 
 
 class EnvHostRow(BaseModel):
-    """One management server belonging to an environment. Gateways are not
+    """One management server belonging to an environment. Firewalls are not
     stored here — CDT discovers them at deploy time."""
 
     id: str = Field(default_factory=new_id)
@@ -176,14 +176,14 @@ class EnvHostRow(BaseModel):
 
 
 class FirewallRow(BaseModel):
-    """One firewall/gateway belonging to an environment, patched directly via
+    """One firewall belonging to an environment, patched directly via
     CPUSE (distinct from env_hosts, which holds management-plane servers)."""
 
     id: str = Field(default_factory=new_id)
     environment: str
     name: str
     address: str
-    role: str  # inventory Role value (gateway / cluster_member)
+    role: str  # inventory Role value (firewall / cluster_member / spark_firewall)
     ssh_port: int = 22
     ssh_user: str = "admin"
     notes: str | None = None
@@ -470,7 +470,7 @@ _MIGRATIONS: tuple[str, ...] = (
     """
     ALTER TABLE jobs ADD COLUMN install_log_path TEXT;
     """,
-    # v16: firewalls (gateways/cluster members), patched directly via CPUSE —
+    # v16: firewalls (standalone/cluster members), patched directly via CPUSE —
     # a separate, first-class entity from env_hosts (management-plane servers).
     # Same shape as env_hosts, including its own credential_set_id FK; cached
     # CPUSE state reuses server_state as-is (keyed by host name, not an FK).
@@ -606,6 +606,14 @@ _MIGRATIONS: tuple[str, ...] = (
     # discovery, packages and every other API call are concerned.
     """
     ALTER TABLE env_hosts ADD COLUMN mgmt_api_context TEXT;
+    """,
+    # v30: the "gateway" role value was renamed to "firewall" when the tool
+    # dropped the "Security Gateway" wording estate-wide. Rewrite the stored
+    # rows so the DB agrees with inventory.Role; Role._missing_ still resolves
+    # the old spelling for anything this cannot reach (inventory YAML on disk).
+    """
+    UPDATE firewalls SET role = 'firewall' WHERE role = 'gateway';
+    UPDATE env_hosts SET role = 'firewall' WHERE role = 'gateway';
     """,
 )
 
@@ -952,7 +960,7 @@ class Store:
             )
         return cur.rowcount > 0
 
-    # -- firewalls (gateways/cluster members, patched directly via CPUSE) -------
+    # -- firewalls (standalone/cluster members, patched directly via CPUSE) -----
 
     def list_firewalls(self, environment: str) -> list[FirewallRow]:
         with self._connect() as conn:

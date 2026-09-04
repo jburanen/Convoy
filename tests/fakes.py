@@ -184,7 +184,7 @@ class FakeInteractiveShell:
         # send_secret() already sent and only acts once a FURTHER newline
         # arrives as its own write (see GaiaExpertSession.enter_expert).
         self._password_needs_nudge = password_needs_nudge
-        # A Spark gateway configured `bashUser on` greets a login with the
+        # A Spark firewall configured `bashUser on` greets a login with the
         # expert prompt itself -- there is no clish prompt to escalate from.
         self._already_expert = already_expert
         self._awaiting_nudge = False

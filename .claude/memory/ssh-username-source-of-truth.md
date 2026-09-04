@@ -28,7 +28,7 @@ specific row (a brand-new, distinct Spark credential set in this case).
 
 **Fix**: `services/common.py`'s `default_client_factory` — the single choke
 point every host-touching job resolves a `Transport` through (CPUSE, CDT,
-Spark patching, gateway bootstrap, discovery/state checks all route through
+Spark patching, firewall bootstrap, discovery/state checks all route through
 `HostConnector.connect()` → this function) — now resolves the username from
 the credential itself (`cred.username`) when present, passing it to
 `SSHClient`'s new `username` override param (`transport/ssh.py`), and falls

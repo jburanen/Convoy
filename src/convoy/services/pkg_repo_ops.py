@@ -241,7 +241,7 @@ class PackageRepoService:
 
     def _poll_task(self, ctx: JobContext, client: _RepoClient, task_id: str) -> None:
         """Poll the add-repository-package task, with a wall-clock deadline —
-        see GatewayBootstrapService._poll_task for why an unbounded version
+        see FirewallBootstrapService._poll_task for why an unbounded version
         deadlocks the job queue. A server-side import of a GB-scale package is
         genuinely slow, hence the generous default."""
         last_status = ""

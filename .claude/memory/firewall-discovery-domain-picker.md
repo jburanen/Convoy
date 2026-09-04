@@ -16,7 +16,7 @@ tab), which still has its own primary picker and was intentionally left alone:
   from" `<select>`. If it can't find exactly one, `primary_mgmt_host()` raises
   `InventoryError`; if there happen to be two (shouldn't per the invariant), it
   silently picks the first rather than hard-erroring the UI.
-- **MDS needs a Domain.** Gateways live inside a specific Domain/CMA, not the
+- **MDS needs a Domain.** Firewalls live inside a specific Domain/CMA, not the
   Global domain (Global is where shared servers like SmartEvent live — see
   [[mds-discovery-command]]). `DiscoveryService.list_domains()` enumerates them via
   the Management API `show-domains` command and the UI presents them in a
@@ -39,5 +39,5 @@ anything else.
 
 **How to apply:** don't reintroduce a source-server picker in this modal — resolve
 the primary server-side. Any *new* per-Domain Management API call (not just
-gateway discovery) should reuse `list_domains()`'s login pattern (no `domain`
+firewall discovery) should reuse `list_domains()`'s login pattern (no `domain`
 field) to enumerate domains, then a second per-domain login to act within one.

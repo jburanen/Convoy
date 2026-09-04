@@ -98,7 +98,7 @@ def inventory() -> Inventory:
                 hosts=[
                     Host(name="spark-01", address="192.0.2.30", role=Role.SPARK_FIREWALL),
                     Host(name="spark-02", address="192.0.2.31", role=Role.SPARK_FIREWALL),
-                    Host(name="fw-gaia", address="192.0.2.20", role=Role.GATEWAY),
+                    Host(name="fw-gaia", address="192.0.2.20", role=Role.FIREWALL),
                 ],
             )
         ]
@@ -243,7 +243,7 @@ def test_test_credentials_succeeds_without_escalating_when_bashuser_is_on(
     packages: PackageStore,
     inventory: Inventory,
 ) -> None:
-    """A Spark gateway configured `bashUser on` lands you in expert at login.
+    """A Spark firewall configured `bashUser on` lands you in expert at login.
     The job must not send `expert` there — and must say so, because a run that
     never escalated never exercised the expert password (operator-specified
     2026-08-27)."""

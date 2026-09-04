@@ -82,7 +82,7 @@ def test_connect_uses_username_override_when_given(monkeypatch: pytest.MonkeyPat
     # default_client_factory) relies on. See
     # .claude/memory/ssh-username-source-of-truth.md.
     captured = _patch_paramiko_connect(monkeypatch)
-    host = Host(name="fw", address="192.0.2.20", role=Role.GATEWAY, ssh_user="stale-admin")
+    host = Host(name="fw", address="192.0.2.20", role=Role.FIREWALL, ssh_user="stale-admin")
     SSHClient(host, username="svc-patchmgr", password="pw").connect()
     assert captured["username"] == "svc-patchmgr"
 
@@ -91,7 +91,7 @@ def test_connect_falls_back_to_host_ssh_user_without_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured = _patch_paramiko_connect(monkeypatch)
-    host = Host(name="fw", address="192.0.2.20", role=Role.GATEWAY, ssh_user="admin")
+    host = Host(name="fw", address="192.0.2.20", role=Role.FIREWALL, ssh_user="admin")
     SSHClient(host, password="pw").connect()
     assert captured["username"] == "admin"
 
@@ -312,9 +312,9 @@ def test_forget_host_key_is_a_no_op_when_pinning_is_disabled() -> None:
 def test_non_default_port_uses_bracketed_known_hosts_entry() -> None:
     """OpenSSH/paramiko name non-22 entries [address]:port — getting this wrong
     would silently pin under a key nothing ever looks up again."""
-    host = Host(name="fw", address="192.0.2.12", role=Role.GATEWAY, ssh_port=2222)
+    host = Host(name="fw", address="192.0.2.12", role=Role.FIREWALL, ssh_port=2222)
     assert _host_key_id(host) == "[192.0.2.12]:2222"
-    assert _host_key_id(Host(name="fw", address="192.0.2.12", role=Role.GATEWAY)) == "192.0.2.12"
+    assert _host_key_id(Host(name="fw", address="192.0.2.12", role=Role.FIREWALL)) == "192.0.2.12"
 
 
 def test_fingerprint_is_openssh_shaped() -> None:

@@ -102,7 +102,7 @@ class FakeSSHClient:
                 # A list is a sequence consumed one call at a time, holding on
                 # the last entry — lets a test script "fails, then succeeds"
                 # (e.g. a config-lock conflict cleared by an override). Same
-                # shape as test_gateway_bootstrap.py's task_sequence.
+                # shape as test_firewall_bootstrap.py's task_sequence.
                 if isinstance(scripted, list):
                     scripted = scripted.pop(0) if len(scripted) > 1 else scripted[0]
                 if isinstance(scripted, Exception):
@@ -323,7 +323,7 @@ def test_put_raises_gaia_shell_restore_error_if_restore_itself_fails(
 #
 # Elevating to expert takes Gaia's config-database lock, so the very next clish
 # `set` in the same session is refused -- which is what broke the transfer
-# shell-toggle on a real gateway. Gaia reports it on STDOUT (CLINFR0771 /
+# shell-toggle on a real firewall. Gaia reports it on STDOUT (CLINFR0771 /
 # CLINFR0519) with rc=1 and an EMPTY stderr, which is why the job error was a
 # bare "command failed (rc=1)" with no reason attached.
 

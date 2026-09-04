@@ -26,7 +26,7 @@ convoy/
     cred_ops.py     # Credential-set jobs: add/edit/delete (cred.* kinds)
     prov_ops.py     # Server/firewall CRUD jobs: add/edit/delete (prov.* kinds, shared)
   config.py         # Pydantic settings (global tool config, defaults, paths)
-  inventory.py      # Pydantic models: Site, ManagementServer, Gateway, Cluster; loader
+  inventory.py      # Pydantic models: Site, ManagementServer, Firewall, Cluster; loader
   credentials.py    # Encrypted-at-rest credential store (key + password; see design)
   packages.py       # Package store: streaming upload, SHA-1/size verify, dedupe on /data
   jobs.py           # Background job model + runner; persisted state machine per action

@@ -37,7 +37,7 @@ def test_add_firewall_rebuilds_registry(store: Store) -> None:
     registry = EnvironmentRegistry()
     env_mgr, fw_mgr = _managers(store, registry)
     env_mgr.create_environment("dmz")
-    fw_mgr.add_firewall("dmz", name="fw-d", address="10.0.0.1", role="gateway", ssh_user="svc")
+    fw_mgr.add_firewall("dmz", name="fw-d", address="10.0.0.1", role="firewall", ssh_user="svc")
 
     hosts = registry.get("dmz").firewalls()
     assert [h.name for h in hosts] == ["fw-d"]
@@ -53,7 +53,7 @@ def test_firewalls_and_servers_merge_into_one_connector(store: Store) -> None:
     env_mgr.add_server(
         "corp", name="mgmt-1", address="10.0.0.1", role="management", ssh_user="admin"
     )
-    fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.2", role="gateway", ssh_user="admin")
+    fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.2", role="firewall", ssh_user="admin")
 
     connector = registry.get("corp")
     assert [h.name for h in connector.management_servers()] == ["mgmt-1"]
@@ -94,7 +94,7 @@ def test_management_role_rejected_for_firewall(store: Store) -> None:
 def test_add_firewall_to_unknown_environment(store: Store) -> None:
     _, fw_mgr = _managers(store, EnvironmentRegistry())
     with pytest.raises(InventoryError, match="unknown environment"):
-        fw_mgr.add_firewall("ghost", name="f", address="10.0.0.1", role="gateway", ssh_user="a")
+        fw_mgr.add_firewall("ghost", name="f", address="10.0.0.1", role="firewall", ssh_user="a")
 
 
 def test_name_collision_across_servers_and_firewalls_rejected(store: Store) -> None:
@@ -106,10 +106,10 @@ def test_name_collision_across_servers_and_firewalls_rejected(store: Store) -> N
     )
     with pytest.raises(InventoryError, match="already used by a management server"):
         fw_mgr.add_firewall(
-            "corp", name="shared", address="10.0.0.2", role="gateway", ssh_user="admin"
+            "corp", name="shared", address="10.0.0.2", role="firewall", ssh_user="admin"
         )
 
-    fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.3", role="gateway", ssh_user="admin")
+    fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.3", role="firewall", ssh_user="admin")
     with pytest.raises(InventoryError, match="already used by a firewall"):
         env_mgr.add_server(
             "corp", name="fw-1", address="10.0.0.4", role="management", ssh_user="admin"
@@ -120,7 +120,7 @@ def test_remove_firewall(store: Store) -> None:
     registry = EnvironmentRegistry()
     env_mgr, fw_mgr = _managers(store, registry)
     env_mgr.create_environment("corp")
-    fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.1", role="gateway", ssh_user="admin")
+    fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.1", role="firewall", ssh_user="admin")
     fw_mgr.remove_firewall("corp", "fw-1")
     assert registry.get("corp").firewalls() == []
     with pytest.raises(InventoryError, match="not found"):
@@ -132,7 +132,7 @@ def test_assign_credential_set_to_firewall(store: Store) -> None:
     env_mgr, fw_mgr = _managers(store, registry)
     env_mgr.create_environment("corp")
     env_mgr.set_credential_storage("corp", True)
-    fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.1", role="gateway", ssh_user="admin")
+    fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.1", role="firewall", ssh_user="admin")
     _set(store, "corp", "primary")
 
     fw_mgr.assign_credential("corp", "fw-1", "primary")
@@ -156,7 +156,7 @@ def test_new_firewall_inherits_the_default_credential_set(store: Store) -> None:
     _set(store, "corp", "primary")
     assert store.set_default_credential_set("corp", "primary") is True
 
-    fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.1", role="gateway", ssh_user="admin")
+    fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.1", role="firewall", ssh_user="admin")
     default_id = store.get_default_credential_set("corp").id  # type: ignore[union-attr]
     assert store.get_firewall("corp", "fw-1").credential_set_id == default_id  # type: ignore[union-attr]
 
@@ -165,7 +165,7 @@ def test_set_cluster_name(store: Store) -> None:
     registry = EnvironmentRegistry()
     env_mgr, fw_mgr = _managers(store, registry)
     env_mgr.create_environment("corp")
-    fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.1", role="gateway", ssh_user="admin")
+    fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.1", role="firewall", ssh_user="admin")
 
     fw_mgr.set_cluster_name("corp", "fw-1", "prod-cluster")
     assert store.get_firewall("corp", "fw-1").credential_set_id is None  # untouched
@@ -186,11 +186,11 @@ def test_editing_a_firewall_never_clobbers_a_previously_set_cluster_name(store: 
     registry = EnvironmentRegistry()
     env_mgr, fw_mgr = _managers(store, registry)
     env_mgr.create_environment("corp")
-    fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.1", role="gateway", ssh_user="admin")
+    fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.1", role="firewall", ssh_user="admin")
     fw_mgr.set_cluster_name("corp", "fw-1", "prod-cluster")
 
     # An ordinary edit (add_firewall is upsert-by-name) touching unrelated fields.
-    fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.1", role="gateway", ssh_user="other")
+    fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.1", role="firewall", ssh_user="other")
     assert store.get_firewall("corp", "fw-1").ssh_user == "other"  # type: ignore[union-attr]
     assert store.get_firewall("corp", "fw-1").cluster_name == "prod-cluster"  # type: ignore[union-attr]
 
@@ -203,7 +203,7 @@ def test_add_firewall_stores_and_updates_tags(store: Store) -> None:
         "corp",
         name="fw-1",
         address="10.0.0.1",
-        role="gateway",
+        role="firewall",
         ssh_user="admin",
         tags=["prod", "east-region"],
     )
@@ -216,13 +216,13 @@ def test_add_firewall_stores_and_updates_tags(store: Store) -> None:
         "corp",
         name="fw-1",
         address="10.0.0.1",
-        role="gateway",
+        role="firewall",
         ssh_user="admin",
         tags=["prod"],
     )
     assert store.get_firewall("corp", "fw-1").tags == ["prod"]  # type: ignore[union-attr]
 
-    fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.1", role="gateway", ssh_user="admin")
+    fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.1", role="firewall", ssh_user="admin")
     assert store.get_firewall("corp", "fw-1").tags == []  # type: ignore[union-attr]
 
 
@@ -234,7 +234,7 @@ def test_firewall_tags_are_trimmed_and_deduped(store: Store) -> None:
         "corp",
         name="fw-1",
         address="10.0.0.1",
-        role="gateway",
+        role="firewall",
         ssh_user="admin",
         tags=["  prod  ", "prod", "", "   ", "east-region"],
     )
@@ -245,7 +245,7 @@ def test_set_domain(store: Store) -> None:
     registry = EnvironmentRegistry()
     env_mgr, fw_mgr = _managers(store, registry)
     env_mgr.create_environment("corp")
-    fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.1", role="gateway", ssh_user="admin")
+    fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.1", role="firewall", ssh_user="admin")
 
     fw_mgr.set_domain("corp", "fw-1", "CustomerA")
     assert store.get_firewall("corp", "fw-1").credential_set_id is None  # untouched
@@ -264,9 +264,9 @@ def test_editing_a_firewall_never_clobbers_a_previously_set_domain(store: Store)
     registry = EnvironmentRegistry()
     env_mgr, fw_mgr = _managers(store, registry)
     env_mgr.create_environment("corp")
-    fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.1", role="gateway", ssh_user="admin")
+    fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.1", role="firewall", ssh_user="admin")
     fw_mgr.set_domain("corp", "fw-1", "CustomerA")
 
-    fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.1", role="gateway", ssh_user="other")
+    fw_mgr.add_firewall("corp", name="fw-1", address="10.0.0.1", role="firewall", ssh_user="other")
     assert store.get_firewall("corp", "fw-1").ssh_user == "other"  # type: ignore[union-attr]
     assert store.get_firewall("corp", "fw-1").mds_domain == "CustomerA"  # type: ignore[union-attr]

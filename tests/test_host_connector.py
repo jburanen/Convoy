@@ -33,7 +33,7 @@ def creds(store: Store) -> CredentialStore:
 @pytest.fixture
 def inventory(store: Store, creds: CredentialStore) -> Inventory:
     mgmt = Host(name="mgmt-01", address="192.0.2.10", role=Role.PRIMARY_SMS)
-    fw = Host(name="fw-01", address="192.0.2.20", role=Role.GATEWAY)
+    fw = Host(name="fw-01", address="192.0.2.20", role=Role.FIREWALL)
     api_set = store.get_credential_set_by_name("default", "api-set")
     ssh_set = store.get_credential_set_by_name("default", "ssh-set")
     assert api_set is not None and ssh_set is not None

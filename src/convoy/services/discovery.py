@@ -7,7 +7,9 @@ Which command variants run is decided by the environment's declared kind
 not by the primary's own role: an environment is always entirely SMS or entirely
 Multi-Domain, never a mix.
 
-- **SMS side** via the Check Point **Management API** (``show-gateways-and-servers``):
+- **SMS side** via the Check Point **Management API** (``show-gateways-and-servers``,
+  Check Point's own command name — this tool says "firewall" everywhere it is not
+  quoting the vendor's wire protocol):
   other management servers, dedicated Log Servers, and SmartEvent servers.
 - **MDS side, Global domain** via the same API call, logged into the ``Global``
   domain instead of a specific Domain/CMA: SmartEvent servers shared across the
@@ -34,7 +36,7 @@ ambiguous rows are flagged ``needs_review`` for the operator to correct. See
 
 Firewall discovery (``discover_firewalls``) never takes a source-server argument —
 an environment has exactly one primary (SMS or MDS), so ``HostConnector.primary_mgmt_host``
-resolves it instead of asking the operator to pick. On an MDS, gateways live inside a
+resolves it instead of asking the operator to pick. On an MDS, firewalls live inside a
 specific Domain/CMA, so the operator picks one first via ``list_domains`` (``show-domains``,
 logged in with no ``domain`` — that's the MDS system context, above any single Domain or
 ``Global``) and the UI passes it back in as ``domain``.
@@ -75,7 +77,7 @@ class DiscoveredServer:
     needs_review: bool = False
     note: str | None = None
     # Real SmartConsole cluster object name, resolved via the Management API
-    # (show-simple-clusters) at discovery time — see find_cluster_for_gateway.
+    # (show-simple-clusters) at discovery time — see find_cluster_for_firewall.
     # None when not a cluster member, or when the lookup wasn't possible.
     cluster_name: str | None = None
 
@@ -102,7 +104,7 @@ class MgmtClientContext(Protocol):
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None: ...
-    def show_gateways_and_servers(self, *, details_level: str = ...) -> list[dict[str, Any]]: ...
+    def show_firewalls_and_servers(self, *, details_level: str = ...) -> list[dict[str, Any]]: ...
     def show_simple_clusters(self, *, details_level: str = ...) -> list[dict[str, Any]]: ...
     def show_domains(self) -> list[dict[str, Any]]: ...
 
@@ -129,14 +131,14 @@ class DiscoveryService:
 
     def discover_firewalls(self, environment: str, *, domain: str | None = None) -> DiscoveryResult:
         """Scan the estate from the environment's primary management server for
-        firewalls (gateways/cluster members) instead of management-plane
+        firewalls (standalone/cluster members) instead of management-plane
         servers — same Management API call, opposite half of the object list.
         Only the API side applies (mdsquerydb only enumerates MDS peers, not
-        gateways).
+        firewalls).
 
         An environment has exactly one primary (SMS or MDS), so the caller
         never names a source server here — ``primary_mgmt_host`` resolves it.
-        On an MDS, gateways live inside a specific Domain/CMA rather than the
+        On an MDS, firewalls live inside a specific Domain/CMA rather than the
         Global domain, so the caller must supply which ``domain`` to scan
         (see ``list_domains``)."""
         connector = self._registry.get(environment)
@@ -214,11 +216,11 @@ class DiscoveryService:
             auth = {**auth, "domain": domain}
         try:
             with self._mgmt_client_factory(primary, **auth) as client:
-                objects = client.show_gateways_and_servers(details_level="full")
+                objects = client.show_firewalls_and_servers(details_level="full")
                 # Best-effort: cluster names are a nice-to-have on top of the
-                # gateway list, so a failure here (unsupported command on an
+                # firewall list, so a failure here (unsupported command on an
                 # older management version, etc.) warns rather than discarding
-                # the gateways just fetched.
+                # the firewalls just fetched.
                 try:
                     clusters = client.show_simple_clusters(details_level="full")
                 except TransportError as exc:
@@ -233,20 +235,20 @@ class DiscoveryService:
         except TransportError as exc:
             result.warnings.append(f"Management API discovery failed: {exc}")
             return
-        servers = map_gateways_only(objects)
+        servers = map_firewalls_only(objects)
         for srv in servers:
-            srv.cluster_name = find_cluster_for_gateway(clusters, srv.name)
+            srv.cluster_name = find_cluster_for_firewall(clusters, srv.name)
         result.servers.extend(servers)
 
     def find_cluster_name(
-        self, environment: str, gateway_name: str, *, domain: str | None = None
+        self, environment: str, firewall_name: str, *, domain: str | None = None
     ) -> str | None:
-        """Best-effort live lookup of one gateway's real cluster object name
+        """Best-effort live lookup of one firewall's real cluster object name
         via the Management API — backs the Firewalls panel's "re-check
         cluster membership" button for firewalls that weren't picked up
         automatically at discovery time (manually added, or added before this
         shipped). Never raises: no primary configured, no usable credentials,
-        an unreachable API, or the gateway genuinely not being a cluster
+        an unreachable API, or the firewall genuinely not being a cluster
         member all just resolve to None, same as "not a cluster member".
 
         MDS environments need a Domain to log into to see any clusters at
@@ -268,7 +270,7 @@ class DiscoveryService:
                 clusters = client.show_simple_clusters(details_level="full")
         except TransportError:
             return None
-        return find_cluster_for_gateway(clusters, gateway_name)
+        return find_cluster_for_firewall(clusters, firewall_name)
 
     def discover(self, environment: str, primary_host_name: str) -> DiscoveryResult:
         connector = self._registry.get(environment)
@@ -324,14 +326,14 @@ class DiscoveryService:
             auth = {**auth, "domain": domain}
         try:
             with self._mgmt_client_factory(primary, **auth) as client:
-                objects = client.show_gateways_and_servers(details_level="full")
+                objects = client.show_firewalls_and_servers(details_level="full")
         except ManagementAPIForbidden as exc:
             result.warnings.append(_forbidden_warning(exc, primary))
             return
         except TransportError as exc:
             result.warnings.append(f"Management API discovery failed: {exc}")
             return
-        result.servers.extend(map_gateways_and_servers(objects, primary.address))
+        result.servers.extend(map_firewalls_and_servers(objects, primary.address))
 
     # -- MDS side (SSH) ----------------------------------------------------------
 
@@ -388,16 +390,19 @@ def _forbidden_warning(exc: ManagementAPIForbidden, primary: Host) -> str:
 
 # ---- pure mapping helpers (unit-tested without live gear) -----------------------
 
-# Object types that are gateways / cluster members — never management-plane servers.
-_GATEWAY_HINTS = ("gateway", "cluster", "vsx", "vs-cluster", "gateway-cluster")
+# Object types that are firewalls / cluster members — never management-plane
+# servers. The tokens are Check Point's own ``type`` spellings as they arrive
+# from the API, so they keep the vendor's "gateway" wording; only the name of
+# this tuple follows our own vocabulary.
+_FIREWALL_TYPE_HINTS = ("gateway", "cluster", "vsx", "vs-cluster", "gateway-cluster")
 
 
-def map_gateways_and_servers(
+def map_firewalls_and_servers(
     objects: list[dict[str, Any]], primary_address: str
 ) -> list[DiscoveredServer]:
     """Map ``show-gateways-and-servers`` objects to management-plane servers.
 
-    Gateways and cluster members are dropped (CDT discovers those). The first
+    Firewalls and cluster members are dropped (CDT discovers those). The first
     management server matching the primary's address is treated as Primary SMS; any
     other management server is flagged Secondary SMS + needs_review, since telling
     primary from secondary reliably needs the HA object."""
@@ -431,9 +436,9 @@ def _role_for_object(
     if not isinstance(blades, dict):
         blades = {}
 
-    # Gateways / clusters are out of scope (management server types never carry
+    # Firewalls / clusters are out of scope (management server types never carry
     # these tokens).
-    if any(h in type_ for h in _GATEWAY_HINTS) and "management" not in type_:
+    if any(h in type_ for h in _FIREWALL_TYPE_HINTS) and "management" not in type_:
         return None, False, None
 
     is_mgmt = _truthy_any(blades, ("network-policy-management", "management")) or (
@@ -461,16 +466,16 @@ def _role_for_object(
     return None, False, None
 
 
-def map_gateways_only(objects: list[dict[str, Any]]) -> list[DiscoveredServer]:
-    """Map ``show-gateways-and-servers`` objects to firewalls (gateways/cluster
-    members) — the mirror image of map_gateways_and_servers, which drops these
+def map_firewalls_only(objects: list[dict[str, Any]]) -> list[DiscoveredServer]:
+    """Map ``show-gateways-and-servers`` objects to firewalls (standalone/cluster
+    members) — the mirror image of map_firewalls_and_servers, which drops these
     same objects because they're never management-plane servers."""
     out: list[DiscoveredServer] = []
     for obj in objects:
         type_ = str(obj.get("type") or "").lower()
-        # Same test map_gateways_and_servers uses to *drop* these objects,
+        # Same test map_firewalls_and_servers uses to *drop* these objects,
         # kept here to *keep* them instead.
-        if not (any(h in type_ for h in _GATEWAY_HINTS) and "management" not in type_):
+        if not (any(h in type_ for h in _FIREWALL_TYPE_HINTS) and "management" not in type_):
             continue
         name = str(obj.get("name") or "").strip()
         address = str(obj.get("ipv4-address") or obj.get("ipv6-address") or "").strip()
@@ -485,7 +490,7 @@ def map_gateways_only(objects: list[dict[str, Any]]) -> list[DiscoveredServer]:
             role, note = Role.SPARK_FIREWALL, None
         else:
             is_cluster = any(h in type_ for h in ("cluster", "vs-cluster", "gateway-cluster"))
-            role = Role.CLUSTER_MEMBER if is_cluster else Role.GATEWAY
+            role = Role.CLUSTER_MEMBER if is_cluster else Role.FIREWALL
             note = "VSX" if "vsx" in type_ else None
         out.append(
             DiscoveredServer(
@@ -525,12 +530,12 @@ def _cluster_member_names(cluster: dict[str, Any]) -> list[str]:
     return names
 
 
-def find_cluster_for_gateway(clusters: list[dict[str, Any]], gateway_name: str) -> str | None:
-    """Which cluster (by its real SmartConsole name) a gateway/cluster-member
+def find_cluster_for_firewall(clusters: list[dict[str, Any]], firewall_name: str) -> str | None:
+    """Which cluster (by its real SmartConsole name) a firewall/cluster-member
     belongs to, given `show-simple-clusters` objects. Matched case-
     insensitively against each cluster's member names. None if no cluster
-    lists this gateway as a member."""
-    target = gateway_name.strip().lower()
+    lists this firewall as a member."""
+    target = firewall_name.strip().lower()
     if not target:
         return None
     for cluster in clusters:
@@ -586,8 +591,8 @@ __all__ = [
     "DiscoveryResult",
     "DiscoveryService",
     "DomainsResult",
-    "find_cluster_for_gateway",
-    "map_gateways_and_servers",
-    "map_gateways_only",
+    "find_cluster_for_firewall",
+    "map_firewalls_and_servers",
+    "map_firewalls_only",
     "parse_mdsquerydb_mdss",
 ]

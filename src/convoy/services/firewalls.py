@@ -1,8 +1,8 @@
 """Firewall manager — DB-backed, UI-editable firewalls patched directly via CPUSE.
 
-A firewall here is a Security Gateway or ClusterXL member the operator wants to
+A firewall here is a standalone firewall or ClusterXL member the operator wants to
 patch one host at a time over SSH, exactly like a management server — distinct
-from CDT's bulk gateway-fleet push (services/cdt_ops.py), which discovers its
+from CDT's bulk firewall-fleet push (services/cdt_ops.py), which discovers its
 own targets and never stores them. Firewalls live in their own ``firewalls``
 table, in the same per-environment credential namespace as management servers,
 and are merged into the same Inventory/HostConnector by

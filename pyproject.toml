@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "convoy"
 dynamic = ["version"]  # single source: convoy.__version__
-description = "Orchestration layer for Check Point's Central Deployment Tool (CDT/CPUSE) — staged, health-gated patching and upgrades across management servers and gateways."
+description = "Orchestration layer for Check Point's Central Deployment Tool (CDT/CPUSE) — staged, health-gated patching and upgrades across management servers and firewalls."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }

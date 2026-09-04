@@ -1,10 +1,10 @@
-"""Re-push a firewall's assigned credential set onto the gateway itself, via
+"""Re-push a firewall's assigned credential set onto the firewall itself, via
 the Management API — the Firewalls panel's recovery path for an SSH
 authentication failure during status refresh (app.js's ``refreshFirewallState``).
 
 When a firewall's stored password no longer matches what's actually on the
 box, ordinary SSH-based recovery is circular: the only way in is the thing
-that's broken. The Management API reaches the gateway over SIC instead (no
+that's broken. The Management API reaches the firewall over SIC instead (no
 SSH needed), so ``run-script`` can push the same clish commands the
 Provisioning tab's bootstrap panel already generates
 (``render_gaia_user_commands``/``render_bootstrap_script`` in
@@ -15,7 +15,7 @@ as bash, not clish.
 shown in a confirm dialog before the operator commits — same
 diagnose-then-confirm-then-job shape as services/api_access.py, just the
 Management API instead of SSH as the execution channel. ``submit_bootstrap``
-mutates a production gateway's local admin account, so it stays confirm-
+mutates a production firewall's local admin account, so it stays confirm-
 gated and runs as its own ``JobRunner`` job for Jobs-tab audit history.
 
 ``run-script``/``show-task``'s exact response shape was NOT trusted from the
@@ -90,7 +90,7 @@ class MgmtClientContext(Protocol):
     ) -> None: ...
     def run_script(self, script: str, targets: list[str], *, script_name: str = ...) -> str: ...
     def show_task(self, task_id: str) -> dict[str, Any]: ...
-    def show_gateways_and_servers(self, *, details_level: str = ...) -> list[dict[str, Any]]: ...
+    def show_firewalls_and_servers(self, *, details_level: str = ...) -> list[dict[str, Any]]: ...
 
 
 MgmtClientFactory = Callable[..., MgmtClientContext]
@@ -129,8 +129,8 @@ def _confirm_target_identity(client: MgmtClientContext, host: Host) -> str:
     server's own object database — not against anything this tool configured.
     Without this check, a local inventory row is only a name plus a credential
     set: point one at any address (or none), name it after a real SIC-trusted
-    gateway, and the bootstrap script's uid-0 ``adminRole`` account lands on
-    that real gateway instead. The local ``address`` is the only field that
+    firewall, and the bootstrap script's uid-0 ``adminRole`` account lands on
+    that real firewall instead. The local ``address`` is the only field that
     ties a row to a specific device, so it has to be the thing we verify
     against before borrowing the management server's SIC trust.
 
@@ -138,12 +138,12 @@ def _confirm_target_identity(client: MgmtClientContext, host: Host) -> str:
     mismatch raises rather than proceeding."""
     matches = [
         obj
-        for obj in client.show_gateways_and_servers()
+        for obj in client.show_firewalls_and_servers()
         if str(obj.get("name") or "").strip() == host.name
     ]
     if not matches:
         raise InventoryError(
-            f"the management server has no gateway/server object named {host.name!r} — "
+            f"the management server has no firewall/server object named {host.name!r} — "
             "refusing to push credentials to a target it can't resolve"
         )
     if len(matches) > 1:
@@ -201,7 +201,7 @@ def _decode_task_output(task: dict[str, Any]) -> tuple[bool, str]:
     return ok, message
 
 
-class GatewayBootstrapService:
+class FirewallBootstrapService:
     """Preview and execute a credential-set bootstrap onto a firewall via
     the Management API's ``run-script``."""
 
@@ -353,7 +353,7 @@ class GatewayBootstrapService:
                 if not ok:
                     ctx.log(f"raw show-task response: {task!r}", level="warning")
                     raise TransportError(f"bootstrap script reported a failure: {message}")
-                ctx.log(f"gateway response: {message}")
+                ctx.log(f"firewall response: {message}")
                 return
             if status.lower() in _TASK_FAILURE:
                 _, message = _decode_task_output(task)
@@ -362,4 +362,4 @@ class GatewayBootstrapService:
             ctx.raise_if_cancelled()
 
 
-__all__ = ["JOB_BOOTSTRAP_CREDENTIALS", "GatewayBootstrapService"]
+__all__ = ["JOB_BOOTSTRAP_CREDENTIALS", "FirewallBootstrapService"]

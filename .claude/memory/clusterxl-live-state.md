@@ -43,8 +43,8 @@ discovery/re-check already used), it's just a new caller.
   - At **discovery time**: `DiscoveryService._discover_firewalls_via_api`
     calls the Management API's `show-simple-clusters` (new
     `ManagementAPIClient.show_simple_clusters`) in the same session as
-    `show-gateways-and-servers`, and `find_cluster_for_gateway()` matches
-    each discovered gateway against a cluster's `members` list (tolerant of
+    `show-gateways-and-servers`, and `find_cluster_for_firewall()` matches
+    each discovered firewall against a cluster's `members` list (tolerant of
     both string and `{"name": ...}` member shapes — the real shape isn't
     confirmed against live gear). This is the *real* SmartConsole cluster
     object name. The discover-firewalls import flow threads it through
