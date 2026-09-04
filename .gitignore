@@ -34,7 +34,7 @@ vault-password*
 *.vault
 
 # --- Customer / site inventory & deployment topology ---------------------
-# Real inventories name management servers, gateways, IPs, and SICs.
+# Real inventories name management servers, firewalls, IPs, and SICs.
 # Only *.example / *.sample templates are allowed to be tracked.
 inventory.y*ml
 inventory/*.y*ml
@@ -48,7 +48,7 @@ environments/
 !sample*.y*ml
 
 # --- CDT artifacts (deployment plans, package repo, results) -------------
-# CDT XML plans and CSV target lists embed gateway names/IPs.
+# CDT XML plans and CSV target lists embed firewall names/IPs.
 cdt_plans/
 deployment_plans/
 *.cdt.xml

@@ -44,7 +44,7 @@ RUN mkdir -p /data && chown 1001:1001 /data
 # which release an image is. VERSION is passed by the release workflow.
 ARG VERSION=dev
 LABEL org.opencontainers.image.title="Convoy" \
-      org.opencontainers.image.description="Orchestration layer for Check Point CDT/CPUSE — staged, health-gated patching across management servers and gateways." \
+      org.opencontainers.image.description="Orchestration layer for Check Point CDT/CPUSE — staged, health-gated patching across management servers and firewalls." \
       org.opencontainers.image.source="https://github.com/jburanen/Convoy" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="${VERSION}"

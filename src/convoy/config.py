@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 from .envcompat import compat_env
 from .errors import ConfigError
@@ -29,8 +29,16 @@ class DeploymentDefaults(BaseModel):
     dry_run: bool = True
     """Mutating operations preview by default; real execution is opt-in."""
 
-    max_concurrent_gateways: int = Field(default=2, ge=1)
-    """Blast-radius cap: how many gateways CDT may target at once."""
+    max_concurrent_firewalls: int = Field(
+        default=2,
+        ge=1,
+        # Named max_concurrent_gateways before v1.1.0; an existing config.yaml
+        # still using that key keeps working rather than silently falling back
+        # to the default — this one caps blast radius, so a value quietly
+        # reverting to 2 is exactly the kind of surprise to avoid.
+        validation_alias=AliasChoices("max_concurrent_firewalls", "max_concurrent_gateways"),
+    )
+    """Blast-radius cap: how many firewalls CDT may target at once."""
 
     # NOTE: reboot_after_install / stop_on_first_failure / snapshot_before_install
     # used to be declared here and shipped in config.example.yaml. Nothing ever
@@ -61,7 +69,7 @@ class Paths(BaseModel):
 
 class EnvironmentDef(BaseModel):
     """One independent management environment: its own inventory of management
-    servers (and thus its own CDT-discovered gateways) and its own credential
+    servers (and thus its own CDT-discovered firewalls) and its own credential
     namespace. Packages and the underlying database stay shared."""
 
     name: str = Field(pattern=r"[a-z0-9][a-z0-9_-]{0,31}")

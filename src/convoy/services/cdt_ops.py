@@ -1,4 +1,4 @@
-"""CDT service (the gateway-fleet subsystem), driven from a management server.
+"""CDT service (the firewall-fleet subsystem), driven from a management server.
 
 Operator flow the web UI exposes (see .claude/memory/cdt-cpuse-domain.md):
 
@@ -195,11 +195,11 @@ class CDTService:
         triggered_by: str | None = None,
     ) -> JobRecord:
         """The real fleet deployment. ``confirmed`` must be True — this touches
-        every gateway in the candidates list, in CSV order."""
+        every firewall in the candidates list, in CSV order."""
         if not confirmed:
             raise JobError(
                 "execute requires explicit confirmation — it deploys to every "
-                "gateway in the candidates list"
+                "firewall in the candidates list"
             )
         connector = self.registry.get(environment)
         host = connector.mgmt_host(host_name)

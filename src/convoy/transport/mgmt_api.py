@@ -3,7 +3,7 @@
 Wraps the management server's ``web_api`` (the same surface ``mgmt_cli`` drives).
 Used for management-plane facts the orchestrator needs around a deployment — today
 its first real consumer is estate **discovery** (``show-gateways-and-servers``);
-gateway policy status etc. remain TODOs below.
+firewall policy status etc. remain TODOs below.
 
 Kept deliberately thin per .claude/memory/architecture.md: it logs in, POSTs a
 command, returns parsed JSON, logs out. All mapping/decision logic lives in the
@@ -63,7 +63,7 @@ LOG_API_CALLS_ENV = "CONVOY_LOG_API_CALLS"
 # "password-hash", "api_key", "session-id" — and, worst, "script". The
 # credential-bootstrap run-script payload carries the whole clish script
 # including `set user <u> password-hash $6$...`, so with exact matching, turning
-# on CONVOY_LOG_API_CALLS wrote a crackable hash of a gateway's admin
+# on CONVOY_LOG_API_CALLS wrote a crackable hash of a firewall's admin
 # password into `docker compose logs` at WARNING level.
 _SENSITIVE_KEY_PARTS = (
     "password",
@@ -251,20 +251,22 @@ class ManagementAPIClient:
             )
         return objects
 
-    def show_gateways_and_servers(self, *, details_level: str = "full") -> list[dict[str, Any]]:
-        """Return every gateway/server object the management database knows about.
+    def show_firewalls_and_servers(self, *, details_level: str = "full") -> list[dict[str, Any]]:
+        """Return every firewall/server object the management database knows about.
 
         Pages through the result set (``show-gateways-and-servers`` caps each page)
         and returns the concatenated ``objects`` list untouched — mapping object
-        types to roles is the service layer's job."""
+        types to roles is the service layer's job. The command name keeps Check
+        Point's own "gateways" spelling because it is their wire protocol; the
+        method this tool calls it through does not."""
         return self._paged_objects("show-gateways-and-servers", {"details-level": details_level})
 
     def show_simple_clusters(self, *, details_level: str = "full") -> list[dict[str, Any]]:
         """Return every ClusterXL/VRRP cluster object the management database
         knows about, each with its ``members`` list — used to resolve a
-        gateway's real cluster object name (the SmartConsole name, unlike the
+        firewall's real cluster object name (the SmartConsole name, unlike the
         peer-hostname stand-in ``clusterxl.py`` builds from live `cphaprob`
-        output). Paged the same way as ``show_gateways_and_servers``."""
+        output). Paged the same way as ``show_firewalls_and_servers``."""
         return self._paged_objects("show-simple-clusters", {"details-level": details_level})
 
     def show_domains(self) -> list[dict[str, Any]]:
@@ -273,7 +275,7 @@ class ManagementAPIClient:
         Only meaningful for a session logged into the MDS system context (no
         ``domain`` in the login payload) — ``show-domains`` operates above any
         single Domain/Global scope. Paged the same way as
-        ``show_gateways_and_servers``."""
+        ``show_firewalls_and_servers``."""
         objects: list[dict[str, Any]] = []
         offset = 0
         while True:
@@ -306,13 +308,13 @@ class ManagementAPIClient:
     def run_script(
         self, script: str, targets: list[str], *, script_name: str = "convoy-run"
     ) -> str:
-        """Execute ``script`` (bash) on each of ``targets`` (gateway names)
+        """Execute ``script`` (bash) on each of ``targets`` (firewall names)
         via SIC — no SSH needed. Returns a ``task-id`` to poll via
         ``show_task``.
 
         Requires a write-capable (``read_only=False``) session — this
         mutates the target(s). ``show-task``'s response shape was confirmed
-        against live gear 2026-08-18 (see services/gateway_bootstrap.py) —
+        against live gear 2026-08-18 (see services/firewall_bootstrap.py) —
         but that verification used ``mgmt_cli``, which auto-polls and prints
         the *completed* task, not ``run-script``'s own immediate response.
         A live 2026-08-18 failure (``run-script returned no task-id``) showed

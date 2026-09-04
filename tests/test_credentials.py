@@ -143,7 +143,7 @@ def test_ssh_set_without_a_username_is_rejected(creds: CredentialStore) -> None:
     """The set's username is what logs in; blank falls back to the host's own
     Host.ssh_user, a field the UI hides and stops maintaining once storage is
     enabled — so it holds whatever stale value was last there. Operator-reported
-    2026-08-27: a Spark gateway kept logging in as `admin` while its assigned
+    2026-08-27: a Spark firewall kept logging in as `admin` while its assigned
     set named a different account."""
     with pytest.raises(CredentialError, match="needs an SSH username"):
         creds.put_set("default", "nouser", ssh_password="pw", expert_password="expert-pw")

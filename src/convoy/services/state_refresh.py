@@ -54,7 +54,7 @@ logger = get_logger(__name__)
 # Every job kind that moves a package onto a host or changes what is installed
 # on it — refreshed on ANY terminal status, not just success (operator-directed,
 # 2026-08-28). cdt.* is deliberately absent: a CDT run acts on a fleet of
-# gateways discovered at deploy time, none of which is the job's target host.
+# firewalls discovered at deploy time, none of which is the job's target host.
 REFRESH_AFTER_JOB_KINDS = frozenset(
     {
         JOB_IMPORT,

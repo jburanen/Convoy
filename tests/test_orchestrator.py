@@ -14,21 +14,21 @@ def test_plan_starts_with_management_and_is_dry_by_default(
     orch = Orchestrator(inventory, config)
     plan = orch.build_plan("Check_Point_R81.20_JHF_T99.tgz")
     assert plan.dry_run is True
-    # Management is patched (and post-checked) before any gateway deploy.
+    # Management is patched (and post-checked) before any firewall deploy.
     kinds = [s.kind for s in plan.steps]
     assert kinds[0] is StepKind.PRECHECK
     assert StepKind.PATCH_MANAGEMENT in kinds
     first_mgmt = kinds.index(StepKind.PATCH_MANAGEMENT)
-    first_deploy = kinds.index(StepKind.DEPLOY_GATEWAYS)
+    first_deploy = kinds.index(StepKind.DEPLOY_FIREWALLS)
     assert first_mgmt < first_deploy
 
 
-def test_gateway_batches_respect_blast_radius(inventory: Inventory) -> None:
+def test_firewall_batches_respect_blast_radius(inventory: Inventory) -> None:
     cfg = Config()
-    cfg.defaults.max_concurrent_gateways = 1
+    cfg.defaults.max_concurrent_firewalls = 1
     orch = Orchestrator(inventory, cfg)
     plan = orch.build_plan("pkg")
-    deploy_steps = [s for s in plan.steps if s.kind is StepKind.DEPLOY_GATEWAYS]
+    deploy_steps = [s for s in plan.steps if s.kind is StepKind.DEPLOY_FIREWALLS]
     assert all(len(s.targets) <= 1 for s in deploy_steps)
 
 

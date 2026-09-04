@@ -68,7 +68,7 @@ BASIC_AUTH_USER_ENV = "BASIC_AUTH_USER"
 BASIC_AUTH_PASSWORD_ENV = "BASIC_AUTH_PASSWORD"
 BASIC_AUTH_DISABLE_ENV = "BASIC_AUTH_DISABLE"
 # Running with NO authentication exposes every destructive route — credential
-# bootstrap onto gateways, CDT execute, environment deletion — to anyone who can
+# bootstrap onto firewalls, CDT execute, environment deletion — to anyone who can
 # reach the port. BASIC_AUTH_DISABLE alone is too easy to set while thinking it
 # only relaxes a login prompt, so it must be paired with this second, explicitly
 # named acknowledgement. Set only one and the login gate stays up (fail closed),

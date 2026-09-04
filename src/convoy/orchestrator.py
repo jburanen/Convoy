@@ -22,7 +22,7 @@ log = get_logger(__name__)
 class StepKind(StrEnum):
     PRECHECK = "precheck"
     PATCH_MANAGEMENT = "patch_management"  # CPUSE, local to a mgmt server
-    DEPLOY_GATEWAYS = "deploy_gateways"  # CDT, from a mgmt server to gateways
+    DEPLOY_FIREWALLS = "deploy_firewalls"  # CDT, from a mgmt server to firewalls
     POSTCHECK = "postcheck"
 
 
@@ -59,7 +59,7 @@ class Orchestrator:
     # -- planning (pure; safe to run anytime) ----------------------------------
 
     def build_plan(self, package_name: str, *, dry_run: bool | None = None) -> RunPlan:
-        """Compose an ordered plan: prechecks → mgmt → gateways (batched) → postchecks.
+        """Compose an ordered plan: prechecks → mgmt → firewalls (batched) → postchecks.
 
         Cluster members are ordered standby-first and split across batches so no two
         members of the same cluster are ever patched together.
@@ -69,8 +69,8 @@ class Orchestrator:
             dry_run=self.config.defaults.dry_run if dry_run is None else dry_run,
         )
         mgmt = [h.name for h in self.inventory.hosts_by_role(Role.MANAGEMENT)]
-        gateways = [h.name for h in self.inventory.hosts_by_role(Role.GATEWAY)]
-        gateways += [h.name for h in self.inventory.hosts_by_role(Role.CLUSTER_MEMBER)]
+        firewalls = [h.name for h in self.inventory.hosts_by_role(Role.FIREWALL)]
+        firewalls += [h.name for h in self.inventory.hosts_by_role(Role.CLUSTER_MEMBER)]
         # Role.SPARK_FIREWALL is deliberately excluded — CDT bulk-deploy
         # mechanics don't apply to Quantum Spark (Gaia Embedded) appliances
         # yet. Not an oversight; see inventory.py's Role.SPARK_FIREWALL note.
@@ -79,20 +79,22 @@ class Orchestrator:
             plan.steps.append(Step(StepKind.PRECHECK, mgmt, "pre-checks on management servers"))
             plan.steps.append(Step(StepKind.PATCH_MANAGEMENT, mgmt, "CPUSE patch mgmt servers"))
             plan.steps.append(Step(StepKind.POSTCHECK, mgmt, "post-checks on management servers"))
-        for batch in self._batches(gateways):
-            plan.steps.append(Step(StepKind.PRECHECK, batch, "pre-checks on gateway batch"))
-            plan.steps.append(Step(StepKind.DEPLOY_GATEWAYS, batch, "CDT deploy to gateway batch"))
-            plan.steps.append(Step(StepKind.POSTCHECK, batch, "post-checks on gateway batch"))
+        for batch in self._batches(firewalls):
+            plan.steps.append(Step(StepKind.PRECHECK, batch, "pre-checks on firewall batch"))
+            plan.steps.append(
+                Step(StepKind.DEPLOY_FIREWALLS, batch, "CDT deploy to firewall batch")
+            )
+            plan.steps.append(Step(StepKind.POSTCHECK, batch, "post-checks on firewall batch"))
         return plan
 
-    def _batches(self, gateways: list[str]) -> list[list[str]]:
-        """Split gateways into blast-radius-bounded batches.
+    def _batches(self, firewalls: list[str]) -> list[list[str]]:
+        """Split firewalls into blast-radius-bounded batches.
 
         TODO: make cluster-aware — guarantee members of the same cluster land in
         different batches, standby first. For now, a simple size cap.
         """
-        size = self.config.defaults.max_concurrent_gateways
-        return [gateways[i : i + size] for i in range(0, len(gateways), size)]
+        size = self.config.defaults.max_concurrent_firewalls
+        return [firewalls[i : i + size] for i in range(0, len(firewalls), size)]
 
     # -- execution (mutating; gated) -------------------------------------------
 

@@ -1,10 +1,10 @@
-Convoy is an orchestration layer for Check Point's **Central Deployment Tool (CDT)** and **CPUSE**. It coordinates deployment of patches and upgrades — hotfixes, Jumbo Hotfix Accumulators, and major-version upgrades — across fleets of Security Management Servers and Security Gateways, through a web interface.  
+Convoy is an orchestration layer for Check Point's **Central Deployment Tool (CDT)** and **CPUSE**. It coordinates deployment of patches and upgrades — hotfixes, Jumbo Hotfix Accumulators, and major-version upgrades — across fleets of Security Management Servers and firewalls, through a web interface.  
 
 > This is an internal operations tool for authorized maintenance on infrastructure you own. It *drives* Check Point's own CDT/CPUSE agents; it does not replace them.
 
 ## Scope
 
-CPUSE operates one host at a time and lacks fleet-level orchestration. CDT is integrated into SmartConsole for limited use cases including single gateways and ClusterXL, but the more sophisticated operations lack a UI. This tool provides a UI for patching on-premise Smart-1 servers and their managed firewalls.
+CPUSE operates one host at a time and lacks fleet-level orchestration. CDT is integrated into SmartConsole for limited use cases including single firewalls and ClusterXL, but the more sophisticated operations lack a UI. This tool provides a UI for patching on-premise Smart-1 servers and their managed firewalls.
 
 ### Supported
 Patching is supported for:  
@@ -86,7 +86,7 @@ This tool has the capability to alter or negatively impact your management serve
 - **No snapshots, no maintenance windows** — the tool does not take rollback snapshots and does not gate runs to an approved window. 
 - **Auditable** — tool actions and job results are tracked on the Jobs tab.
 
-> **Authorization model:** every authenticated user has full destructive authority over every environment — there are no roles or per-environment permissions. Under LDAP, that means **every member of `CONVOY_LDAP_REQUIRED_GROUP`** can patch, reboot, bootstrap admin accounts onto gateways, and delete environments. Scope that group accordingly. Per-environment RBAC is a v2 item.
+> **Authorization model:** every authenticated user has full destructive authority over every environment — there are no roles or per-environment permissions. Under LDAP, that means **every member of `CONVOY_LDAP_REQUIRED_GROUP`** can patch, reboot, bootstrap admin accounts onto firewalls, and delete environments. Scope that group accordingly. Per-environment RBAC is a v2 item.
 
 > Prior to the v1 initial release a policy will be implemented to require code security review by an independent agentic analyst prior to release publication.
 
@@ -96,7 +96,7 @@ These gates define the major version releases - the milestones may change in the
 
 ### Milestones to reach v2
 
-◻️ CDT deployment to Gaia/Force gateways  
+◻️ CDT deployment to Gaia/Force firewalls  
 ◻️ Export report of current patching state of full env state  
 ◻️ Export report of job history (with filtering)  
 
@@ -108,7 +108,6 @@ These gates define the major version releases - the milestones may change in the
 ✨ Add logic to display a warning on mobile devices that the UI of this tool does not scale down well (by design) and you should use it on a larger display.   
 🤞 RADIUS auth option  
 🤞 Timed/scheduled install actions  
-✨ Standarize firewall nomenclature (discard Gateway terminology)  
 ✨ Standarize all user questions or confirmations to the modal UI and avoid using browser UI elements  
 🤞 Separate AD group auth per environment?  
 
@@ -123,12 +122,12 @@ All clear here!
 🤞 Add deployment agent upgrade option  
 🤞 Some kind of sledgehammer to swing to release config/job lock from management server and firewalls if a job gets stranded/stuck  
 ✨ Separate firewalls into two panels? Spark and non-Spark  
-🤞 Leverage the gateway family identifier built into Spark filenames to limit choices  
+🤞 Leverage the firewall family identifier built into Spark filenames to limit choices  
 🤞 Change "test creds" to "test connectivity" and also test ping, suggest to allow ping if it fails  
 ✨ Make test connectivity/creds hidded after successful test  
 
 #### CDT Patching
-Plan coming soon.  
+Plan to be developed for v2 release    
 
 #### Jobs
 🤞 Add syslog output  

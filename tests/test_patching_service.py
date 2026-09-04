@@ -82,7 +82,7 @@ def inventory() -> Inventory:
                 hosts=[
                     Host(name="mgmt-01", address="192.0.2.10", role=Role.MANAGEMENT),
                     Host(name="mgmt-02", address="192.0.2.11", role=Role.MDS),
-                    Host(name="fw-01", address="192.0.2.20", role=Role.GATEWAY),
+                    Host(name="fw-01", address="192.0.2.20", role=Role.FIREWALL),
                     Host(name="spark-01", address="192.0.2.30", role=Role.SPARK_FIREWALL),
                 ],
             )
@@ -133,7 +133,7 @@ def _run(service: PatchingService) -> None:
 # -- queries ---------------------------------------------------------------------
 
 
-def test_management_servers_excludes_gateways(service: PatchingService) -> None:
+def test_management_servers_excludes_firewalls(service: PatchingService) -> None:
     assert [h.name for h in service.management_servers("default")] == ["mgmt-01", "mgmt-02"]
 
 
@@ -201,7 +201,7 @@ def test_submit_import_allows_a_credentialed_spark_firewall_host(
 def test_submit_import_allows_a_credentialed_firewall_host(
     service: PatchingService, store: Store
 ) -> None:
-    # Firewalls (gateway/cluster_member role) are patched directly via CPUSE
+    # Firewalls (firewall/cluster_member role) are patched directly via CPUSE
     # exactly like management servers — patchable_host doesn't reject them.
     row = store.get_credential_set_by_name("default", "primary")
     assert row is not None

@@ -9,7 +9,7 @@ metadata:
 Check Point firewalls and security infrastructure. It wraps and coordinates Check
 Point's **Central Deployment Tool (CDT)** to roll out patches and upgrades
 (hotfixes, Jumbo Hotfix Accumulators, and major-version upgrades) across fleets of
-**Security Management Servers and Security Gateways**.
+**Security Management Servers and firewalls**.
 
 **Why it exists:** CDT and CPUSE are powerful but operate one command / one plan at
 a time and lack fleet-level guardrails. Real deployments need staged rollouts,

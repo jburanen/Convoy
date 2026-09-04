@@ -46,7 +46,7 @@ class ClusterMemberState:
 def parse_cluster_state(stdout: str) -> ClusterMemberState | None:
     """Parse `show cluster state` output. Returns None if it contains no
     recognizable member table — e.g. the host isn't a cluster member at all
-    (a standalone gateway's exact non-member output isn't documented, so this
+    (a standalone firewall's exact non-member output isn't documented, so this
     treats anything unparseable the same way: not a cluster member, not an
     error). Tolerant by design, like cpuse.parse_packages: an unrecognized
     line is skipped rather than failing the whole parse."""

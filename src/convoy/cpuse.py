@@ -192,7 +192,7 @@ class CPUSE:
     def cluster_state(self) -> ClusterMemberState | None:
         """`show cluster state` → this member's live ClusterXL role plus a
         stand-in cluster name (see clusterxl.py for why it isn't the real
-        SmartConsole cluster object name). Best-effort: a standalone gateway
+        SmartConsole cluster object name). Best-effort: a standalone firewall
         either errors or prints no recognizable member table, either way
         treated as "not a cluster member" rather than raised — this backs a
         display-only status line, so it should never fail a refresh."""

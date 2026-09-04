@@ -229,7 +229,7 @@ class CredentialStore:
             # .claude/memory/ssh-username-source-of-truth.md was written about,
             # through the hole that fix left open: it made the set authoritative
             # but left the set free to say nothing. Operator-specified
-            # 2026-08-27 after a Spark gateway kept logging in as `admin`
+            # 2026-08-27 after a Spark firewall kept logging in as `admin`
             # despite its assigned set naming a different account.
             raise CredentialError(
                 "a credential set with SSH credentials needs an SSH username — it is "

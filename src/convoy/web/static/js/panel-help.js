@@ -99,12 +99,12 @@ const PANEL_HELP = {
     title: "Firewalls",
     brief:
       "Direct CPUSE patching, one host at a time over SSH — best for a small number of " +
-      "standalone gateways or cluster members.",
+      "standalone firewalls or cluster members.",
     full:
-      "Gateways can also be patched from SmartConsole or Web SmartConsole — see " +
+      "Firewalls can also be patched from SmartConsole or Web SmartConsole — see " +
       "<a class=\"sk-link\" href=\"https://support.checkpoint.com/results/sk/sk170314\" " +
-      "target=\"_blank\" rel=\"noopener\">sk170314</a>. For large numbers of gateways, use the " +
-      "<strong>Gateways</strong> tab (CDT bulk fleet push, planned for version 2). Add " +
+      "target=\"_blank\" rel=\"noopener\">sk170314</a>. For large numbers of firewalls, use the " +
+      "<strong>Bulk Patching (CDT)</strong> tab (planned for version 2). Add " +
       "firewalls manually or discover them from a Primary SMS/MDS. The detected state shown " +
       "below (last row per firewall) stays cached until refreshed — automatically when a " +
       "firewall is first added or imported from a discovery scan, and after any package " +
@@ -113,8 +113,8 @@ const PANEL_HELP = {
       "set; environments with credential storage disabled always refresh by hand.",
   },
   cdt: {
-    title: "Gateway deployment (CDT)",
-    brief: "CDT runs on a management server and bulk-pushes a package to many gateways.",
+    title: "Firewall deployment (CDT)",
+    brief: "CDT runs on a management server and bulk-pushes a package to many firewalls.",
     full:
       "Flow: <strong>Stage</strong> (upload package + write CDT config) → " +
       "<strong>Generate</strong> candidates → <strong>Load</strong>, reorder and trim the " +

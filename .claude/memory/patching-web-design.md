@@ -9,7 +9,7 @@ The tool handles **two patching subsystems** over one shared service core. The w
 UI is the primary interface (see [[architecture]]); the CLI is secondary.
 
 ## Two subsystems
-- **CDT subsystem** — gateways and other CDT-patchable hosts. Fan-out from a mgmt
+- **CDT subsystem** — firewalls and other CDT-patchable hosts. Fan-out from a mgmt
   server: build XML plan + candidates CSV, invoke CDT, tail status. See
   [[cdt-cpuse-domain]]. Code: `cdt.py`.
 - **CPUSE-local subsystem** — the **management servers themselves**, which CDT does
@@ -116,7 +116,7 @@ UI is the primary interface (see [[architecture]]); the CLI is secondary.
   `env_hosts` tables (migration v4); managed by `services/environments.py`
   (`EnvironmentManager`). **Seeded once** from config.yaml + inventory files on
   first run (meta flag `environments_seeded`), then the DB is authoritative and
-  config files are ignored. Only management/mds hosts are stored (gateways come
+  config files are ignored. Only management/mds hosts are stored (firewalls come
   from CDT). UI split (v0.5.0/v0.8.0, operator-directed): the picker's "Manage
   Environments…" entry opens a **create + rename modal**; server add/remove and
   environment deletion live on the **Provisioning tab**, scoped to the picker's
@@ -345,7 +345,7 @@ environment RBAC** — environments are DB rows partly for that reason.
     **Update, 2026-08-18: `prov.*` no longer queues either** (operator-reported —
     a `prov.add`/`prov.edit`/`prov.delete` job shared `JobRunner`'s bounded
     concurrency pool with genuinely slow `cpuse.*`/`cdt.*` device jobs, so e.g.
-    importing a gateway found by discovery could sit queued behind an unrelated
+    importing a firewall found by discovery could sit queued behind an unrelated
     server's in-progress JHF install with nothing to do with it). Same
     conversion as `cred.*`/`pkgs.*` before it: `ProvisioningJobService`
     (`services/prov_ops.py`) no longer takes a `runner` and calls

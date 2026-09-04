@@ -12,7 +12,7 @@ from convoy.errors import CredentialError, InventoryError
 from convoy.inventory import Host, Inventory, Role, Site
 from convoy.jobs import JobRunner
 from convoy.services.common import EnvironmentRegistry, HostConnector
-from convoy.services.gateway_bootstrap import GatewayBootstrapService
+from convoy.services.firewall_bootstrap import FirewallBootstrapService
 from convoy.services.provisioning import REDACTED_HASH
 from convoy.store import JobStatus, Store
 
@@ -60,7 +60,7 @@ def _run(runner: JobRunner) -> None:
 def test_preview_renders_gaia_user_commands_from_assigned_set(
     store: Store, creds: CredentialStore, runner: JobRunner
 ) -> None:
-    inv = _inventory(Host(name="fw-01", address="192.0.2.20", role=Role.GATEWAY))
+    inv = _inventory(Host(name="fw-01", address="192.0.2.20", role=Role.FIREWALL))
     creds.put_set(
         "default",
         "primary",
@@ -69,7 +69,7 @@ def test_preview_renders_gaia_user_commands_from_assigned_set(
         expert_password="expert-pw",
     )
     _assign(store, inv, "fw-01", "primary")
-    service = GatewayBootstrapService(registry=_registry(inv, creds), store=store, runner=runner)
+    service = FirewallBootstrapService(registry=_registry(inv, creds), store=store, runner=runner)
 
     commands = service.preview_bootstrap_commands("default", "fw-01")
 
@@ -84,7 +84,7 @@ def test_preview_renders_gaia_user_commands_from_assigned_set(
 def test_preview_rejects_private_key_only_credential_set(
     store: Store, creds: CredentialStore, runner: JobRunner
 ) -> None:
-    inv = _inventory(Host(name="fw-01", address="192.0.2.20", role=Role.GATEWAY))
+    inv = _inventory(Host(name="fw-01", address="192.0.2.20", role=Role.FIREWALL))
     creds.put_set(
         "default",
         "keyset",
@@ -93,7 +93,7 @@ def test_preview_rejects_private_key_only_credential_set(
         expert_password="expert-pw",
     )
     _assign(store, inv, "fw-01", "keyset")
-    service = GatewayBootstrapService(registry=_registry(inv, creds), store=store, runner=runner)
+    service = FirewallBootstrapService(registry=_registry(inv, creds), store=store, runner=runner)
 
     with pytest.raises(CredentialError, match="private key, not a"):
         service.preview_bootstrap_commands("default", "fw-01")
@@ -102,8 +102,8 @@ def test_preview_rejects_private_key_only_credential_set(
 def test_preview_requires_an_assigned_credential_set(
     store: Store, creds: CredentialStore, runner: JobRunner
 ) -> None:
-    inv = _inventory(Host(name="fw-01", address="192.0.2.20", role=Role.GATEWAY))
-    service = GatewayBootstrapService(registry=_registry(inv, creds), store=store, runner=runner)
+    inv = _inventory(Host(name="fw-01", address="192.0.2.20", role=Role.FIREWALL))
+    service = FirewallBootstrapService(registry=_registry(inv, creds), store=store, runner=runner)
 
     with pytest.raises(CredentialError, match="no credential assigned"):
         service.preview_bootstrap_commands("default", "fw-01")
@@ -113,7 +113,7 @@ def test_preview_rejects_unknown_firewall(
     store: Store, creds: CredentialStore, runner: JobRunner
 ) -> None:
     inv = _inventory()
-    service = GatewayBootstrapService(registry=_registry(inv, creds), store=store, runner=runner)
+    service = FirewallBootstrapService(registry=_registry(inv, creds), store=store, runner=runner)
 
     with pytest.raises(InventoryError):
         service.preview_bootstrap_commands("default", "nope")
@@ -123,7 +123,7 @@ def test_preview_rejects_non_firewall_role(
     store: Store, creds: CredentialStore, runner: JobRunner
 ) -> None:
     inv = _inventory(Host(name="mgmt-01", address="192.0.2.10", role=Role.MANAGEMENT))
-    service = GatewayBootstrapService(registry=_registry(inv, creds), store=store, runner=runner)
+    service = FirewallBootstrapService(registry=_registry(inv, creds), store=store, runner=runner)
 
     with pytest.raises(InventoryError, match="not a firewall"):
         service.preview_bootstrap_commands("default", "mgmt-01")
@@ -143,7 +143,7 @@ def test_preview_rejects_spark_firewall(
         expert_password="expert-pw",
     )
     _assign(store, inv, "spark-01", "primary")
-    service = GatewayBootstrapService(registry=_registry(inv, creds), store=store, runner=runner)
+    service = FirewallBootstrapService(registry=_registry(inv, creds), store=store, runner=runner)
 
     with pytest.raises(InventoryError, match="Spark firewall"):
         service.preview_bootstrap_commands("default", "spark-01")
@@ -161,7 +161,7 @@ def test_submit_bootstrap_rejects_spark_firewall(
         expert_password="expert-pw",
     )
     _assign(store, inv, "spark-01", "primary")
-    service = GatewayBootstrapService(registry=_registry(inv, creds), store=store, runner=runner)
+    service = FirewallBootstrapService(registry=_registry(inv, creds), store=store, runner=runner)
 
     with pytest.raises(InventoryError, match="Spark firewall"):
         service.submit_bootstrap("default", "spark-01")
@@ -179,7 +179,7 @@ def test_preview_spark_admin_commands_renders_add_administrator(
         expert_password="expert-pw",
     )
     _assign(store, inv, "spark-01", "primary")
-    service = GatewayBootstrapService(registry=_registry(inv, creds), store=store, runner=runner)
+    service = FirewallBootstrapService(registry=_registry(inv, creds), store=store, runner=runner)
 
     commands = service.preview_spark_admin_commands("default", "spark-01")
 
@@ -191,7 +191,7 @@ def test_preview_spark_admin_commands_renders_add_administrator(
 def test_preview_spark_admin_commands_rejects_non_spark_firewall(
     store: Store, creds: CredentialStore, runner: JobRunner
 ) -> None:
-    inv = _inventory(Host(name="fw-01", address="192.0.2.20", role=Role.GATEWAY))
+    inv = _inventory(Host(name="fw-01", address="192.0.2.20", role=Role.FIREWALL))
     creds.put_set(
         "default",
         "primary",
@@ -200,7 +200,7 @@ def test_preview_spark_admin_commands_rejects_non_spark_firewall(
         expert_password="expert-pw",
     )
     _assign(store, inv, "fw-01", "primary")
-    service = GatewayBootstrapService(registry=_registry(inv, creds), store=store, runner=runner)
+    service = FirewallBootstrapService(registry=_registry(inv, creds), store=store, runner=runner)
 
     with pytest.raises(InventoryError, match="not a Spark firewall"):
         service.preview_spark_admin_commands("default", "fw-01")
@@ -210,7 +210,7 @@ def test_preview_spark_admin_commands_rejects_non_spark_firewall(
 #
 # Response shape below is the REAL show-task payload for a run-script task,
 # verified against live gear 2026-08-18 (see the module docstring in
-# services/gateway_bootstrap.py) — not a guess.
+# services/firewall_bootstrap.py) — not a guess.
 
 
 def _b64(text: str) -> str:
@@ -242,7 +242,7 @@ class _FakeMgmtClient:
     def __exit__(self, *exc: object) -> None:
         return None
 
-    def show_gateways_and_servers(self, *, details_level: str = "full") -> list[dict[str, Any]]:
+    def show_firewalls_and_servers(self, *, details_level: str = "full") -> list[dict[str, Any]]:
         return self._objects
 
     def run_script(
@@ -258,7 +258,7 @@ class _FakeMgmtClient:
 
 
 def _succeeded_task(
-    gateway_name: str = "clutch", output: str = "hello-from-run-script\n"
+    firewall_name: str = "clutch", output: str = "hello-from-run-script\n"
 ) -> dict[str, Any]:
     """Mirrors the real show-task response pasted by the operator verbatim
     (trimmed to the fields this code actually reads)."""
@@ -269,7 +269,7 @@ def _succeeded_task(
         "task-details": [
             {
                 "statusCode": "succeeded",
-                "gatewayName": gateway_name,
+                "gatewayName": firewall_name,
                 "responseMessage": _b64(output),
                 "responseError": "",
             }
@@ -300,10 +300,10 @@ def _service_for_job(
     *,
     task_sequence: list[dict[str, Any]],
     objects: list[dict[str, Any]] | None = None,
-) -> GatewayBootstrapService:
+) -> FirewallBootstrapService:
     inv = _inventory(
         Host(name="mgmt-01", address="192.0.2.10", role=Role.PRIMARY_SMS),
-        Host(name="fw-01", address="192.0.2.20", role=Role.GATEWAY),
+        Host(name="fw-01", address="192.0.2.20", role=Role.FIREWALL),
     )
     creds.put_set(
         "default",
@@ -321,7 +321,7 @@ def _service_for_job(
         expert_password="expert-pw",
     )
     _assign(store, inv, "fw-01", "fw-creds")
-    return GatewayBootstrapService(
+    return FirewallBootstrapService(
         registry=_registry(inv, creds),
         store=store,
         runner=runner,
@@ -332,7 +332,7 @@ def _service_for_job(
     )
 
 
-def test_submit_bootstrap_succeeds_and_logs_gateway_output(
+def test_submit_bootstrap_succeeds_and_logs_firewall_output(
     store: Store, creds: CredentialStore, runner: JobRunner
 ) -> None:
     service = _service_for_job(store, creds, runner, task_sequence=[_succeeded_task()])
@@ -385,7 +385,7 @@ def test_do_bootstrap_rejects_private_key_only_set_before_any_api_call(
 ) -> None:
     inv = _inventory(
         Host(name="mgmt-01", address="192.0.2.10", role=Role.PRIMARY_SMS),
-        Host(name="fw-01", address="192.0.2.20", role=Role.GATEWAY),
+        Host(name="fw-01", address="192.0.2.20", role=Role.FIREWALL),
     )
     creds.put_set(
         "default",
@@ -410,7 +410,7 @@ def test_do_bootstrap_rejects_private_key_only_set_before_any_api_call(
         calls.append(client)
         return client
 
-    service = GatewayBootstrapService(
+    service = FirewallBootstrapService(
         registry=_registry(inv, creds),
         store=store,
         runner=runner,
@@ -431,7 +431,7 @@ def test_decode_task_output_refuses_to_confirm_without_task_details() -> None:
     """A task-level "succeeded" is not evidence the SCRIPT succeeded — that
     lives in task-details, and confirming without it would be the same
     confirmed-on-no-evidence bug the security review closed elsewhere."""
-    from convoy.services.gateway_bootstrap import _decode_task_output
+    from convoy.services.firewall_bootstrap import _decode_task_output
 
     ok, message = _decode_task_output(
         {"status": "succeeded", "progress-percentage": 100, "comments": "Completed"}
@@ -443,7 +443,7 @@ def test_decode_task_output_refuses_to_confirm_without_task_details() -> None:
 
 
 def test_decode_task_output_handles_unexpected_shape() -> None:
-    from convoy.services.gateway_bootstrap import _decode_task_output
+    from convoy.services.firewall_bootstrap import _decode_task_output
 
     ok, message = _decode_task_output({"status": "succeeded", "task-details": []})
     assert ok is False
@@ -462,8 +462,8 @@ def test_bootstrap_refuses_when_mgmt_resolves_name_to_a_different_address(
     store: Store, creds: CredentialStore, runner: JobRunner
 ) -> None:
     """The attack this blocks: name a local row after a real SIC-trusted
-    gateway, point its address anywhere, and the bootstrap lands on the real
-    gateway instead of the configured one."""
+    firewall, point its address anywhere, and the bootstrap lands on the real
+    firewall instead of the configured one."""
     service = _service_for_job(
         store,
         creds,
@@ -492,7 +492,7 @@ def test_bootstrap_refuses_when_mgmt_does_not_know_the_name(
 
     finished = store.get_job(job.id)
     assert finished.status is JobStatus.FAILED
-    assert "no gateway/server object named" in (finished.error or "")
+    assert "no firewall/server object named" in (finished.error or "")
 
 
 def test_bootstrap_refuses_when_resolved_object_has_no_address(

@@ -169,8 +169,8 @@ def render_spark_admin_commands(
 
 def render_bootstrap_script(username: str, password: str) -> str:
     """The bash script body for reapplying this account's credentials on a
-    gateway via the Management API's ``run-script`` (services/
-    gateway_bootstrap.py) — the same clish commands ``render_gaia_user_commands``
+    firewall via the Management API's ``run-script`` (services/
+    firewall_bootstrap.py) — the same clish commands ``render_gaia_user_commands``
     renders for the Provisioning tab's bootstrap panel, each wrapped
     ``clish -c "..."`` since ``run-script`` executes as bash, not clish —
     unrelated to the account's own login shell (see

@@ -8,7 +8,7 @@ metadata:
 Added 2026-08-24 (operator-directed). Spark (Gaia Embedded) firewalls already
 operated this posture — SSH lands in clish, elevate to `expert` only for the
 specific commands that need it (see [[spark-firmware-patching]]). Every other
-Gaia host (management servers, CPUSE-patched firewalls, CDT-driven gateways)
+Gaia host (management servers, CPUSE-patched firewalls, CDT-driven firewalls)
 worked the opposite way: `services/provisioning.py` set `/bin/bash` as the
 service account's **login** shell, so a plain SSH connect already landed at
 a root-equivalent prompt — no elevation, no expert password ever required.
@@ -166,7 +166,7 @@ FAILED" for this case were rewritten to expect a synchronous raise instead
 
 ## The silent expert-password reader (confirmed on live gear, 2026-08-26)
 
-**Symptom:** every `run_bash` on a full-Gaia gateway hung and failed with
+**Symptom:** every `run_bash` on a full-Gaia firewall hung and failed with
 `timed out waiting for '(?:\[Expert@...\]#\s*$)|(?:[Pp]assword\s*:\s*$)' on
 <host>; output so far: ''`. Surfaced first as "Disk space check for <host>
 failed" from the synchronous pre-import check
@@ -181,7 +181,7 @@ lands in expert mode normally. Gaia Embedded (Spark) answers the first newline
 immediately, which is why Spark patching never hit this — and why it went
 unnoticed: this posture ([[gaia-shell-posture]], v0.60.0, 2026-08-24) shipped
 after the last successful CPUSE import to a Gaia host (2026-08-18), so no
-gateway import had exercised it.
+firewall import had exercised it.
 
 **Fix:** `GaiaExpertSession.enter_expert` waits `_SUBMIT_NUDGE_AFTER` (10s) for
 the password to be acted on; on timeout it sends one bare newline and waits

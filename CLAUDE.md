@@ -8,7 +8,7 @@ An **internal orchestration tool** for organizations running Check Point firewal
 It coordinates Check Point's **Central Deployment Tool (CDT)** (and CPUSE on
 individual Gaia hosts) to deploy patches and upgrades — hotfixes, Jumbo Hotfix
 Accumulators, and major-version upgrades — across fleets of **Security Management
-Servers and Security Gateways**. It is a **defensive, operational** tool for
+Servers and firewalls**. It is a **defensive, operational** tool for
 authorized maintenance on infrastructure the operator owns.
 
 See [.claude/memory/cdt-cpuse-domain.md](.claude/memory/cdt-cpuse-domain.md) for how

@@ -16,7 +16,7 @@ set-api-settings v2.1 — NOT an ``accessibility``/``"minimize"`` parameter
 pair, which an earlier docs-tool lookup fabricated wholesale; operator-
 corrected 2026-07-26), then publishes and restarts the API server (required
 for the new setting to take effect; this briefly drops other API/SmartConsole
-sessions, not gateway policy enforcement).
+sessions, not firewall policy enforcement).
 
 ``diagnose()`` is read-only and synchronous, same shape as
 ``DiscoveryService.list_domains`` — the UI calls it automatically, no

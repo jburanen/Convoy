@@ -39,7 +39,7 @@ revisiting the reasoning.
   spaces (see [[cpuse-package-id-shell-safety]]).
 - **C2:** `run-script` resolves targets by **name** against the management
   server's own object DB, so bootstrap could push a uid-0 `adminRole` account
-  onto any SIC-trusted gateway sharing a name. `_confirm_target_identity()` now
+  onto any SIC-trusted firewall sharing a name. `_confirm_target_identity()` now
   resolves via `show-gateways-and-servers` and asserts the address matches the
   inventory row, failing closed on unknown/ambiguous/addressless objects.
 - **C3:** `inventory.Host` had no validation at all despite a comment in

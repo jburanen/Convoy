@@ -19,7 +19,7 @@ else covered (operator-directed, 2026-08-28):
 
 `REFRESH_AFTER_JOB_KINDS` = cpuse.import / import_cloud / install / uninstall,
 spark.scp, spark.install, pkgs.push_to_repo, prov.connect_primary. `cdt.*` is
-deliberately excluded — a CDT run acts on a fleet of gateways, not on the job's
+deliberately excluded — a CDT run acts on a fleet of firewalls, not on the job's
 target host. `app.js` mirrors this list as `STATE_REFRESH_JOB_KINDS`; a test in
 `tests/test_state_refresh.py` pins the set so the two don't drift.
 

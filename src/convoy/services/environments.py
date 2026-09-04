@@ -5,7 +5,7 @@ web UI can add/edit them at runtime (see .claude/memory/patching-web-design.md).
 On first startup they are **seeded once** from config.yaml + inventory files;
 after that the database is authoritative and the config files are ignored.
 
-CDT's bulk gateway fleet is not stored here — it discovers its own targets at
+CDT's bulk firewall fleet is not stored here — it discovers its own targets at
 deploy time. Firewalls patched directly via CPUSE live in their own table
 (firewalls.py's FirewallManager) but share this module's ``rebuild()`` so both
 kinds of host end up in the same per-environment Inventory/HostConnector.
@@ -389,7 +389,7 @@ def _parse_management_role(role: str) -> Role:
         ) from None
     if parsed not in MANAGEMENT_ROLES:
         raise InventoryError(
-            f"role {role!r} is not a management server role — gateways are "
+            f"role {role!r} is not a management server role — firewalls are "
             "discovered by CDT, not added here"
         )
     return parsed

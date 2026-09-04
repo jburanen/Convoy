@@ -52,7 +52,7 @@ sites:
         role: management
       - name: fw-01
         address: 192.0.2.20
-        role: gateway
+        role: firewall
 """
 
 
@@ -233,7 +233,7 @@ def test_root_serves_static_ui(client: TestClient) -> None:
 def test_status_reports_unlocked_and_counts(client: TestClient) -> None:
     body = client.get("/api/status").json()
     assert body["credentials_unlocked"] is True
-    assert body["management_servers"] == 1  # fw-01 is a gateway, not counted
+    assert body["management_servers"] == 1  # fw-01 is a firewall, not counted
     assert body["environments"] == ["default"]
     assert body["job_archive_path"]  # Jobs tab points the operator here
 
@@ -488,7 +488,7 @@ def test_unknown_environment_is_404(client: TestClient) -> None:
 def test_default_environment_seeded_from_inventory_file(client: TestClient) -> None:
     # The seed imports management servers from the inventory file into the DB.
     servers = client.get("/api/environments/default/servers").json()
-    assert [s["name"] for s in servers] == ["mgmt-01"]  # fw-01 gateway not seeded
+    assert [s["name"] for s in servers] == ["mgmt-01"]  # fw-01 firewall not seeded
     assert servers[0]["role"] == "management"
 
 
@@ -517,10 +517,10 @@ def test_invalid_environment_name_is_400(client: TestClient) -> None:
     assert "invalid environment name" in resp.json()["detail"]
 
 
-def test_add_gateway_role_server_rejected(client: TestClient) -> None:
+def test_add_firewall_role_server_rejected(client: TestClient) -> None:
     # Validation happens inside the prov.add job (services/prov_ops.py), so it
     # surfaces as a failed job, not a synchronous 400 (matches cred.*).
-    job = _add_server(client, name="fw-x", address="192.0.2.70", role="gateway")
+    job = _add_server(client, name="fw-x", address="192.0.2.70", role="firewall")
     assert job["status"] == "failed"
     assert "not a management server role" in job["error"]
 
@@ -529,12 +529,12 @@ def test_add_gateway_role_server_rejected(client: TestClient) -> None:
 
 
 def test_add_list_remove_firewall(client: TestClient) -> None:
-    job = _add_firewall(client, name="fw-x", address="192.0.2.70", role="gateway")
+    job = _add_firewall(client, name="fw-x", address="192.0.2.70", role="firewall")
     assert job["status"] == "succeeded", job["error"]
 
     editable = client.get("/api/environments/default/firewalls").json()
     assert [f["name"] for f in editable] == ["fw-x"]
-    assert editable[0]["role"] == "gateway"
+    assert editable[0]["role"] == "firewall"
 
     # Also visible on the patching-view listing, separate from servers.
     action_view = client.get("/api/env/default/firewalls").json()
@@ -547,13 +547,13 @@ def test_add_list_remove_firewall(client: TestClient) -> None:
 
 
 def test_add_firewall_name_collision_with_server_rejected(client: TestClient) -> None:
-    job = _add_firewall(client, name="mgmt-01", address="192.0.2.70", role="gateway")
+    job = _add_firewall(client, name="mgmt-01", address="192.0.2.70", role="firewall")
     assert job["status"] == "failed"
     assert "already used by a management server" in job["error"]
 
 
 def test_add_server_name_collision_with_firewall_rejected(client: TestClient) -> None:
-    fw_job = _add_firewall(client, name="fw-y", address="192.0.2.71", role="gateway")
+    fw_job = _add_firewall(client, name="fw-y", address="192.0.2.71", role="firewall")
     assert fw_job["status"] == "succeeded", fw_job["error"]
     job = _add_server(client, name="fw-y", address="192.0.2.72", role="management")
     assert job["status"] == "failed"
@@ -569,7 +569,7 @@ def test_add_management_role_firewall_rejected(client: TestClient) -> None:
 def test_firewall_new_gets_default_credential_and_can_be_patched(client: TestClient) -> None:
     _put_set(client, name="primary")
     client.post("/api/env/default/credentials/primary/default")
-    fw_job = _add_firewall(client, name="fw-x", address="192.0.2.70", role="gateway")
+    fw_job = _add_firewall(client, name="fw-x", address="192.0.2.70", role="firewall")
     assert fw_job["status"] == "succeeded", fw_job["error"]
     firewalls = {
         f["name"]: f.get("credential_set") for f in client.get("/api/env/default/firewalls").json()
@@ -612,7 +612,7 @@ def test_firewall_cluster_recheck_never_falls_back_to_ssh(
 def test_firewall_cluster_recheck_preserves_manual_name_when_api_cannot_resolve(
     client: TestClient,
 ) -> None:
-    _add_firewall(client, name="fw-x", address="192.0.2.70", role="gateway")
+    _add_firewall(client, name="fw-x", address="192.0.2.70", role="firewall")
     set_resp = client.post(
         "/api/env/default/firewalls/fw-x/cluster-name", json={"cluster_name": "prod-cluster"}
     )
@@ -628,7 +628,7 @@ def test_firewall_cluster_recheck_preserves_manual_name_when_api_cannot_resolve(
 
 
 def test_firewall_set_cluster_name_manually_can_clear_it(client: TestClient) -> None:
-    _add_firewall(client, name="fw-x", address="192.0.2.70", role="gateway")
+    _add_firewall(client, name="fw-x", address="192.0.2.70", role="firewall")
     client.post("/api/env/default/firewalls/fw-x/cluster-name", json={"cluster_name": "manual-1"})
     resp = client.post("/api/env/default/firewalls/fw-x/cluster-name", json={"cluster_name": None})
     assert resp.json() == {"cluster_name": None}
@@ -641,14 +641,14 @@ def test_discover_firewalls_import_carries_mds_domain(client: TestClient) -> Non
     JOB_ADD gate as cluster_name — the discover-firewalls import flow relies
     on this to pre-fill it."""
     job = _add_firewall(
-        client, name="fw-x", address="192.0.2.70", role="gateway", mds_domain="CustomerA"
+        client, name="fw-x", address="192.0.2.70", role="firewall", mds_domain="CustomerA"
     )
     assert job["status"] == "succeeded", job["error"]
     firewalls = {f["name"]: f for f in client.get("/api/env/default/firewalls").json()}
     assert firewalls["fw-x"]["mds_domain"] == "CustomerA"
 
     # An ordinary edit (mds_domain omitted) must not clobber it.
-    _add_firewall(client, name="fw-x", address="192.0.2.71", role="gateway")
+    _add_firewall(client, name="fw-x", address="192.0.2.71", role="firewall")
     firewalls = {f["name"]: f for f in client.get("/api/env/default/firewalls").json()}
     assert firewalls["fw-x"]["mds_domain"] == "CustomerA"
 
@@ -660,7 +660,7 @@ def test_firewall_tags_roundtrip_on_both_list_endpoints(client: TestClient) -> N
     cluster_name/mds_domain, an ordinary edit (tags omitted) also updates
     them, since tags are plain operator data like notes, not JOB_ADD-gated."""
     job = _add_firewall(
-        client, name="fw-x", address="192.0.2.70", role="gateway", tags=["prod", "east-region"]
+        client, name="fw-x", address="192.0.2.70", role="firewall", tags=["prod", "east-region"]
     )
     assert job["status"] == "succeeded", job["error"]
 
@@ -670,13 +670,13 @@ def test_firewall_tags_roundtrip_on_both_list_endpoints(client: TestClient) -> N
     assert cached["fw-x"]["tags"] == ["prod", "east-region"]
 
     # An ordinary edit replaces the full tag list, same as notes.
-    _add_firewall(client, name="fw-x", address="192.0.2.70", role="gateway", tags=["prod"])
+    _add_firewall(client, name="fw-x", address="192.0.2.70", role="firewall", tags=["prod"])
     cached = {f["name"]: f for f in client.get("/api/env/default/firewalls").json()}
     assert cached["fw-x"]["tags"] == ["prod"]
 
 
 def test_firewall_set_mds_domain_manually(client: TestClient) -> None:
-    _add_firewall(client, name="fw-x", address="192.0.2.70", role="gateway")
+    _add_firewall(client, name="fw-x", address="192.0.2.70", role="firewall")
     resp = client.post(
         "/api/env/default/firewalls/fw-x/mds-domain", json={"mds_domain": "CustomerB"}
     )
@@ -699,7 +699,7 @@ def test_firewall_cluster_recheck_uses_the_firewalls_stored_mds_domain(
     Domain environment the cluster-name lookup must log into the firewall's
     tracked Domain, not the MDS system context — without a domain, the
     Management API has nothing to scope the lookup to."""
-    _add_firewall(client, name="fw-x", address="192.0.2.70", role="gateway")
+    _add_firewall(client, name="fw-x", address="192.0.2.70", role="firewall")
     client.post("/api/env/default/firewalls/fw-x/mds-domain", json={"mds_domain": "CustomerA"})
 
     # No primary management server configured in "default" — find_cluster_name
@@ -1279,9 +1279,9 @@ def test_install_flow_end_to_end(client: TestClient, transport: FakeTransport) -
     assert any("installer install" in c for c in transport.commands)
 
 
-def test_import_against_gateway_not_in_inventory_is_404(client: TestClient) -> None:
-    # Gateways are not seeded into an environment's management-server inventory
-    # (only management/mds roles are), so a gateway name is simply unknown here.
+def test_import_against_firewall_not_in_inventory_is_404(client: TestClient) -> None:
+    # Firewalls are not seeded into an environment's management-server inventory
+    # (only management/mds roles are), so a firewall name is simply unknown here.
     _upload_package(client)
     resp = client.post("/api/env/default/servers/fw-01/import", json={"package": "jhf.tgz"})
     assert resp.status_code == 404
@@ -1540,12 +1540,12 @@ def test_api_access_repair_widens_accessibility(
     assert "api restart" in transport.commands
 
 
-# -- gateway credential bootstrap (Firewalls panel auth-failure recovery) ---------
+# -- firewall credential bootstrap (Firewalls panel auth-failure recovery) --------
 
 
 def test_firewall_bootstrap_credentials_preview_renders_commands(client: TestClient) -> None:
     _put_set(client, name="primary", ssh_username="admin", ssh_password="s3cret-pw!")
-    _add_firewall(client, name="fw-x", address="192.0.2.70", role="gateway")
+    _add_firewall(client, name="fw-x", address="192.0.2.70", role="firewall")
     resp = client.post("/api/env/default/firewalls/fw-x/credential", json={"set": "primary"})
     assert resp.status_code == 200, resp.text
 
@@ -1563,7 +1563,7 @@ def test_firewall_bootstrap_credentials_preview_rejects_key_only_set(client: Tes
     _put_set(
         client, name="keyset", ssh_username="admin", ssh_password=None, ssh_private_key="KEYDATA"
     )
-    _add_firewall(client, name="fw-x", address="192.0.2.70", role="gateway")
+    _add_firewall(client, name="fw-x", address="192.0.2.70", role="firewall")
     client.post("/api/env/default/firewalls/fw-x/credential", json={"set": "keyset"})
 
     resp = client.get("/api/env/default/firewalls/fw-x/bootstrap-credentials/preview")
@@ -1574,7 +1574,7 @@ def test_firewall_bootstrap_credentials_preview_rejects_key_only_set(client: Tes
 def test_firewall_bootstrap_credentials_preview_requires_assigned_credential(
     client: TestClient,
 ) -> None:
-    _add_firewall(client, name="fw-x", address="192.0.2.70", role="gateway")
+    _add_firewall(client, name="fw-x", address="192.0.2.70", role="firewall")
     resp = client.get("/api/env/default/firewalls/fw-x/bootstrap-credentials/preview")
     assert resp.status_code == 409, resp.text
     assert "no credential assigned" in resp.json()["detail"]
@@ -1582,10 +1582,10 @@ def test_firewall_bootstrap_credentials_preview_requires_assigned_credential(
 
 def test_firewall_bootstrap_credentials_submit_queues_a_job(client: TestClient) -> None:
     # Full run-script execution against a real Management API is covered at
-    # the service layer (test_gateway_bootstrap.py, with a fake mgmt client) —
+    # the service layer (test_firewall_bootstrap.py, with a fake mgmt client) —
     # this only confirms the endpoint queues the right job kind/target.
     _put_set(client, name="primary", ssh_username="admin", ssh_password="s3cret-pw!")
-    _add_firewall(client, name="fw-x", address="192.0.2.70", role="gateway")
+    _add_firewall(client, name="fw-x", address="192.0.2.70", role="firewall")
     client.post("/api/env/default/firewalls/fw-x/credential", json={"set": "primary"})
 
     resp = client.post(
@@ -1652,7 +1652,7 @@ def test_firewall_spark_bootstrap_admin_preview_rejects_non_spark_firewall(
     client: TestClient,
 ) -> None:
     _put_set(client, name="primary", ssh_username="admin", ssh_password="s3cret-pw!")
-    _add_firewall(client, name="fw-x", address="192.0.2.70", role="gateway")
+    _add_firewall(client, name="fw-x", address="192.0.2.70", role="firewall")
     client.post("/api/env/default/firewalls/fw-x/credential", json={"set": "primary"})
 
     resp = client.get("/api/env/default/firewalls/fw-x/spark-bootstrap-admin/preview")
@@ -1697,7 +1697,7 @@ def test_cannot_create_a_credential_set_without_an_expert_password(
 
 def test_firewall_spark_test_credentials_rejects_non_spark_firewall(client: TestClient) -> None:
     _put_set(client, ssh_username="admin", ssh_password="s3cret-pw!")
-    _add_firewall(client, name="fw-x", address="192.0.2.70", role="gateway")
+    _add_firewall(client, name="fw-x", address="192.0.2.70", role="firewall")
     client.post("/api/env/default/firewalls/fw-x/credential", json={"set": "primary"})
 
     resp = client.post("/api/env/default/firewalls/fw-x/spark-test-credentials")

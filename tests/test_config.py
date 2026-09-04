@@ -95,3 +95,18 @@ def test_bare_defaults_stay_relative_to_cwd_without_a_config_file(
     monkeypatch.delenv("CONVOY_CONFIG", raising=False)
     cfg = Config.load()
     assert cfg.paths.db_path == Path("state") / "orch.db"
+
+
+def test_legacy_max_concurrent_gateways_key_still_applies(tmp_path: Path) -> None:
+    """max_concurrent_gateways was renamed to max_concurrent_firewalls. It caps
+    blast radius, so an existing config.yaml using the old key must keep its
+    value rather than silently reverting to the default."""
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text("defaults:\n  max_concurrent_gateways: 7\n", encoding="utf-8")
+    assert Config.load(cfg_file).defaults.max_concurrent_firewalls == 7
+
+
+def test_current_max_concurrent_firewalls_key_applies(tmp_path: Path) -> None:
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text("defaults:\n  max_concurrent_firewalls: 5\n", encoding="utf-8")
+    assert Config.load(cfg_file).defaults.max_concurrent_firewalls == 5

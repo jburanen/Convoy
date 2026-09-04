@@ -10,7 +10,7 @@ reference articles; verify against the customer's version before relying on exac
 CLI syntax — Check Point changes these across releases.)
 
 **CPUSE — Check Point Upgrade Service Engine** (aka the Deployment Agent / DA)
-- Runs on a *single* Gaia machine (mgmt server or gateway). Source of truth for
+- Runs on a *single* Gaia machine (mgmt server or firewall). Source of truth for
   local install state.
 - Lifecycle per package: `import` → `verify` → `install` → (optional reboot) →
   `uninstall`. Packages: hotfixes, Jumbo Hotfix Accumulators (JHF/HFA), and major
@@ -159,7 +159,7 @@ CLI syntax — Check Point changes these across releases.)
 
 **CDT — Central Deployment Tool** (reference: sk111158; confirmed via docs MCP)
 - Runs *on a Security Management Server or Multi-Domain Server (MDS)*. Pushes packages
-  and scripts to *many* managed Security Gateways / cluster members at once, using
+  and scripts to *many* managed firewalls / cluster members at once, using
   CPUSE on each target under the hood. NOT used to upgrade the management server itself.
 - Beyond install/uninstall it can: take snapshots, run shell scripts, push/pull files,
   automate RMA backup/restore, and handle **cluster upgrades automatically** (standby
@@ -193,7 +193,7 @@ pass `<DMS>` as a trailing arg):
   - **Deployment Plan (XML)** = *WHAT* to do — packages, actions, scripts. Lives in
     `/opt/CPcdt/DeploymentPlanRepository/`. (This is the structured form of what the
     simple mode put inline in `CentralDeploymentTool.xml`.)
-  - **Candidates List (CSV)** = *WHERE* — target gateways/cluster members. Lives in
+  - **Candidates List (CSV)** = *WHERE* — target firewalls/cluster members. Lives in
     `/opt/CPcdt/CandidateListsRepository/`. Columns: Object Name, Cluster Name, IP,
     Version/JHF Take, State (active/standby), **Upgrade Order**.
 - Relationship: the Deployment Plan is *input* to generating the Candidates list — CDT
@@ -206,7 +206,7 @@ pass `<DMS>` as a trailing arg):
   ```
   Gaia clish equivalents: `start cdt generate-candidates deployment-plan "<p>.xml" candidates-list "<c>.csv" [server <DMS>] [session <name>]`
   and `start cdt execute deployment-plan "<p>.xml" candidates-list "<c>.csv" [server <DMS>] [session <name>]`.
-- **Filter file** (optional): plain text, one gateway name per line, narrows targets:
+- **Filter file** (optional): plain text, one firewall name per line, narrows targets:
   `-filter=<FilterFile.txt>` on generate/execute.
 - **Monitoring**: `watch -d cat $CDTDIR/CDT_status.txt` (full log) and
   `$CDTDIR/CDT_status_brief.txt` (brief). These are the artifacts our reporting layer
@@ -225,7 +225,7 @@ pass `<DMS>` as a trailing arg):
 2. Patch the **management server** via CPUSE (local, one host, often HA pair).
 3. Stage package + configure CDT XML on the management server.
 4. Generate + order the candidates CSV; optionally run preparations.
-5. Deploy to **gateways** in batches via CDT `-execute`, respecting cluster failover order.
+5. Deploy to **firewalls** in batches via CDT `-execute`, respecting cluster failover order.
 6. Post-checks: version confirmed, policy installed (incl. manual TP/QoS/Desktop if
    needed), cluster healthy, logs clean.
 

@@ -1,7 +1,7 @@
 # Example inventory — SAFE TO COMMIT (placeholder values only).
 #
 # Copy to `inventory.yaml` (git-ignored) and fill with real values. Never commit a
-# real inventory: it names production management servers and gateways.
+# real inventory: it names production management servers and firewalls.
 # See .claude/memory/security-hygiene.md.
 #
 # Credentials are NOT stored here — add per-host SSH credentials in the web UI;
@@ -17,7 +17,7 @@ sites:
 
       - name: fw-standalone-01
         address: 192.0.2.20
-        role: gateway
+        role: firewall
         ssh_user: admin
 
       - name: fw-cluster-a-member-1

@@ -41,7 +41,7 @@ def test_login_query_logout_paginates() -> None:
         raise AssertionError(f"unexpected path {path}")
 
     with _client(handler) as client:
-        objects = client.show_gateways_and_servers()
+        objects = client.show_firewalls_and_servers()
 
     assert [o["name"] for o in objects] == ["srv-0", "srv-1"]
     assert calls[0].endswith("/login")
@@ -65,7 +65,7 @@ def test_error_status_becomes_transport_error() -> None:
     client = _client(handler)
     client.login()
     with pytest.raises(TransportError, match="bad command"):
-        client.show_gateways_and_servers()
+        client.show_firewalls_and_servers()
 
 
 def test_403_becomes_management_api_forbidden() -> None:
@@ -81,10 +81,10 @@ def test_403_becomes_management_api_forbidden() -> None:
     client = _client(handler)
     client.login()
     with pytest.raises(ManagementAPIForbidden, match="403"):
-        client.show_gateways_and_servers()
+        client.show_firewalls_and_servers()
     # Still catchable by callers that only know about the base type.
     with pytest.raises(TransportError):
-        client.show_gateways_and_servers()
+        client.show_firewalls_and_servers()
 
 
 def test_requires_some_credential() -> None:
@@ -312,7 +312,7 @@ def test_api_calls_logged_and_sanitized_when_enabled(monkeypatch: pytest.MonkeyP
 # actually uses. The sharp one was "script": the credential-bootstrap run-script
 # payload carries the whole clish script including `set user <u> password-hash
 # $6$...`, so enabling CONVOY_LOG_API_CALLS wrote a crackable hash of a
-# gateway's admin password into `docker compose logs` at WARNING level.
+# firewall's admin password into `docker compose logs` at WARNING level.
 
 
 def test_redact_covers_compound_and_nested_secret_keys() -> None:

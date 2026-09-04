@@ -16,7 +16,7 @@ class ConfigError(OrchestratorError):
 
 
 class InventoryError(OrchestratorError):
-    """Invalid or missing inventory (sites, servers, gateways)."""
+    """Invalid or missing inventory (sites, servers, firewalls)."""
 
 
 class TransportError(OrchestratorError):

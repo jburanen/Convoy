@@ -22,7 +22,7 @@ from .reporting import configure_logging
 
 app = typer.Typer(
     name="convoy",
-    help="Orchestrate Check Point CDT/CPUSE patching across management servers and gateways.",
+    help="Orchestrate Check Point CDT/CPUSE patching across management servers and firewalls.",
     no_args_is_help=True,
     add_completion=False,
 )

@@ -7,9 +7,9 @@ from convoy.errors import InventoryError, ManagementAPIForbidden, TransportError
 from convoy.inventory import FIREWALL_ROLES, Host, Inventory, Role, Site
 from convoy.services.discovery import (
     DiscoveryService,
-    find_cluster_for_gateway,
-    map_gateways_and_servers,
-    map_gateways_only,
+    find_cluster_for_firewall,
+    map_firewalls_and_servers,
+    map_firewalls_only,
     parse_mdsquerydb_mdss,
 )
 
@@ -17,7 +17,7 @@ from .fakes import FakeTransport
 
 # ---- Management API object → role mapping (pure) --------------------------------
 
-GATEWAYS_AND_SERVERS = [
+FIREWALLS_AND_SERVERS = [
     {
         "name": "mgmt-01",
         "type": "CpmiManagementServer",
@@ -53,12 +53,12 @@ GATEWAYS_AND_SERVERS = [
 ]
 
 
-def test_map_gateways_and_servers_roles() -> None:
-    servers = map_gateways_and_servers(GATEWAYS_AND_SERVERS, primary_address="192.0.2.10")
+def test_map_firewalls_and_servers_roles() -> None:
+    servers = map_firewalls_and_servers(FIREWALLS_AND_SERVERS, primary_address="192.0.2.10")
     by_name = {s.name: s for s in servers}
 
-    # Gateways and clusters are dropped — spark-01 included, still gateway-hinted
-    # like any other gateway regardless of its operating-system.
+    # Firewalls and clusters are dropped — spark-01 included, still matched by
+    # the type hints like any other firewall regardless of its operating-system.
     assert set(by_name) == {"mgmt-01", "mgmt-02", "log-01", "se-01"}
 
     assert by_name["mgmt-01"].detected_role is Role.PRIMARY_SMS  # matches primary addr
@@ -81,37 +81,37 @@ CLUSTERS = [
 ]
 
 
-def test_find_cluster_for_gateway_matches_dict_shaped_members() -> None:
-    assert find_cluster_for_gateway(CLUSTERS, "cluster-01") == "prod-cluster"
+def test_find_cluster_for_firewall_matches_dict_shaped_members() -> None:
+    assert find_cluster_for_firewall(CLUSTERS, "cluster-01") == "prod-cluster"
 
 
-def test_find_cluster_for_gateway_matches_string_shaped_members() -> None:
-    assert find_cluster_for_gateway(CLUSTERS, "member-x") == "other-cluster"
+def test_find_cluster_for_firewall_matches_string_shaped_members() -> None:
+    assert find_cluster_for_firewall(CLUSTERS, "member-x") == "other-cluster"
 
 
-def test_find_cluster_for_gateway_is_case_insensitive() -> None:
-    assert find_cluster_for_gateway(CLUSTERS, "CLUSTER-01") == "prod-cluster"
+def test_find_cluster_for_firewall_is_case_insensitive() -> None:
+    assert find_cluster_for_firewall(CLUSTERS, "CLUSTER-01") == "prod-cluster"
 
 
-def test_find_cluster_for_gateway_none_when_not_a_member() -> None:
-    assert find_cluster_for_gateway(CLUSTERS, "fw-01") is None
-    assert find_cluster_for_gateway(CLUSTERS, "") is None
+def test_find_cluster_for_firewall_none_when_not_a_member() -> None:
+    assert find_cluster_for_firewall(CLUSTERS, "fw-01") is None
+    assert find_cluster_for_firewall(CLUSTERS, "") is None
 
 
-def test_map_gateways_only_roles() -> None:
-    firewalls = map_gateways_only(GATEWAYS_AND_SERVERS)
+def test_map_firewalls_only_roles() -> None:
+    firewalls = map_firewalls_only(FIREWALLS_AND_SERVERS)
     by_name = {s.name: s for s in firewalls}
 
     # Management-plane objects are dropped — the mirror image of the servers test.
     assert set(by_name) == {"fw-01", "cluster-01", "spark-01"}
-    assert by_name["fw-01"].detected_role is Role.GATEWAY
+    assert by_name["fw-01"].detected_role is Role.FIREWALL
     assert by_name["cluster-01"].detected_role is Role.CLUSTER_MEMBER
     assert by_name["spark-01"].detected_role is Role.SPARK_FIREWALL
     assert all(s.source == "api" for s in firewalls)
     assert all(s.needs_review is False for s in firewalls)
 
 
-def test_map_gateways_only_spark_detection_is_case_insensitive() -> None:
+def test_map_firewalls_only_spark_detection_is_case_insensitive() -> None:
     objects = [
         {
             "name": "spark-lower",
@@ -120,7 +120,7 @@ def test_map_gateways_only_spark_detection_is_case_insensitive() -> None:
             "operating-system": "gaia embedded",
         }
     ]
-    firewalls = map_gateways_only(objects)
+    firewalls = map_firewalls_only(objects)
     assert firewalls[0].detected_role is Role.SPARK_FIREWALL
 
 
@@ -179,7 +179,7 @@ class _FakeMgmtClient:
     def __exit__(self, *exc: object) -> None:
         return None
 
-    def show_gateways_and_servers(self, *, details_level: str = "full") -> list[dict[str, object]]:
+    def show_firewalls_and_servers(self, *, details_level: str = "full") -> list[dict[str, object]]:
         return self._objects
 
     def show_simple_clusters(self, *, details_level: str = "full") -> list[dict[str, object]]:
@@ -252,7 +252,7 @@ def test_discover_api_flags_existing_and_maps_roles() -> None:
     connector = _FakeConnector(inv, _api_bundle())
     service = DiscoveryService(
         _FakeRegistry(connector),  # type: ignore[arg-type]
-        mgmt_client_factory=lambda host, **kw: _FakeMgmtClient(GATEWAYS_AND_SERVERS, **kw),
+        mgmt_client_factory=lambda host, **kw: _FakeMgmtClient(FIREWALLS_AND_SERVERS, **kw),
     )
 
     result = service.discover("default", "mgmt-01")
@@ -369,12 +369,12 @@ def test_discover_mds_over_ssh() -> None:
 def test_discover_firewalls_flags_existing_and_maps_roles() -> None:
     inv = _inventory(
         Host(name="mgmt-01", address="192.0.2.10", role=Role.PRIMARY_SMS),
-        Host(name="fw-01", address="192.0.2.20", role=Role.GATEWAY),
+        Host(name="fw-01", address="192.0.2.20", role=Role.FIREWALL),
     )
     connector = _FakeConnector(inv, _api_bundle())
     service = DiscoveryService(
         _FakeRegistry(connector),  # type: ignore[arg-type]
-        mgmt_client_factory=lambda host, **kw: _FakeMgmtClient(GATEWAYS_AND_SERVERS, **kw),
+        mgmt_client_factory=lambda host, **kw: _FakeMgmtClient(FIREWALLS_AND_SERVERS, **kw),
     )
 
     # No source server is passed — an environment has exactly one primary, so
@@ -396,7 +396,7 @@ def test_discover_firewalls_resolves_real_cluster_name_via_management_api() -> N
     service = DiscoveryService(
         _FakeRegistry(connector),  # type: ignore[arg-type]
         mgmt_client_factory=lambda host, **kw: _FakeMgmtClient(
-            GATEWAYS_AND_SERVERS, clusters=CLUSTERS, **kw
+            FIREWALLS_AND_SERVERS, clusters=CLUSTERS, **kw
         ),
     )
 
@@ -407,25 +407,25 @@ def test_discover_firewalls_resolves_real_cluster_name_via_management_api() -> N
     # show-simple-clusters fixture — the real SmartConsole name, not the
     # cphaprob-derived peer-hostname stand-in.
     assert by_name["cluster-01"].cluster_name == "prod-cluster"
-    # A plain gateway with no cluster membership gets no name.
+    # A plain firewall with no cluster membership gets no name.
     assert by_name["fw-01"].cluster_name is None
     assert not result.warnings
 
 
-def test_discover_firewalls_cluster_lookup_failure_keeps_the_gateway_list() -> None:
+def test_discover_firewalls_cluster_lookup_failure_keeps_the_firewall_list() -> None:
     inv = _inventory(Host(name="mgmt-01", address="192.0.2.10", role=Role.PRIMARY_SMS))
     connector = _FakeConnector(inv, _api_bundle())
     service = DiscoveryService(
         _FakeRegistry(connector),  # type: ignore[arg-type]
         mgmt_client_factory=lambda host, **kw: _FakeMgmtClient(
-            GATEWAYS_AND_SERVERS, clusters_error=TransportError("unsupported command"), **kw
+            FIREWALLS_AND_SERVERS, clusters_error=TransportError("unsupported command"), **kw
         ),
     )
 
     result = service.discover_firewalls("default")
     by_name = {s.name: s for s in result.servers}
 
-    # The gateway/cluster-member list is unaffected — only cluster names are
+    # The firewall/cluster-member list is unaffected — only cluster names are
     # missing, with a warning explaining why.
     assert set(by_name) == {"fw-01", "cluster-01", "spark-01"}
     assert by_name["cluster-01"].cluster_name is None
@@ -463,7 +463,7 @@ def test_find_cluster_name_passes_domain_through_to_the_api_login() -> None:
 
 def test_find_cluster_name_no_primary_configured_returns_none() -> None:
     # No Primary SMS/MDS in the inventory at all — primary_mgmt_host() raises.
-    inv = _inventory(Host(name="fw-01", address="192.0.2.20", role=Role.GATEWAY))
+    inv = _inventory(Host(name="fw-01", address="192.0.2.20", role=Role.FIREWALL))
     connector = _FakeConnector(inv, _api_bundle())
     service = DiscoveryService(
         _FakeRegistry(connector),  # type: ignore[arg-type]
@@ -503,7 +503,7 @@ def test_discover_firewalls_mds_scans_the_chosen_domain() -> None:
 
     def factory(host: object, **kw: object) -> _FakeMgmtClient:
         seen_kwargs.append(kw)
-        return _FakeMgmtClient(GATEWAYS_AND_SERVERS, **kw)
+        return _FakeMgmtClient(FIREWALLS_AND_SERVERS, **kw)
 
     service = DiscoveryService(_FakeRegistry(connector), mgmt_client_factory=factory)  # type: ignore[arg-type]
     result = service.discover_firewalls("default", domain="Domain1")

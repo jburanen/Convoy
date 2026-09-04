@@ -30,7 +30,7 @@ sites:
         role: management
       - name: fw-01
         address: 192.0.2.20
-        role: gateway
+        role: firewall
 """
 
 
@@ -57,7 +57,7 @@ def test_seed_imports_only_management_hosts(tmp_path: Path, store: Store) -> Non
     mgr.seed_from_config(_config(tmp_path))
     mgr.rebuild()
 
-    # Implicit "default" env seeded; gateway excluded.
+    # Implicit "default" env seeded; firewall excluded.
     assert [e.name for e in store.list_environments()] == ["default"]
     assert [h.name for h in store.list_env_hosts("default")] == ["mgmt-01"]
     assert [h.name for h in registry.get("default").management_servers()] == ["mgmt-01"]
@@ -178,11 +178,11 @@ def test_duplicate_environment_rejected(store: Store) -> None:
         mgr.create_environment("corp")
 
 
-def test_gateway_role_server_rejected(store: Store) -> None:
+def test_firewall_role_server_rejected(store: Store) -> None:
     mgr = _manager(store, EnvironmentRegistry())
     mgr.create_environment("corp")
     with pytest.raises(InventoryError, match="not a management server role"):
-        mgr.add_server("corp", name="fw", address="10.0.0.2", role="gateway", ssh_user="admin")
+        mgr.add_server("corp", name="fw", address="10.0.0.2", role="firewall", ssh_user="admin")
 
 
 def test_granular_and_legacy_roles_accepted(store: Store) -> None:

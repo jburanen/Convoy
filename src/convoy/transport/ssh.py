@@ -653,7 +653,7 @@ class GaiaExpertSession:
         Returns True if it actually elevated, False if the session was already
         at an expert prompt when we arrived and there was nothing to do.
 
-        A Spark gateway whose user is configured ``bashUser on`` lands you
+        A Spark firewall whose user is configured ``bashUser on`` lands you
         directly in expert at login, with no clish prompt in between, so read
         the greeting the device sends before assuming an escalation is needed
         (operator-specified 2026-08-27). Sending ``expert`` into a shell that
@@ -694,7 +694,7 @@ class GaiaExpertSession:
             # Some Gaia builds' `expert` password reader does not act on the
             # newline send_secret() already sent: the password sits unread and
             # the session hangs until the escalation times out. Confirmed on an
-            # R81.x gateway (clish login) 2026-08-26 -- a further newline, sent
+            # R81.x firewall (clish login) 2026-08-26 -- a further newline, sent
             # as its OWN write, submits the already-buffered password and lands
             # in expert mode normally. Gaia Embedded (Spark) answers the first
             # newline immediately and never reaches this branch.
@@ -785,7 +785,7 @@ class GaiaExpertSession:
 # reports it on STDOUT as CLINFR0771 / CLINFR0519. Elevating to expert (which
 # every run_bash() on a clish-login host does) takes that lock, so the very
 # next clish `set` in the same session is refused -- which is what broke the
-# transfer shell-toggle on a real gateway, 2026-08-26.
+# transfer shell-toggle on a real firewall, 2026-08-26.
 _CONFIG_LOCK_RE = re.compile(r"CLINFR0771|CLINFR0519|[Cc]onfig(?:uration)? lock")
 
 

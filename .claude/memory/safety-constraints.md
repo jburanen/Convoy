@@ -8,7 +8,7 @@ metadata:
 This tool changes **production firewalls**. A bad rollout can drop traffic for an
 entire site. These constraints are requirements, not suggestions.
 
-**Why:** Check Point gateways often sit inline on critical paths; clusters fail over
+**Why:** Check Point firewalls often sit inline on critical paths; clusters fail over
 but only if members are patched in the right order and health is confirmed between
 steps. Management servers gate policy for the whole estate.
 
@@ -22,7 +22,7 @@ steps. Management servers gate policy for the whole estate.
   only advances if post-checks pass. Fail closed — stop the run, don't continue.
 - **Maintenance windows.** Deploys are gated to an approved window; abort cleanly if
   the window closes mid-run.
-- **Batching / blast radius.** Gateways roll out in bounded batches, never the whole
+- **Batching / blast radius.** Firewalls roll out in bounded batches, never the whole
   fleet in one shot. Configurable concurrency with a conservative default.
 - **Rollback path.** Prefer snapshots / known-good restore points; record enough to
   roll back. Management servers: snapshot before CPUSE install.

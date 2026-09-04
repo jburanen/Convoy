@@ -67,8 +67,8 @@ from ..services.connect_primary import PrimaryConnectService
 from ..services.cred_ops import CredentialJobService
 from ..services.discovery import DiscoveryService, MgmtClientFactory
 from ..services.environments import EnvironmentManager
+from ..services.firewall_bootstrap import FirewallBootstrapService
 from ..services.firewalls import FirewallManager
-from ..services.gateway_bootstrap import GatewayBootstrapService
 from ..services.patching import PatchingService
 from ..services.pkg_repo_ops import PackageRepoService, RepoClientFactory
 from ..services.pkgs_ops import PackageJobService
@@ -408,7 +408,7 @@ class ConfirmRequest(BaseModel):
     """Body for a destructive endpoint whose only input is the operator saying
     yes. Same `confirmed` convention as InstallRequest/UninstallRequest/
     ExecuteRequest — these two were the only state-changing routes taking no
-    body at all, so a bare POST was enough to rewrite a live gateway's admin
+    body at all, so a bare POST was enough to rewrite a live firewall's admin
     account or restart a management server's API."""
 
     confirmed: bool = False
@@ -445,7 +445,7 @@ class DiscoverIn(BaseModel):
 class DiscoverFirewallsIn(BaseModel):
     # No source server here — an environment has exactly one primary (SMS or
     # MDS), so DiscoveryService resolves it automatically. MDS only: which
-    # Domain/CMA (from the /domains endpoint) to scan for gateways.
+    # Domain/CMA (from the /domains endpoint) to scan for firewalls.
     domain: str | None = None
 
 
@@ -453,7 +453,7 @@ class FirewallIn(BaseModel):
     name: str
     address: str
     # One of the firewall roles (see inventory.FIREWALL_ROLES).
-    role: str = "gateway"
+    role: str = "firewall"
     ssh_user: str = "admin"
     ssh_port: int = 22
     notes: str | None = None
@@ -461,7 +461,7 @@ class FirewallIn(BaseModel):
     credential_set: str | None = None
     # Real cluster object name, pre-filled by the discover-firewalls import
     # flow (Management API resolved it at scan time — see
-    # DiscoveryService.find_cluster_for_gateway). Only ever applied on a
+    # DiscoveryService.find_cluster_for_firewall). Only ever applied on a
     # genuine creation (services/prov_ops.py gates on JOB_ADD), so leaving
     # this unset on an edit can never clobber a previously-detected name.
     cluster_name: str | None = None
@@ -577,7 +577,7 @@ def create_app(
         # operator's stored preference isn't taking effect yet.
         if auth is None:
             # H5: running open exposes EVERY destructive route — enumerate the
-            # estate, delete environments, cancel jobs, bootstrap gateway admin
+            # estate, delete environments, cancel jobs, bootstrap firewall admin
             # accounts. Only credential *storage* was ever gated on auth. Warn
             # unconditionally, not just when a storage-enabled environment
             # happens to exist.
@@ -671,7 +671,7 @@ def create_app(
         )
         discovery = DiscoveryService(registry=registry, mgmt_client_factory=mgmt_client_factory)
         api_access = ApiAccessService(registry=registry, runner=runner)
-        gateway_bootstrap = GatewayBootstrapService(registry=registry, store=store, runner=runner)
+        firewall_bootstrap = FirewallBootstrapService(registry=registry, store=store, runner=runner)
         pkg_repo = PackageRepoService(
             registry=registry,
             packages=packages,
@@ -709,7 +709,7 @@ def create_app(
         app.state.smart1_cloud = smart1_cloud
         app.state.discovery = discovery
         app.state.api_access = api_access
-        app.state.gateway_bootstrap = gateway_bootstrap
+        app.state.firewall_bootstrap = firewall_bootstrap
         app.state.pkg_repo = pkg_repo
         # Cached, best-effort "is a newer release published?" for the footer —
         # see release_check.py. Never called at startup: the first page load
@@ -923,8 +923,8 @@ def _api_access(request: Request) -> ApiAccessService:
     return service
 
 
-def _gateway_bootstrap(request: Request) -> GatewayBootstrapService:
-    service: GatewayBootstrapService = request.app.state.gateway_bootstrap
+def _firewall_bootstrap(request: Request) -> FirewallBootstrapService:
+    service: FirewallBootstrapService = request.app.state.firewall_bootstrap
     return service
 
 
@@ -1389,7 +1389,7 @@ def _register_routes(app: FastAPI) -> None:
     @app.post("/api/environments/{env}/discover-firewalls")
     def discover_firewalls(env: str, body: DiscoverFirewallsIn, request: Request) -> dict[str, Any]:
         """Scan the estate from the environment's primary management server and
-        return candidate firewalls (gateways/cluster members) for the operator
+        return candidate firewalls (standalone/cluster members) for the operator
         to review and import. Read-only: nothing is added here — the UI posts
         confirmed rows back to the add-firewall endpoint."""
         discovery: DiscoveryService = request.app.state.discovery
@@ -1915,7 +1915,7 @@ def _register_routes(app: FastAPI) -> None:
         auth failure during status refresh) opens this preview first. Spark
         firewalls use the separate, display-only preview below instead."""
         try:
-            commands = _gateway_bootstrap(request).preview_bootstrap_commands(env, name)
+            commands = _firewall_bootstrap(request).preview_bootstrap_commands(env, name)
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
         return {"commands": commands}
@@ -1924,24 +1924,24 @@ def _register_routes(app: FastAPI) -> None:
     def firewall_bootstrap_credentials(
         env: str, name: str, body: ConfirmRequest, request: Request
     ) -> JobRecord:
-        """Pushes the firewall's assigned credential set onto the gateway via
-        the Management API's run-script (see services/gateway_bootstrap.py) —
+        """Pushes the firewall's assigned credential set onto the firewall itself
+        via the Management API's run-script (see services/firewall_bootstrap.py) —
         the "Bootstrap Credentials" link's Run button, after the operator has
         reviewed the preview above. Rejects Spark firewalls (no automated
         push there — see the Spark bootstrap preview route).
 
-        Confirm-gated: this rewrites a live gateway's local admin account
+        Confirm-gated: this rewrites a live firewall's local admin account
         (uid 0, adminRole) over SIC."""
         if not body.confirmed:
             raise HTTPException(
                 status_code=400,
                 detail=(
                     "bootstrapping credentials requires explicit confirmation — it "
-                    "rewrites this gateway's local admin account"
+                    "rewrites this firewall's local admin account"
                 ),
             )
         try:
-            return _gateway_bootstrap(request).submit_bootstrap(
+            return _firewall_bootstrap(request).submit_bootstrap(
                 env, name, triggered_by=_current_user(request)
             )
         except OrchestratorError as exc:
@@ -1954,12 +1954,12 @@ def _register_routes(app: FastAPI) -> None:
         """Renders the Quantum Spark (SMB) `add administrator` clish command
         for name's assigned credential set — display-only, for the operator
         to paste into the device's own clish shell (no automated push; see
-        services/gateway_bootstrap.py's module docstring for why). The
+        services/firewall_bootstrap.py's module docstring for why). The
         Firewalls panel shows this instead of the "Bootstrap Credentials"
         link for Spark firewalls after an SSH auth failure during status
         refresh."""
         try:
-            commands = _gateway_bootstrap(request).preview_spark_admin_commands(env, name)
+            commands = _firewall_bootstrap(request).preview_spark_admin_commands(env, name)
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
         return {"commands": commands}
@@ -2328,7 +2328,7 @@ def _register_routes(app: FastAPI) -> None:
             raise _map_error(exc) from exc
         return {"credential_set": body.set}
 
-    # -- CDT (gateway fleet, driven from a management server) --------------------
+    # -- CDT (firewall fleet, driven from a management server) -------------------
 
     def _cdt(request: Request) -> CDTService:
         cdt: CDTService = request.app.state.cdt
