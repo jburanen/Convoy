@@ -23,6 +23,19 @@ deliberately excluded — a CDT run acts on a fleet of firewalls, not on the job
 target host. `app.js` mirrors this list as `STATE_REFRESH_JOB_KINDS`; a test in
 `tests/test_state_refresh.py` pins the set so the two don't drift.
 
+**A cluster member drags its peers in.** `schedule()` fans out: it queues the
+host, then queues every other firewall in the environment sharing its
+`FirewallRow.cluster_name` (matched case-insensitively and trimmed, the same way
+`services/discovery.py` matches cluster objects). Patching one member moves the
+cluster's live roles, so refreshing it alone leaves the peers' cached
+Active/Standby wrong until someone clicks Refresh on each — see
+[[clusterxl-live-state]]. A member whose cluster name has not been discovered
+yet refreshes alone: without a name there is nothing to group by, and "every
+cluster member in the environment" is far too wide a net (added 2026-09-09,
+operator-directed). `_cluster_peers` swallows any lookup failure so the host's
+own refresh still happens; `_schedule_one` holds the per-host in-flight guard,
+so peers get the same one-at-a-time treatment and there is no recursion.
+
 Each refresh runs on its own daemon thread (`spawn` is injectable, so tests run
 it inline), one per host at a time, and **never raises**. It is silent when there
 is nothing to connect with — storage-disabled environments hold only per-job
