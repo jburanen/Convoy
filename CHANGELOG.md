@@ -9,6 +9,20 @@ Known issues and planned work live under Roadmap / Punch List in
 [README.md](README.md); a fix that closes an item there moves it into this file
 in the same commit as the fix and the version bump.
 
+## v1.1.1
+
+**Refreshing one cluster member now refreshes the rest of its cluster.** A
+ClusterXL member never changes state alone — patching one moves the cluster's
+live roles, so the peer that was Active before an install is Standby after it.
+The automatic, out-of-band refresh (after a package or install job, and after a
+firewall is added or discovered) only ever queried the one host it was triggered
+for, which left every other member of that cluster showing an Active/Standby
+role that was no longer true until someone clicked Refresh on each of them by
+hand. The refresh now fans out to the peers sharing the host's cluster name.
+Members whose cluster object name has not been discovered yet still refresh
+alone — without a name there is nothing to group by, and "every cluster member
+in the environment" would be far too wide a net.
+
 ## v1.1.0
 
 **"Gateway" is gone; the tool says "firewall" everywhere.** Closes the standardise-

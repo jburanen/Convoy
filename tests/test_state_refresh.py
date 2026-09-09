@@ -5,7 +5,7 @@ from typing import Any
 
 from convoy.errors import CredentialError, InventoryError
 from convoy.services.state_refresh import REFRESH_AFTER_JOB_KINDS, StateRefreshService
-from convoy.store import JobRecord, JobStatus, Store
+from convoy.store import FirewallRow, JobRecord, JobStatus, Store
 
 
 class FakePatching:
@@ -165,3 +165,90 @@ def test_a_spawn_that_fails_releases_the_host(tmp_path: Any) -> None:
     service._spawn = ran.append  # type: ignore[attr-defined]
     service.schedule("default", "mgmt-01", reason="t")
     assert len(ran) == 1
+
+
+def _cluster_member(store: Store, name: str, cluster: str | None) -> None:
+    if not store.environment_exists("default"):
+        store.insert_environment("default")
+    store.upsert_firewall(
+        FirewallRow(
+            environment="default", name=name, address=f"10.0.0.{len(name)}", role="cluster_member"
+        )
+    )
+    if cluster is not None:
+        store.set_firewall_cluster_name("default", name, cluster)
+
+
+def test_refreshing_a_cluster_member_refreshes_its_peers(tmp_path: Any) -> None:
+    # An install moves the cluster's live roles, so the peers' cached
+    # Active/Standby is stale the moment one member is refreshed.
+    store = Store(tmp_path / "s.db")
+    for name in ("fw-01", "fw-02", "fw-03"):
+        _cluster_member(store, name, "cluster-a")
+    _cluster_member(store, "fw-09", "cluster-b")  # a different cluster — untouched
+    patching = FakePatching(role="cluster_member")
+    _service(store, patching, FakeSpark()).schedule("default", "fw-01", reason="test")
+    assert patching.detected == [("default", "fw-01"), ("default", "fw-02"), ("default", "fw-03")]
+
+
+def test_cluster_peers_match_case_insensitively(tmp_path: Any) -> None:
+    # Cluster object names come from the Management API and from an operator's
+    # own typing; discovery matches them case-insensitively too.
+    store = Store(tmp_path / "s.db")
+    _cluster_member(store, "fw-01", "Cluster-A")
+    _cluster_member(store, "fw-02", "cluster-a ")
+    patching = FakePatching(role="cluster_member")
+    _service(store, patching, FakeSpark()).schedule("default", "fw-01", reason="test")
+    assert patching.detected == [("default", "fw-01"), ("default", "fw-02")]
+
+
+def test_a_member_with_no_known_cluster_name_refreshes_alone(tmp_path: Any) -> None:
+    # Without a cluster name there is nothing to group by, and "every cluster
+    # member in the environment" is far too wide a net.
+    store = Store(tmp_path / "s.db")
+    _cluster_member(store, "fw-01", None)
+    _cluster_member(store, "fw-02", None)
+    patching = FakePatching(role="cluster_member")
+    _service(store, patching, FakeSpark()).schedule("default", "fw-01", reason="test")
+    assert patching.detected == [("default", "fw-01")]
+
+
+def test_a_standalone_firewall_and_a_server_refresh_alone(tmp_path: Any) -> None:
+    store = Store(tmp_path / "s.db")
+    store.insert_environment("default")
+    store.upsert_firewall(
+        FirewallRow(environment="default", name="fw-01", address="10.0.0.1", role="firewall")
+    )
+    _cluster_member(store, "fw-02", "cluster-a")
+    patching = FakePatching(role="firewall")
+    service = _service(store, patching, FakeSpark())
+    service.schedule("default", "fw-01", reason="test")
+    service.schedule("default", "mgmt-01", reason="test")  # not in the firewalls table at all
+    assert patching.detected == [("default", "fw-01"), ("default", "mgmt-01")]
+
+
+def test_a_finished_job_on_a_cluster_member_refreshes_the_cluster(tmp_path: Any) -> None:
+    store = Store(tmp_path / "s.db")
+    _cluster_member(store, "fw-01", "cluster-a")
+    _cluster_member(store, "fw-02", "cluster-a")
+    patching = FakePatching(role="cluster_member")
+    service = _service(store, patching, FakeSpark())
+    job = JobRecord(
+        kind="cpuse.install", target="fw-01", environment="default", status=JobStatus.SUCCEEDED
+    )
+    store.insert_job(job)
+    service.after_job(job.id)
+    assert patching.detected == [("default", "fw-01"), ("default", "fw-02")]
+
+
+def test_a_failing_peer_lookup_still_refreshes_the_host(tmp_path: Any) -> None:
+    store = Store(tmp_path / "s.db")
+    patching = FakePatching(role="cluster_member")
+    service = _service(store, patching, FakeSpark())
+
+    def boom(environment: str, name: str) -> None:
+        raise RuntimeError("db is locked")
+
+    service._store.get_firewall = boom  # type: ignore[assignment, method-assign]
+    service.schedule("default", "fw-01", reason="test")  # swallowed, not raised
+    assert patching.detected == [("default", "fw-01")]

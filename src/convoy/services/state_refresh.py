@@ -15,6 +15,10 @@ other than what is really on the box:
   in-job refresh cannot cover it: the failure is often the connection itself,
   so the refresh needs its own attempt.
 
+Whichever of those two triggers fires, a firewall that is a cluster member drags
+its peers in with it (see ``schedule``): the members' live Active/Standby roles
+move together, so refreshing one and not the rest leaves the others' rows wrong.
+
 This module closes both, out-of-band: each refresh runs on its own thread, never
 blocks the job that triggered it or the request that added the host, and never
 raises. It is deliberately silent when there is nothing to connect with — an
@@ -119,7 +123,45 @@ class StateRefreshService:
 
     def schedule(self, environment: str, host_name: str, *, reason: str) -> None:
         """Queue a refresh and return immediately. A no-op while one is already
-        in flight for the same host."""
+        in flight for the same host.
+
+        A cluster member never changes alone: installing on one member moves the
+        cluster's live roles (the standby that was just patched comes back and
+        the peer fails over to it), and the peers' rows would otherwise keep
+        showing a stale Active/Standby until someone clicked Refresh on each of
+        them. So refreshing one member refreshes the rest of its cluster too."""
+        self._schedule_one(environment, host_name, reason=reason)
+        for peer in self._cluster_peers(environment, host_name):
+            self._schedule_one(environment, peer, reason=f"cluster peer of {host_name} ({reason})")
+
+    def _cluster_peers(self, environment: str, host_name: str) -> list[str]:
+        """The other firewalls sharing this one's cluster. Empty for management
+        servers, standalone firewalls, and members whose cluster object name is
+        not known yet (discovery fills ``cluster_name`` in; without it there is
+        nothing to group by, and every cluster member in the environment is far
+        too wide a net). Never raises — a refresh of the host itself must still
+        happen if the peer lookup fails."""
+        try:
+            row = self._store.get_firewall(environment, host_name)
+            if row is None or not (row.cluster_name or "").strip():
+                return []
+            cluster = row.cluster_name.strip().lower() if row.cluster_name else ""
+            return [
+                fw.name
+                for fw in self._store.list_firewalls(environment)
+                if fw.name != row.name and (fw.cluster_name or "").strip().lower() == cluster
+            ]
+        except Exception as exc:
+            logger.warning(
+                "could not look up cluster peers for state refresh",
+                environment=environment,
+                host=host_name,
+                error=str(exc),
+            )
+            return []
+
+    def _schedule_one(self, environment: str, host_name: str, *, reason: str) -> None:
+        """Queue exactly one host, without expanding to its cluster."""
         key = (environment, host_name)
         with self._lock:
             if key in self._in_flight:
