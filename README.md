@@ -112,7 +112,6 @@ These gates define the major version releases - the milestones may change in the
 
 #### Provisioning
 🤞 Generate password option on bootstrapping  
-🤞 Give option to enter one-time runtime user/pw to ssh and deploy the bootstrapping commands instead of pasting on each mgmt server  
 
 #### Packages
 🤞 If disk space check fails, parse for large folders, suggest things to clean  

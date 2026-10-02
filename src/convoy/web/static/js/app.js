@@ -225,7 +225,7 @@ function toast(message, kind = "info") {
 let _confirmResolve = null;
 let _confirmReturnFocus = null;
 
-function confirmDialog({ title, message, confirmLabel = "Confirm", danger = false }) {
+function confirmDialog({ title, message, confirmLabel = "Confirm", cancelLabel = "Cancel", danger = false }) {
   // A second request while one is open (shouldn't happen, the modal blocks
   // the page) cancels the first rather than leaving its caller hanging.
   if (_confirmResolve) closeConfirmDialog(false);
@@ -234,6 +234,7 @@ function confirmDialog({ title, message, confirmLabel = "Confirm", danger = fals
   document.getElementById("confirm-modal-title").textContent = title;
   document.getElementById("confirm-modal-message").textContent = message;
   ok.textContent = confirmLabel;
+  document.getElementById("confirm-modal-cancel").textContent = cancelLabel;
   ok.classList.toggle("danger", danger);
   modal.classList.toggle("danger", danger);
   _confirmReturnFocus = document.activeElement;
@@ -403,6 +404,8 @@ let envStorage = {}; // name -> boolean
 // Per-environment MDS-vs-SMS kind, refreshed by loadEnvironments — used to
 // show/hide the Domain picker in the discover-firewalls modal.
 let envIsMds = {}; // name -> boolean
+// The Bootstrap panel's "Log in and run for me" setup flow (section 2c).
+let bootstrapFlow = null;
 
 // Per-environment access mode, refreshed by loadEnvironments — true means the
 // management server(s) are reachable ONLY via the Management API, no SSH at
@@ -616,6 +619,7 @@ async function loadEnvironments() {
 }
 
 async function selectEnvironment(name) {
+  endBootstrapFlow(); // a setup flow belongs to the environment it started in
   currentEnv = name;
   localStorage.setItem("currentEnv", currentEnv);
   document.getElementById("env-picker").value = name;
@@ -1044,8 +1048,9 @@ document.addEventListener("keydown", (ev) => {
   closeHelpModal();
   closeEnvModal();
   closeCredAddModal();
-  closeDiscoverModal();
-  closeConnectPrimaryConfirmModal();
+  cancelDiscoverModal();
+  cancelConnectPrimaryConfirm();
+  cancelProvRunModal();
   closeApiKeyRevealModal();
   closeServerModal();
   closeUninstallModal();
@@ -1282,21 +1287,47 @@ document.getElementById("connect-primary-form").addEventListener("submit", async
     document.getElementById("connect-primary-confirm-modal").classList.remove("hidden");
   } catch (e) {
     toast("Could not render command preview: " + e.message, "error");
+    endBootstrapFlow();
   }
 });
 
 function closeConnectPrimaryConfirmModal() {
   document.getElementById("connect-primary-confirm-modal").classList.add("hidden");
 }
-document.getElementById("connect-primary-confirm-close").addEventListener("click", closeConnectPrimaryConfirmModal);
-document.getElementById("connect-primary-confirm-cancel").addEventListener("click", closeConnectPrimaryConfirmModal);
-onBackdropClick("connect-primary-confirm-modal", () => closeConnectPrimaryConfirmModal());
+// Cancel/close/Escape/backdrop, as opposed to Run closing it to proceed. Ends a
+// bootstrap setup flow, but only when the modal was actually open: the
+// app-wide Escape handler calls this whatever is on screen.
+function cancelConnectPrimaryConfirm() {
+  const modal = document.getElementById("connect-primary-confirm-modal");
+  if (modal.classList.contains("hidden")) return;
+  closeConnectPrimaryConfirmModal();
+  if (bootstrapFlow) {
+    endBootstrapFlow();
+    bootstrapRunStatus(
+      "Stopped before Connect to Primary. The account was created; run Connect to " +
+        "Primary below when you're ready.",
+      "warn",
+    );
+  }
+}
+document.getElementById("connect-primary-confirm-close").addEventListener("click", cancelConnectPrimaryConfirm);
+document.getElementById("connect-primary-confirm-cancel").addEventListener("click", cancelConnectPrimaryConfirm);
+onBackdropClick("connect-primary-confirm-modal", () => cancelConnectPrimaryConfirm());
 
 document.getElementById("connect-primary-confirm-run").addEventListener("click", async () => {
   if (!_connectPrimaryPayload || !currentEnv) return;
   const payload = _connectPrimaryPayload;
   _connectPrimaryPayload = null;
   closeConnectPrimaryConfirmModal();
+  // A storage-disabled environment has no credential set to log in with, so
+  // the job needs this one-off login (and the expert password: mgmt_cli is
+  // bash-native). Storage-enabled returns {} and uses the chosen set.
+  const inline = await operationCredentials(payload.name, "Connect to Primary", currentEnv, true);
+  if (inline === null) {
+    connectPrimaryStatus("Connect to Primary cancelled.", "warn");
+    endBootstrapFlow();
+    return;
+  }
   const btn = document.getElementById("connect-primary-btn");
   btn.disabled = true;
   connectPrimaryStatus(`Connecting to ${payload.name}…`);
@@ -1304,7 +1335,7 @@ document.getElementById("connect-primary-confirm-run").addEventListener("click",
     const job = await api(`/api/environments/${encodeURIComponent(currentEnv)}/connect-primary`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ ...payload, ...inline }),
     });
     lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if it finishes fast
     await Promise.all([loadJobs(), loadServers(), refreshStatus()]);
@@ -1324,6 +1355,8 @@ document.getElementById("connect-primary-confirm-run").addEventListener("click",
         `Connect to Primary failed: ${finished.error || "see the Jobs tab for details"}`,
         "err",
       );
+      cacheEvictCreds(payload.name); // a stale typed password re-prompts next time
+      endBootstrapFlow();
       return;
     }
     connectPrimaryStatus("Connected — Management API access provisioned.", "ok");
@@ -1344,8 +1377,17 @@ document.getElementById("connect-primary-confirm-run").addEventListener("click",
     // it was just provisioned, rather than leaving an accessibility problem to
     // surface later as a confusing 403 during discovery.
     checkApiAccessAfterConnect();
+    // Bootstrap setup flow: discovery is next, once the one-time API key (if
+    // one was shown) has been dealt with, so the two modals never stack.
+    if (bootstrapFlow) {
+      bootstrapRunStatus("Connected to the primary. Next: discover the other servers.", "ok");
+      const next = () => openDiscoverModal(payload.name);
+      if (document.getElementById("api-key-reveal-modal").classList.contains("hidden")) next();
+      else bootstrapFlow.afterReveal = next;
+    }
   } catch (e) {
     connectPrimaryStatus("Connect to Primary failed: " + e.message, "err");
+    endBootstrapFlow();
   } finally {
     btn.disabled = false;
   }
@@ -1475,6 +1517,11 @@ function openApiKeyRevealModal(apiKey, credentialSetName) {
 function closeApiKeyRevealModal() {
   document.getElementById("api-key-reveal-modal").classList.add("hidden");
   document.getElementById("api-key-reveal-output").textContent = ""; // don't linger in the DOM
+  const next = bootstrapFlow?.afterReveal;
+  if (next) {
+    delete bootstrapFlow.afterReveal;
+    next();
+  }
 }
 document.getElementById("api-key-reveal-close").addEventListener("click", closeApiKeyRevealModal);
 document.getElementById("api-key-reveal-done").addEventListener("click", closeApiKeyRevealModal);
@@ -1652,6 +1699,20 @@ function resetDiscoverResults() {
 function closeDiscoverModal() {
   document.getElementById("discover-modal").classList.add("hidden");
 }
+// Close/cancel/Escape/backdrop without importing. Ends a bootstrap setup flow
+// if the modal was actually open (the app-wide Escape handler calls this
+// regardless).
+function cancelDiscoverModal() {
+  if (document.getElementById("discover-modal").classList.contains("hidden")) return;
+  closeDiscoverModal();
+  if (bootstrapFlow) {
+    endBootstrapFlow();
+    bootstrapRunStatus(
+      "Setup finished at Connect to Primary. Discover servers whenever you're ready.",
+      "ok",
+    );
+  }
+}
 
 document.getElementById("discover-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
@@ -1749,6 +1810,10 @@ document.getElementById("discover-import").addEventListener("click", async () =>
   if (!picks.length) { toast("Nothing selected to import."); return; }
   const importBtn = document.getElementById("discover-import");
   importBtn.disabled = true;
+  // Bootstrap setup flow: offer to create the service account on these
+  // servers first, with the same temporary login, so they can be reached the
+  // moment they're imported. The flow ends here either way.
+  const bootFailed = bootstrapFlow ? await bootstrapDiscoveredServers(picks) : [];
   let ok = 0;
   const failed = [];
   for (const r of picks) {
@@ -1783,6 +1848,13 @@ document.getElementById("discover-import").addEventListener("click", async () =>
   }
   if (ok) await watchForStateRefresh(); // each import is queried once — see saveServer
   await Promise.all([loadJobs(), loadServers(), refreshStatus()]);
+  if (bootFailed.length) {
+    toast(
+      `Imported, but the service account could not be created on: ${bootFailed.join("; ")}. ` +
+        "Paste the bootstrap commands on those servers yourself.",
+      "error",
+    );
+  }
   if (failed.length) {
     toast(`Imported ${ok}. Failed: ${failed.join("; ")}`, "error");
     importBtn.disabled = false;
@@ -1795,9 +1867,9 @@ document.getElementById("discover-import").addEventListener("click", async () =>
 // primary itself is now added via the Connect to Primary panel above, not a
 // modal reached from here.
 document.getElementById("discover-btn").addEventListener("click", () => openDiscoverModal());
-document.getElementById("discover-close").addEventListener("click", closeDiscoverModal);
-document.getElementById("discover-cancel").addEventListener("click", closeDiscoverModal);
-onBackdropClick("discover-modal", () => closeDiscoverModal()); // backdrop click closes
+document.getElementById("discover-close").addEventListener("click", cancelDiscoverModal);
+document.getElementById("discover-cancel").addEventListener("click", cancelDiscoverModal);
+onBackdropClick("discover-modal", () => cancelDiscoverModal()); // backdrop click closes
 
 /* ---------- 1a-header. sticky header scroll state ---------- */
 
@@ -2125,7 +2197,8 @@ async function saveBootstrapCredential(setName, username, password, expertPasswo
 // button to its "Generate commands" state.
 function resetProvForm() {
   document.getElementById("provision-form").reset();
-  for (const id of ["prov-clish-notes", "prov-clish-wrap", "prov-cred-status"]) {
+  endBootstrapFlow();
+  for (const id of ["prov-clish-notes", "prov-clish-wrap", "prov-cred-status", "prov-run-status"]) {
     document.getElementById(id).classList.add("hidden");
   }
   const btn = document.getElementById("prov-generate");
@@ -2143,8 +2216,11 @@ document.getElementById("prov-generate").addEventListener("click", (ev) => {
   }
 });
 
-document.getElementById("provision-form").addEventListener("submit", async (ev) => {
-  ev.preventDefault();
+// Render the commands, save the new account as a credential set when it can,
+// and show both in the panel. Returns { username, password, credStatus } for
+// the "Log in and run for me" option, which needs the password to run them;
+// null if rendering failed.
+async function generateBootstrapCommands() {
   const passwordInput = document.getElementById("prov-password");
   const expertInput = document.getElementById("prov-expert");
   const username = document.getElementById("prov-username").value.trim();
@@ -2175,10 +2251,201 @@ document.getElementById("provision-form").addEventListener("submit", async (ev) 
     btn.textContent = "Reset";
     btn.classList.add("danger");
     btn.dataset.mode = "reset";
+    return { username, password, credStatus };
   } catch (e) {
     toast("Generate failed: " + e.message, "error");
+    return null;
   }
+}
+
+document.getElementById("provision-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  await generateBootstrapCommands();
 });
+
+/* ---------- 2c. bootstrap: log in and run for me ---------- */
+
+// The alternative to pasting: the operator gives an EXISTING Gaia login once,
+// Convoy runs the commands with it (services/mgmt_bootstrap.py), then walks
+// on through Connect to Primary and Discover servers, each still confirmed in
+// its own modal. Holds that temporary login and the new account's password
+// for the length of the flow only. It is never stored: not in localStorage,
+// not in the credential cache, and the server keeps it in memory for each job.
+// Cleared by endBootstrapFlow() when the flow finishes, fails, or is
+// cancelled at any step, and on Reset or an environment switch. The state
+// itself (bootstrapFlow) is declared with the page-level state near the top.
+
+function endBootstrapFlow() {
+  bootstrapFlow = null;
+}
+
+function bootstrapRunStatus(message, cls) {
+  const box = document.getElementById("prov-run-status");
+  box.textContent = message;
+  box.classList.remove("prov-note-warn", "prov-note-err", "prov-note-ok");
+  if (cls) box.classList.add(`prov-note-${cls}`);
+  box.classList.toggle("hidden", !message);
+}
+
+// One bootstrap job against one address with the flow's temporary login.
+// Resolves { ok, error }; never throws.
+async function runBootstrapJob(address, sshPort) {
+  const flow = bootstrapFlow;
+  if (!flow || !currentEnv) return { ok: false, error: "setup was cancelled" };
+  try {
+    const job = await api(`/api/environments/${encodeURIComponent(currentEnv)}/bootstrap-mgmt`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        address,
+        ssh_port: sshPort,
+        login_username: flow.loginUsername,
+        login_password: flow.loginPassword,
+        account_username: flow.accountUsername,
+        account_password: flow.accountPassword,
+      }),
+    });
+    lastJobStatus.set(job.id, job.status); // so pollJobs() reports it too
+    loadJobs();
+    const finished = await waitForJobDone(job.id, { timeoutMs: 120000, intervalMs: 500 });
+    if (!finished) return { ok: false, error: "still running, check the Jobs tab" };
+    if (finished.status === "succeeded") return { ok: true };
+    return { ok: false, error: finished.error || "see the Jobs tab for details" };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+document.getElementById("prov-run").addEventListener("click", async () => {
+  if (!currentEnv) { toast("Create an environment first (picker → New Environment…)."); return; }
+  const form = document.getElementById("provision-form");
+  if (!form.reportValidity()) return;
+  // Connect to Primary logs in as the new account, from its saved credential
+  // set, and needs the box's expert password for mgmt_cli. Without one the
+  // set can't be saved (credentials.py's put_set), so the chain would stall.
+  if (storageEnabled() && !document.getElementById("prov-expert").value) {
+    toast(
+      "Enter the box's expert password too: Connect to Primary needs it saved " +
+        "with the new account's credentials.",
+    );
+    document.getElementById("prov-expert").focus();
+    return;
+  }
+  endBootstrapFlow();
+  bootstrapRunStatus("");
+  const gen = await generateBootstrapCommands();
+  if (!gen) return;
+  if (storageEnabled() && !gen.credStatus?.ok) {
+    bootstrapRunStatus(
+      "Not continuing: Connect to Primary needs the new account saved as a credential " +
+        `set (${gen.credStatus?.reason || "not saved"}). Paste the commands instead, ` +
+        "or save the set and try again.",
+      "err",
+    );
+    return;
+  }
+  bootstrapFlow = {
+    accountUsername: gen.username,
+    accountPassword: gen.password,
+    credSet: gen.credStatus?.ok ? gen.credStatus.name : null,
+  };
+  document.getElementById("prov-run-account").textContent = gen.username;
+  document.getElementById("prov-run-name").value = document.getElementById("cp-name").value;
+  document.getElementById("prov-run-address").value = document.getElementById("cp-address").value;
+  document.getElementById("prov-run-port").value = document.getElementById("cp-port").value || 22;
+  document.getElementById("prov-run-login-user").value = "";
+  document.getElementById("prov-run-login-password").value = "";
+  document.getElementById("prov-run-modal").classList.remove("hidden");
+  const firstEmpty = ["prov-run-name", "prov-run-address", "prov-run-login-user"]
+    .map((id) => document.getElementById(id))
+    .find((input) => !input.value);
+  (firstEmpty || document.getElementById("prov-run-login-password")).focus();
+});
+
+function closeProvRunModal() {
+  document.getElementById("prov-run-modal").classList.add("hidden");
+  document.getElementById("prov-run-login-password").value = "";
+}
+// Cancel before anything ran: drop the flow. Only acts when the modal is
+// open, since the app-wide Escape handler calls it regardless.
+function cancelProvRunModal() {
+  if (document.getElementById("prov-run-modal").classList.contains("hidden")) return;
+  closeProvRunModal();
+  endBootstrapFlow();
+}
+document.getElementById("prov-run-close").addEventListener("click", cancelProvRunModal);
+document.getElementById("prov-run-cancel").addEventListener("click", cancelProvRunModal);
+onBackdropClick("prov-run-modal", () => cancelProvRunModal());
+
+document.getElementById("prov-run-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const flow = bootstrapFlow;
+  if (!flow) { closeProvRunModal(); return; }
+  const name = document.getElementById("prov-run-name").value.trim();
+  const address = document.getElementById("prov-run-address").value.trim();
+  const port = Number(document.getElementById("prov-run-port").value) || 22;
+  flow.loginUsername = document.getElementById("prov-run-login-user").value.trim();
+  flow.loginPassword = document.getElementById("prov-run-login-password").value;
+  closeProvRunModal();
+  bootstrapRunStatus(`Creating ${flow.accountUsername} on ${address}…`);
+  const result = await runBootstrapJob(address, port);
+  if (bootstrapFlow !== flow) return; // cancelled or replaced meanwhile
+  if (!result.ok) {
+    bootstrapRunStatus(`Bootstrap failed on ${address}: ${result.error}`, "err");
+    endBootstrapFlow();
+    return;
+  }
+  bootstrapRunStatus(
+    `Created ${flow.accountUsername} on ${address}. Next: confirm Connect to Primary.`,
+    "ok",
+  );
+  // Hand straight on to Connect to Primary, pre-filled with the same server
+  // and the new account; its own preview modal is the next confirmation.
+  document.getElementById("cp-name").value = name;
+  document.getElementById("cp-address").value = address;
+  document.getElementById("cp-port").value = port;
+  if (storageEnabled()) {
+    document.getElementById("cp-cred-select").value = flow.credSet || "";
+  } else {
+    document.getElementById("cp-user").value = flow.accountUsername;
+  }
+  document.getElementById("connect-primary-details").open = true;
+  document.getElementById("connect-primary-form").requestSubmit();
+});
+
+// Discover-import step of the flow: offer to run the same bootstrap on the
+// servers about to be imported. Returns "address: reason" strings for the
+// ones that failed. Always ends the flow.
+async function bootstrapDiscoveredServers(rows) {
+  const flow = bootstrapFlow;
+  const targets = rows
+    .map((r) => r.querySelector(".disc-address").value.trim())
+    .filter(Boolean);
+  try {
+    if (!targets.length) return [];
+    const yes = await confirmDialog({
+      title: `Create ${flow.accountUsername} on ${targets.length} server${targets.length === 1 ? "" : "s"}?`,
+      message:
+        `Logs in to ${targets.join(", ")} with your temporary login and runs the same ` +
+        "bootstrap commands before importing them, so Convoy can reach them straight " +
+        "away. Choose Skip to import them without it and paste the commands yourself.",
+      confirmLabel: "Create account",
+      cancelLabel: "Skip",
+    });
+    if (!yes) return [];
+    const status = document.getElementById("discover-status");
+    status.textContent = `Creating ${flow.accountUsername} on ${targets.length} server(s)…`;
+    // Discovered servers listen on SSH's default port, which is also what the
+    // import below records for them.
+    const results = await Promise.all(targets.map((address) => runBootstrapJob(address, 22)));
+    return targets
+      .map((address, i) => (results[i].ok ? null : `${address}: ${results[i].error}`))
+      .filter(Boolean);
+  } finally {
+    endBootstrapFlow();
+    bootstrapRunStatus("Setup complete.", "ok");
+  }
+}
 
 // Copy icons: each carries data-copy = the id of the <pre> it copies. Manual only.
 for (const btn of document.querySelectorAll(".copy-icon[data-copy]")) {

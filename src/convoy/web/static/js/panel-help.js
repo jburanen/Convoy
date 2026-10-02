@@ -13,10 +13,17 @@ const PANEL_HELP = {
     brief:
       "Generates clish commands to provision this tool's service account. " +
       "<strong class=\"prov-note-warn\">Apply them in clish on every management server</strong>, " +
-      "then continue to Connect to Primary below.",
-    full:
+      "then continue to Connect to Primary below, or use <strong>Log in and run for me</strong>.",
+    full: [
       "The generated commands create this tool's service account. Its credentials are " +
-      "saved to the <strong>Credentials</strong> table below automatically.",
+        "saved to the <strong>Credentials</strong> table below automatically.",
+      "<strong>Log in and run for me</strong> skips the pasting: give the primary's address " +
+        "and an existing Gaia login (for example the box's own admin), and Convoy runs the " +
+        "commands with it, then carries straight on to Connect to Primary and Discover " +
+        "servers. You confirm each step, and can use the same login to create the account " +
+        "on the servers discovery finds. That login is used only for bootstrapping: it is " +
+        "held in memory until the setup finishes or you cancel, and is never saved.",
+    ],
   },
   "connect-primary": {
     title: "Connect to Primary",

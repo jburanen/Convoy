@@ -43,3 +43,4 @@ Load this at the start of each session; read a linked file when its hook looks r
 - [Gaia shell posture](gaia-shell-posture.md) — every Gaia host now logs in as clish and elevates to expert on demand (not just Spark); `GaiaSession`, the file-transfer shell-toggle maneuver, and the credential enforcement it required
 - [Security review 2026-08](security-review-2026-08.md) - findings, what shipped in v0.70.0, and which were deliberately declined (don't silently re-fix those)
 - [UI dialogs convention](ui-dialogs-convention.md) — no native alert/confirm/prompt; confirmDialog() for gates, toast(msg, kind) with sticky errors
+- [Bootstrap run with existing login](bootstrap-run-with-existing-login.md) — "Log in and run for me": temporary login never persisted (vault + redaction, no require_ok), chains into Connect to Primary and Discover; unvalidated on live gear

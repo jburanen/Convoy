@@ -104,6 +104,10 @@
         <summary><h2>Bootstrap initial management access</h2></summary>
         <div class="section-head-actions">
           <button type="submit" form="provision-form" id="prov-generate" class="small">Generate commands</button>
+          <!-- Alternative to pasting: log in with an existing account and run
+               the commands, then carry on into Connect to Primary and server
+               discovery (see startBootstrapRun in app.js). -->
+          <button type="button" id="prov-run" class="small secondary">Log in and run for me…</button>
           <button type="button" class="help-btn" data-help="provision" title="About this panel" aria-label="About this panel">?</button>
         </div>
         <p class="hint" id="hint-provision"></p>
@@ -138,6 +142,8 @@
         </div>
         <!-- Saved-credential status: sits at the bottom, below the output box. -->
         <div id="prov-cred-status" class="prov-notes hidden"></div>
+        <!-- Progress of the "Log in and run for me" option. -->
+        <div id="prov-run-status" class="prov-notes hidden"></div>
       </details>
     </section>
 
@@ -700,6 +706,45 @@
       <div class="cred-modal-actions">
         <button type="submit">Continue</button>
         <button type="button" id="cred-modal-cancel" class="secondary">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ============ Bootstrap: run with an existing login (Provisioning tab) ===== -->
+<!-- Opened by the Bootstrap panel's "Log in and run for me" button. Collects the
+     primary to bootstrap and an EXISTING Gaia login to do it with. That login is
+     temporary: held in this page's memory for the setup flow and in the
+     server's memory for each job, never saved anywhere (services/
+     mgmt_bootstrap.py). Run starts the chain bootstrap -> Connect to Primary ->
+     Discover servers, each later step still confirmed in its own modal. -->
+<div id="prov-run-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="prov-run-title">
+  <div class="modal-card narrow">
+    <div class="modal-head">
+      <h2 id="prov-run-title">Log in and run the bootstrap</h2>
+      <button type="button" id="prov-run-close" class="small" title="Close">✕</button>
+    </div>
+    <p class="hint">
+      Convoy logs in to the primary with an existing Gaia account (for example
+      the box's own admin), runs the commands shown in the panel to create
+      <strong id="prov-run-account"></strong>, then continues to Connect to
+      Primary and server discovery. You confirm each of those steps as it comes
+      up, and can use the same login to create the account on the servers
+      discovery finds.
+    </p>
+    <p class="hint prov-note-warn">
+      This login is used only for bootstrapping. It is kept in memory until the
+      setup finishes or you cancel, and is never saved.
+    </p>
+    <form id="prov-run-form" class="stacked">
+      <label>Primary name <input type="text" id="prov-run-name" placeholder="e.g. mgmt-primary" required></label>
+      <label>Address / IP <input type="text" id="prov-run-address" placeholder="hostname or IP" required></label>
+      <label>SSH port <input type="number" id="prov-run-port" min="1" max="65535" value="22" required></label>
+      <label>Existing username <input type="text" id="prov-run-login-user" placeholder="e.g. admin" autocomplete="off" required></label>
+      <label>Existing password <input type="password" id="prov-run-login-password" autocomplete="off" required></label>
+      <div class="cred-modal-actions">
+        <button type="submit" id="prov-run-submit">Run and continue</button>
+        <button type="button" id="prov-run-cancel" class="secondary">Cancel</button>
       </div>
     </form>
   </div>

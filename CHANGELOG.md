@@ -9,6 +9,32 @@ Known issues and planned work live under Roadmap / Punch List in
 [README.md](README.md); a fix that closes an item there moves it into this file
 in the same commit as the fix and the version bump.
 
+## v1.4.0
+
+**Bootstrap can log in and run the commands for you.** Closes the punch-list
+item for a one-time login in place of pasting the bootstrap commands on each
+management server. The Bootstrap initial management access panel gains **Log in
+and run for me**: give the primary's address and an existing Gaia login (for
+example the box's own admin), and Convoy SSHes in with it and runs the same
+commands the panel shows. It then carries straight on to Connect to Primary,
+pre-filled with that server and the new account, and on to Discover servers,
+where importing offers to create the account on the discovered servers with the
+same login. You still confirm each step in its own dialog, and cancelling any of
+them stops the flow there. The existing login is used only for bootstrapping
+and is never saved: not to the credential store, the job record, or any log or
+error message, which also redact the new account's password hash. Both the
+browser and the server hold it in memory only until the setup finishes or is
+cancelled. If another session holds the server's clish configuration lock (an
+open WebUI session, say), the run takes it with `lock database override` and
+retries the command, noting that in the job log. In an environment that stores
+credentials, the expert password is required up front, because Connect to
+Primary logs in with the saved set.
+
+**Connect to Primary now works in environments that don't store credentials.**
+Its Run button never sent the one-off SSH and expert passwords such an
+environment needs, so the job was refused. It now prompts for them, as every
+other job there does.
+
 ## v1.3.2
 
 **The Credentials table shows the default pill where Make default would be.**
