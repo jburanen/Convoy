@@ -112,6 +112,18 @@ class PrimaryConnectService:
         credentials: CredentialBundle | None = None,
         triggered_by: str | None = None,
     ) -> JobRecord:
+        # An environment is entirely SMS or entirely Multi-Domain, so its
+        # primary's role is fixed by that kind — the UI only offers the one
+        # matching role, and this refuses a mismatched one from any other
+        # caller rather than recording an SMS primary in an MDS estate (or the
+        # reverse), which would mislabel the server and every later lookup.
+        expected_role = "primary_mds" if is_mds else "primary_sms"
+        if role != expected_role:
+            kind = "a Multi-Domain" if is_mds else "an SMS"
+            raise JobError(
+                f"environment {environment!r} is {kind} environment, so its primary "
+                f"must use role {expected_role!r}, not {role!r}"
+            )
         # add_server is an upsert, so posting an existing server's name with a
         # different address silently repoints that row — and every later
         # discovery/patch/diagnose job for this environment along with it. That

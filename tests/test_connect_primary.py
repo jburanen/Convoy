@@ -359,3 +359,44 @@ def test_reveal_api_key_allows_the_owner_and_is_still_pop_once(
 
     assert service.reveal_api_key(job.id, requested_by="alice") is not None
     assert service.reveal_api_key(job.id, requested_by="alice") is None
+
+
+# -- primary role must match the environment kind -----------------------------
+
+
+@pytest.mark.parametrize(
+    ("is_mds", "role"),
+    [(False, "primary_mds"), (True, "primary_sms"), (False, "secondary_sms")],
+)
+def test_rejects_role_not_matching_environment_kind(
+    service: PrimaryConnectService, env_manager: EnvironmentManager, is_mds: bool, role: str
+) -> None:
+    with pytest.raises(JobError, match="primary must use role"):
+        service.submit_connect_primary(
+            ENV,
+            name="mgmt-01",
+            address="192.0.2.10",
+            role=role,
+            ssh_user="svc-patch",
+            ssh_port=22,
+            credential_set="primary",
+            is_mds=is_mds,
+        )
+    # refused before the inventory upsert
+    assert env_manager.list_servers(ENV) == []
+
+
+def test_mds_environment_accepts_primary_mds(
+    service: PrimaryConnectService, env_manager: EnvironmentManager
+) -> None:
+    service.submit_connect_primary(
+        ENV,
+        name="mds-01",
+        address="192.0.2.20",
+        role="primary_mds",
+        ssh_user="svc-patch",
+        ssh_port=22,
+        credential_set="primary",
+        is_mds=True,
+    )
+    assert [s.role for s in env_manager.list_servers(ENV)] == ["primary_mds"]

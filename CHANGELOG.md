@@ -9,6 +9,17 @@ Known issues and planned work live under Roadmap / Punch List in
 [README.md](README.md); a fix that closes an item there moves it into this file
 in the same commit as the fix and the version bump.
 
+## v1.1.2
+
+**Connect to Primary only offers the primary that fits the environment.** An
+environment is entirely SMS or entirely Multi-Domain, yet the Provisioning tab's
+Connect to Primary panel offered both Primary SMS and Primary MDS as its Role,
+so an operator could record an SMS primary in an MDS estate or the reverse. The
+Role now lists only Primary MDS for a Multi-Domain environment and only Primary
+SMS otherwise, and it follows the environment when you switch environments or
+change one's type. The server refuses a mismatched role from any caller too, so
+the API cannot be used to slip the wrong kind of primary in.
+
 ## v1.1.1
 
 **Refreshing one cluster member now refreshes the rest of its cluster.** A

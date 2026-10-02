@@ -4922,7 +4922,22 @@ async function loadCredentialSets() {
 function updateProvisionCollapse() {
   document.getElementById("provision-details").open = !hasProvisionedPrimary;
   document.getElementById("connect-primary-details").open = !hasProvisionedPrimary;
+  syncConnectPrimaryRole();
   updateApiOnlyVisibility();
+}
+
+// Connect to Primary's Role offers only the primary that matches the
+// environment's kind: Primary MDS for a Multi-Domain environment, Primary SMS
+// otherwise. An environment is entirely one or the other (see envIsMds), so
+// offering both only invites recording the wrong kind of primary — the
+// backend refuses a mismatch too (PrimaryConnectService.submit_connect_primary).
+// Runs on every environment load/switch and estate-type change, via
+// updateProvisionCollapse.
+function syncConnectPrimaryRole() {
+  const role = envIsMds[currentEnv] ? "primary_mds" : "primary_sms";
+  const select = document.getElementById("cp-role");
+  select.replaceChildren(new Option(roleLabel(role), role));
+  select.value = role;
 }
 
 // Hides the UI surfaces that assume SSH/SCP reachability to the management

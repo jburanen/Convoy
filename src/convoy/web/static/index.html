@@ -165,9 +165,10 @@
             <label for="cp-port">SSH port</label>
             <input type="text" id="cp-name" placeholder="e.g. mgmt-primary" required>
             <input type="text" id="cp-address" placeholder="hostname or IP" required>
+            <!-- Rebuilt per environment by syncConnectPrimaryRole (app.js):
+                 only the primary matching the environment's SMS/MDS kind. -->
             <select id="cp-role">
               <option value="primary_sms">Primary SMS</option>
-              <option value="primary_mds">Primary MDS</option>
             </select>
             <input type="number" id="cp-port" value="22" min="1" max="65535">
           </div>
