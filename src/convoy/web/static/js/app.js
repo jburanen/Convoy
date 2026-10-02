@@ -173,10 +173,97 @@ function el(tplId) {
   return document.getElementById(tplId).content.firstElementChild.cloneNode(true);
 }
 
-function toast(message) {
-  // Minimal feedback channel; replace with something fancier if you like.
-  alert(message);
+/* ---------- 0a. toasts + confirmation modal ----------
+   The UI never uses the browser's native alert()/confirm(). Those freeze the
+   page (job polling and live status stop while one is open), can't carry the
+   danger styling a destructive gate needs, and browsers let the operator
+   suppress them after a few in a row, so a suppressed alert() silently loses
+   an error message. */
+
+// How long an info toast stays up. Warnings and errors never auto-dismiss: a
+// failure must be acknowledged, not missed while looking elsewhere.
+const TOAST_INFO_MS = 6000;
+
+// Non-blocking message, stacked bottom-right. kind: "info" (default, fades on
+// its own), "warn" or "error" (both stay until dismissed). Hovering an info
+// toast holds it so a long message can be finished.
+function toast(message, kind = "info") {
+  const item = document.createElement("div");
+  item.className = `toast ${kind}`;
+  item.setAttribute("role", kind === "info" ? "status" : "alert");
+  const text = document.createElement("span");
+  text.className = "toast-text";
+  text.textContent = message;
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "toast-close";
+  close.title = "Dismiss";
+  close.setAttribute("aria-label", "Dismiss");
+  close.textContent = "\u2715";
+  item.append(text, close);
+
+  let timer = null;
+  const dismiss = () => {
+    clearTimeout(timer);
+    item.classList.add("leaving");
+    setTimeout(() => item.remove(), 250);
+  };
+  close.addEventListener("click", dismiss);
+  if (kind === "info") {
+    const arm = () => { timer = setTimeout(dismiss, TOAST_INFO_MS); };
+    item.addEventListener("mouseenter", () => clearTimeout(timer));
+    item.addEventListener("mouseleave", arm);
+    arm();
+  }
+  document.getElementById("toast-stack").appendChild(item);
 }
+
+// The app's one yes/no gate (replaces confirm()). Resolves true only on the
+// action button; Cancel, the close button, Escape and a backdrop click all
+// resolve false. `danger` styles the action button as destructive and puts
+// initial focus on Cancel, so a reflexive Enter never confirms one.
+let _confirmResolve = null;
+let _confirmReturnFocus = null;
+
+function confirmDialog({ title, message, confirmLabel = "Confirm", danger = false }) {
+  // A second request while one is open (shouldn't happen, the modal blocks
+  // the page) cancels the first rather than leaving its caller hanging.
+  if (_confirmResolve) closeConfirmDialog(false);
+  const modal = document.getElementById("confirm-modal");
+  const ok = document.getElementById("confirm-modal-ok");
+  document.getElementById("confirm-modal-title").textContent = title;
+  document.getElementById("confirm-modal-message").textContent = message;
+  ok.textContent = confirmLabel;
+  ok.classList.toggle("danger", danger);
+  modal.classList.toggle("danger", danger);
+  _confirmReturnFocus = document.activeElement;
+  modal.classList.remove("hidden");
+  (danger ? document.getElementById("confirm-modal-cancel") : ok).focus();
+  return new Promise((resolve) => { _confirmResolve = resolve; });
+}
+
+function closeConfirmDialog(result) {
+  const resolve = _confirmResolve;
+  if (!resolve) return;
+  _confirmResolve = null;
+  document.getElementById("confirm-modal").classList.add("hidden");
+  if (_confirmReturnFocus && document.contains(_confirmReturnFocus)) _confirmReturnFocus.focus();
+  _confirmReturnFocus = null;
+  resolve(result);
+}
+
+document.getElementById("confirm-modal-ok").addEventListener("click", () => closeConfirmDialog(true));
+document.getElementById("confirm-modal-cancel").addEventListener("click", () => closeConfirmDialog(false));
+document.getElementById("confirm-modal-close").addEventListener("click", () => closeConfirmDialog(false));
+onBackdropClick("confirm-modal", () => closeConfirmDialog(false)); // backdrop click cancels
+// Escape while the confirmation is open cancels only the confirmation, not
+// the modal it was opened from, which the app-wide Escape handler further
+// down would otherwise close too. Capture phase, so this runs first.
+document.addEventListener("keydown", (ev) => {
+  if (ev.key !== "Escape" || !_confirmResolve) return;
+  ev.stopImmediatePropagation();
+  closeConfirmDialog(false);
+}, true);
 
 // Fills a "pick a stored package" <select> (the bulk-import pickers on the
 // CPUSE/Firewalls panels, and the CDT tab's own). Called both by each of
@@ -670,16 +757,20 @@ async function renderEnvManageList() {
         await loadEnvironments();
         if (wasCurrent) await selectEnvironment(resp.name); // refresh env-scoped views
         await renderEnvManageList();
-      } catch (e) { toast("Rename failed: " + e.message); }
+      } catch (e) { toast("Rename failed: " + e.message, "error"); }
     });
 
     // Per-row delete: removes this environment (its servers AND stored credentials).
     row.querySelector(".env-delete-btn").addEventListener("click", async () => {
-      if (!confirm(
-        `Delete environment "${env.name}"?\n\nIts management-server list AND all ` +
-        "stored credentials for it are permanently removed. This cannot be undone. " +
-        "Job logs are NOT deleted — they're kept for audit purposes."
-      )) return;
+      if (!await confirmDialog({
+        title: `Delete environment "${env.name}"?`,
+        message:
+          "Its management-server list and all stored credentials for it are " +
+          "permanently removed. This cannot be undone.\n\n" +
+          "Job logs are not deleted. They're kept for audit purposes.",
+        confirmLabel: "Delete environment",
+        danger: true,
+      })) return;
       try {
         await api(`/api/environments/${encodeURIComponent(env.name)}`, { method: "DELETE" });
         const wasCurrent = currentEnv === env.name;
@@ -695,7 +786,7 @@ async function renderEnvManageList() {
           await Promise.all([loadServers(), loadCredentialSets(), refreshStatus()]);
         }
         await renderEnvManageList();
-      } catch (e) { toast("Delete failed: " + e.message); }
+      } catch (e) { toast("Delete failed: " + e.message, "error"); }
     });
 
     // Environment type. One picker over what used to be two independent
@@ -730,7 +821,7 @@ async function renderEnvManageList() {
         await renderEnvManageList();
       } catch (e) {
         typeSelect.value = currentType; // revert on failure
-        toast("Could not change environment type: " + e.message);
+        toast("Could not change environment type: " + e.message, "error");
       }
     });
 
@@ -750,11 +841,14 @@ async function renderEnvManageList() {
     }
     toggle.addEventListener("change", async () => {
       const enable = toggle.checked;
-      if (!enable && !confirm(
-        `Disable credential storage for "${env.name}"?\n\n` +
-        "Any credentials already stored for this environment are permanently " +
-        "deleted, and future actions will prompt for credentials each time."
-      )) { toggle.checked = true; return; }
+      if (!enable && !await confirmDialog({
+        title: `Disable credential storage for "${env.name}"?`,
+        message:
+          "Any credentials already stored for this environment are permanently " +
+          "deleted, and future actions will prompt for credentials each time.",
+        confirmLabel: "Disable storage",
+        danger: true,
+      })) { toggle.checked = true; return; }
       try {
         await api(`/api/environments/${encodeURIComponent(env.name)}/credential-storage`, {
           method: "POST",
@@ -768,7 +862,7 @@ async function renderEnvManageList() {
         await renderEnvManageList();
       } catch (e) {
         toggle.checked = !enable; // revert on failure
-        toast("Could not change credential storage: " + e.message);
+        toast("Could not change credential storage: " + e.message, "error");
       }
     });
 
@@ -791,7 +885,7 @@ async function renderEnvManageList() {
         if (env.name === currentEnv) await loadServers(); // re-check existing rows' boxes
       } catch (e) {
         skipVerifyToggle.checked = !skip; // revert on failure
-        toast("Could not change skip-verify default: " + e.message);
+        toast("Could not change skip-verify default: " + e.message, "error");
       }
     });
     list.appendChild(row);
@@ -833,7 +927,7 @@ document.getElementById("env-add-form").addEventListener("submit", async (ev) =>
     // Land where the new environment's servers are added.
     selectTab("provisioning");
     history.replaceState(null, "", "#tab-provisioning");
-  } catch (e) { toast("Create failed: " + e.message); }
+  } catch (e) { toast("Create failed: " + e.message, "error"); }
 });
 
 /* ---------- 1a-prov. environment management (Provisioning tab) ---------- */
@@ -946,7 +1040,7 @@ document.getElementById("server-form").addEventListener("submit", async (ev) => 
     });
     lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if another tab is watching
     if (job.status !== "succeeded") {
-      toast("Save failed: " + (job.error || "unknown error"));
+      toast("Save failed: " + (job.error || "unknown error"), "error");
       await loadJobs();
       return;
     }
@@ -957,7 +1051,7 @@ document.getElementById("server-form").addEventListener("submit", async (ev) => 
     // "Not yet checked." An edit changes nothing on the host, so no watch.
     if (job.kind === "prov.add") await watchForStateRefresh();
     await Promise.all([loadJobs(), loadServers(), refreshStatus()]);
-  } catch (e) { toast("Save failed: " + e.message); }
+  } catch (e) { toast("Save failed: " + e.message, "error"); }
 });
 document.getElementById("server-modal-close").addEventListener("click", closeServerModal);
 document.getElementById("server-modal-cancel").addEventListener("click", closeServerModal);
@@ -1046,7 +1140,7 @@ document.getElementById("connect-primary-form").addEventListener("submit", async
     notesBox.classList.toggle("hidden", !notesBox.childElementCount);
     document.getElementById("connect-primary-confirm-modal").classList.remove("hidden");
   } catch (e) {
-    toast("Could not render command preview: " + e.message);
+    toast("Could not render command preview: " + e.message, "error");
   }
 });
 
@@ -1176,7 +1270,7 @@ document.getElementById("cp-api-access-repair").addEventListener("click", async 
       preview.commands.join("\n");
     document.getElementById("api-access-repair-confirm-modal").classList.remove("hidden");
   } catch (e) {
-    toast("Could not render command preview: " + e.message);
+    toast("Could not render command preview: " + e.message, "error");
   }
 });
 
@@ -1384,7 +1478,7 @@ async function openDiscoverModal(preselectName) {
   let servers = [];
   try {
     servers = await api(`/api/environments/${encodeURIComponent(currentEnv)}/servers`);
-  } catch (e) { toast("Could not load servers: " + e.message); return; }
+  } catch (e) { toast("Could not load servers: " + e.message, "error"); return; }
   const primaries = servers.filter((s) => s.role === "primary_sms" || s.role === "primary_mds");
   if (!primaries.length) {
     toast("Add a Primary SMS or Primary MDS server before discovering the rest.");
@@ -1549,7 +1643,7 @@ document.getElementById("discover-import").addEventListener("click", async () =>
   if (ok) await watchForStateRefresh(); // each import is queried once — see saveServer
   await Promise.all([loadJobs(), loadServers(), refreshStatus()]);
   if (failed.length) {
-    toast(`Imported ${ok}. Failed: ${failed.join("; ")}`);
+    toast(`Imported ${ok}. Failed: ${failed.join("; ")}`, "error");
     importBtn.disabled = false;
   } else {
     closeDiscoverModal();
@@ -1941,7 +2035,7 @@ document.getElementById("provision-form").addEventListener("submit", async (ev) 
     btn.classList.add("danger");
     btn.dataset.mode = "reset";
   } catch (e) {
-    toast("Generate failed: " + e.message);
+    toast("Generate failed: " + e.message, "error");
   }
 });
 
@@ -1952,7 +2046,7 @@ for (const btn of document.querySelectorAll(".copy-icon[data-copy]")) {
       await copyText(document.getElementById(btn.dataset.copy).textContent);
       flashCopied(btn);
     } catch {
-      toast("Clipboard unavailable — select and copy manually.");
+      toast("Clipboard unavailable — select and copy manually.", "error");
     }
   });
 }
@@ -2194,7 +2288,14 @@ async function loadServers() {
       openEditServerModal(srv, assignedByName.get(srv.name));
     });
     info.querySelector(".btn-remove").addEventListener("click", async () => {
-      if (!confirm(`Remove server ${srv.name} from ${currentEnv}?`)) return;
+      if (!await confirmDialog({
+        title: `Remove server ${srv.name}?`,
+        message:
+          `This removes it from ${currentEnv} in this tool's inventory. ` +
+          "The server itself is not changed.",
+        confirmLabel: "Remove server",
+        danger: true,
+      })) return;
       try {
         // Executes immediately as a tracked prov.delete job — see the server
         // form submit handler above for the same immediate-outcome model.
@@ -2203,9 +2304,9 @@ async function loadServers() {
           { method: "DELETE" },
         );
         lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if another tab is watching
-        if (job.status !== "succeeded") toast("Remove failed: " + (job.error || "unknown error"));
+        if (job.status !== "succeeded") toast("Remove failed: " + (job.error || "unknown error"), "error");
         await Promise.all([loadJobs(), loadServers(), refreshStatus()]);
-      } catch (e) { toast("Remove failed: " + e.message); }
+      } catch (e) { toast("Remove failed: " + e.message, "error"); }
     });
     infoTbody.appendChild(info);
   }
@@ -2517,13 +2618,16 @@ const LOW_SPACE_OVERRIDABLE_RE = /can be overridden if you choose to proceed any
 const HOST_KEY_CHANGED_RE = /host key .* has changed|host key changed/i;
 
 async function acceptHostKey(name) {
-  const sure = confirm(
-    `Accept a NEW SSH host key for "${name}"?
-
-Only do this if you know the host was rebuilt, reimaged, or upgraded.
-
-If it wasn't, a changed host key can mean the connection is being intercepted — and accepting it will send this host's stored SSH and expert-mode passwords to whatever is answering.`
-  );
+  const sure = await confirmDialog({
+    title: `Accept a new SSH host key for "${name}"?`,
+    message:
+      "Only do this if you know the host was rebuilt, reimaged, or upgraded.\n\n" +
+      "If it wasn't, a changed host key can mean the connection is being " +
+      "intercepted. Accepting it will send this host's stored SSH and " +
+      "expert-mode passwords to whatever is answering.",
+    confirmLabel: "Accept new key",
+    danger: true,
+  });
   if (!sure) return false;
   try {
     await api(`/api/environments/${encodeURIComponent(currentEnv)}/hosts/${encodeURIComponent(name)}/accept-host-key`, {
@@ -2534,7 +2638,7 @@ If it wasn't, a changed host key can mean the connection is being intercepted �
     toast(`Cleared the pinned host key for ${name} — the next connection will pin the new one.`);
     return true;
   } catch (e) {
-    toast("Could not clear the host key: " + e.message);
+    toast("Could not clear the host key: " + e.message, "error");
     return false;
   }
 }
@@ -2587,12 +2691,15 @@ async function installPackage(name, row) {
   const packageId = select.value;
   const verifyFirst = !row.querySelector(".skip-verify").checked;
   // Installs can REBOOT the management server — always confirm explicitly.
-  const sure = confirm(
-    `Install ${packageId} on ${name}?\n\n` +
-    (verifyFirst ? "" : "Skipping `installer verify` — installing directly.\n\n") +
-    "This may reboot the management server when it completes. " +
-    "Make sure this is inside a maintenance window and any HA peer is healthy."
-  );
+  const sure = await confirmDialog({
+    title: `Install ${packageId} on ${name}?`,
+    message:
+      (verifyFirst ? "" : "Skipping `installer verify`, installing directly.\n\n") +
+      "This may reboot the management server when it completes. " +
+      "Make sure this is inside a maintenance window and any HA peer is healthy.",
+    confirmLabel: "Install",
+    danger: true,
+  });
   if (!sure) return;
   const extra = await operationCredentials(name, "install a package", currentEnv, true);
   if (extra === null) return;
@@ -2610,7 +2717,7 @@ async function installPackage(name, row) {
     await loadJobs();
   } catch (e) {
     cacheEvictCreds(name);
-    toast("Install failed to start: " + e.message);
+    toast("Install failed to start: " + e.message, "error");
   }
 }
 
@@ -2618,7 +2725,7 @@ async function installPackage(name, row) {
 
 // Uninstall is destructive (reverts the host to a prior version, may reboot
 // it) so it gets its own modal requiring the operator to type the exact
-// target host name, rather than installPackage's plain confirm() dialog.
+// target host name, rather than installPackage's plain confirmation modal.
 // Shared by both the Management tab's server rows and the Firewalls panel —
 // `kind` ("server" | "firewall") picks the API path.
 let uninstallModalCtx = null;
@@ -2667,7 +2774,7 @@ document.getElementById("uninstall-modal-form").addEventListener("submit", async
     closeUninstallModal();
   } catch (e) {
     cacheEvictCreds(name);
-    toast("Uninstall failed to start: " + e.message);
+    toast("Uninstall failed to start: " + e.message, "error");
     submit.disabled = false;
   }
 });
@@ -2729,7 +2836,7 @@ async function bulkImport(btn, getTargets, perServer) {
         if (job && job.id) submitted.push(job.id);
       } catch (e) {
         cacheEvictCreds(name);
-        toast(`Import to ${name} failed to start: ${e.message}`);
+        toast(`Import to ${name} failed to start: ${e.message}`, "error");
       }
     }
     if (submitted.length) selectTab("jobs");
@@ -3162,7 +3269,7 @@ async function testSparkCredentials(name) {
     lastJobStatus.set(job.id, job.status);
     toast(`Credential test started for ${name} — see the Jobs tab for the result.`);
   } catch (e) {
-    toast("Could not start the credential test: " + e.message);
+    toast("Could not start the credential test: " + e.message, "error");
   }
 }
 
@@ -3183,7 +3290,7 @@ async function openBootstrapCredsConfirm(name, handlers) {
       preview.commands.join("\n");
     document.getElementById("fw-bootstrap-creds-confirm-modal").classList.remove("hidden");
   } catch (e) {
-    toast("Could not render command preview: " + e.message);
+    toast("Could not render command preview: " + e.message, "error");
   }
 }
 
@@ -3261,7 +3368,7 @@ async function openSparkBootstrapModal(name) {
     document.getElementById("fw-spark-bootstrap-output").textContent = preview.commands.join("\n");
     document.getElementById("fw-spark-bootstrap-modal").classList.remove("hidden");
   } catch (e) {
-    toast("Could not render command preview: " + e.message);
+    toast("Could not render command preview: " + e.message, "error");
     return;
   }
   await new Promise((resolve) => { _fwSparkBootstrapResolve = resolve; });
@@ -3370,7 +3477,7 @@ document.getElementById("fw-spark-cred-form").addEventListener("submit", async (
     return;
   }
   const result = await saveSparkCredential({ name, ssh_username, ssh_password, expert_password, api_key });
-  if (!result.ok) { toast("Save failed: " + result.reason); return; }
+  if (!result.ok) { toast("Save failed: " + result.reason, "error"); return; }
   closeSparkCredModal({ credentialSetName: result.name, scenario });
 });
 document.getElementById("fw-spark-cred-cancel").addEventListener("click", () => closeSparkCredModal(null));
@@ -3447,12 +3554,15 @@ async function installFirewallPackage(name, row) {
     }
   }
   // Installs can REBOOT the firewall — always confirm explicitly.
-  const sure = confirm(
-    `Install ${packageId} on ${name}?\n\n` +
-    (!isSpark && !verifyFirst ? "Skipping `installer verify` — installing directly.\n\n" : "") +
-    "This may reboot the firewall when it completes. " +
-    "Make sure this is inside a maintenance window and any HA peer is healthy."
-  );
+  const sure = await confirmDialog({
+    title: `Install ${packageId} on ${name}?`,
+    message:
+      (!isSpark && !verifyFirst ? "Skipping `installer verify`, installing directly.\n\n" : "") +
+      "This may reboot the firewall when it completes. " +
+      "Make sure this is inside a maintenance window and any HA peer is healthy.",
+    confirmLabel: "Install",
+    danger: true,
+  });
   if (!sure) return;
   const extra = await operationCredentials(name, "install a package", currentEnv, true);
   if (extra === null) return;
@@ -3470,7 +3580,7 @@ async function installFirewallPackage(name, row) {
     await loadJobs();
   } catch (e) {
     cacheEvictCreds(name);
-    toast("Install failed to start: " + e.message);
+    toast("Install failed to start: " + e.message, "error");
   }
 }
 
@@ -3511,12 +3621,15 @@ document.getElementById("fw-remove-selected-btn").addEventListener("click", asyn
   const listed = names.length <= 10
     ? names.join(", ")
     : `${names.slice(0, 10).join(", ")} and ${names.length - 10} more`;
-  if (!confirm(
-    `Remove ${names.length} firewall${names.length === 1 ? "" : "s"} from ${currentEnv}?\n\n` +
-    `${listed}\n\n` +
-    "This only removes them from this tool's inventory — the devices themselves " +
-    "are not changed."
-  )) return;
+  if (!await confirmDialog({
+    title: `Remove ${names.length} firewall${names.length === 1 ? "" : "s"} from ${currentEnv}?`,
+    message:
+      `${listed}\n\n` +
+      "This only removes them from this tool's inventory. The devices themselves " +
+      "are not changed.",
+    confirmLabel: "Remove",
+    danger: true,
+  })) return;
   const btn = document.getElementById("fw-remove-selected-btn");
   btn.disabled = true;
   const failed = [];
@@ -3531,7 +3644,7 @@ document.getElementById("fw-remove-selected-btn").addEventListener("click", asyn
     } catch (e) { failed.push(`${name}: ${e.message}`); }
   }
   btn.disabled = false;
-  if (failed.length) toast(`Removed ${names.length - failed.length}. Failed: ${failed.join("; ")}`);
+  if (failed.length) toast(`Removed ${names.length - failed.length}. Failed: ${failed.join("; ")}`, "error");
   await Promise.all([loadJobs(), loadFirewalls()]);
 });
 
@@ -3783,7 +3896,7 @@ async function populateFirewallDomainSelect(currentDomain) {
       `/api/environments/${encodeURIComponent(currentEnv)}/domains`,
     );
     for (const d of domains) select.appendChild(new Option(d, d));
-    for (const w of warnings || []) toast(w);
+    for (const w of warnings || []) toast(w, "warn");
   } catch (e) {
     document.getElementById("fm-domain-status").textContent = "Could not load domains: " + e.message;
   }
@@ -3907,7 +4020,7 @@ document.getElementById("firewall-form").addEventListener("submit", async (ev) =
     });
     lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if another tab is watching
     if (job.status !== "succeeded") {
-      toast("Save failed: " + (job.error || "unknown error"));
+      toast("Save failed: " + (job.error || "unknown error"), "error");
       await loadJobs();
       return;
     }
@@ -3918,12 +4031,19 @@ document.getElementById("firewall-form").addEventListener("submit", async (ev) =
       pendingSparkBootstrap = false;
       await openSparkBootstrapModal(name);
     }
-  } catch (e) { toast("Save failed: " + e.message); }
+  } catch (e) { toast("Save failed: " + e.message, "error"); }
 });
 document.getElementById("firewall-modal-remove").addEventListener("click", async () => {
   const name = editingFirewallName;
   if (!name || !currentEnv) return;
-  if (!confirm(`Remove firewall ${name} from ${currentEnv}?`)) return;
+  if (!await confirmDialog({
+    title: `Remove firewall ${name}?`,
+    message:
+      `This removes it from ${currentEnv} in this tool's inventory. ` +
+      "The firewall itself is not changed.",
+    confirmLabel: "Remove firewall",
+    danger: true,
+  })) return;
   try {
     // Executes immediately as a tracked prov.delete job — see the firewall
     // form submit handler above.
@@ -3932,10 +4052,10 @@ document.getElementById("firewall-modal-remove").addEventListener("click", async
       { method: "DELETE" },
     );
     lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if another tab is watching
-    if (job.status !== "succeeded") toast("Remove failed: " + (job.error || "unknown error"));
+    if (job.status !== "succeeded") toast("Remove failed: " + (job.error || "unknown error"), "error");
     closeFirewallModal();
     await Promise.all([loadJobs(), loadFirewalls()]);
-  } catch (e) { toast("Remove failed: " + e.message); }
+  } catch (e) { toast("Remove failed: " + e.message, "error"); }
 });
 document.getElementById("firewall-modal-close").addEventListener("click", closeFirewallModal);
 document.getElementById("firewall-modal-cancel").addEventListener("click", closeFirewallModal);
@@ -3961,7 +4081,7 @@ async function openDiscoverFirewallsModal() {
   let servers = [];
   try {
     servers = await api(`/api/environments/${encodeURIComponent(currentEnv)}/servers`);
-  } catch (e) { toast("Could not load servers: " + e.message); return; }
+  } catch (e) { toast("Could not load servers: " + e.message, "error"); return; }
   if (!findPrimaryServer(servers)) {
     toast("Add a Primary SMS or Primary MDS server on the Provisioning tab before discovering firewalls.");
     return;
@@ -3978,7 +4098,7 @@ async function openDiscoverFirewallsModal() {
       const { domains, warnings } = await api(`/api/environments/${encodeURIComponent(currentEnv)}/domains`);
       for (const d of domains) domainSelect.appendChild(new Option(d, d));
       status.textContent = domains.length ? "" : "No Domains found on the primary MDS.";
-      for (const w of warnings || []) toast(w);
+      for (const w of warnings || []) toast(w, "warn");
     } catch (e) {
       status.textContent = "Could not load domains: " + e.message;
     }
@@ -4220,7 +4340,7 @@ document.getElementById("discover-firewalls-import").addEventListener("click", a
   }
   if (ok) await watchForStateRefresh(); // each imported firewall is queried once
   await Promise.all([loadJobs(), loadFirewalls()]);
-  if (failed.length) toast(`Imported ${ok}. Failed: ${failed.join("; ")}`);
+  if (failed.length) toast(`Imported ${ok}. Failed: ${failed.join("; ")}`, "error");
   // The table now represents the import, not the scan: drop every row that
   // wasn't picked (unselected, or already in inventory) so what's left is
   // exactly the firewalls chosen — nothing greyed out, nothing to re-read.
@@ -4487,7 +4607,7 @@ async function cdtLoadCandidates() {
     renderCdtCandidates();
   } catch (e) {
     cacheEvictCreds(name);
-    toast("Load failed: " + e.message);
+    toast("Load failed: " + e.message, "error");
   }
 }
 
@@ -4546,7 +4666,7 @@ async function cdtSaveCandidates() {
     toast(`Saved ${resp.rows} candidate(s). Row order is the deployment order.`);
   } catch (e) {
     cacheEvictCreds(name);
-    toast("Save failed: " + e.message);
+    toast("Save failed: " + e.message, "error");
   }
 }
 
@@ -4566,7 +4686,7 @@ async function cdtAction(path, body) {
     await loadJobs();
   } catch (e) {
     cacheEvictCreds(name);
-    toast(`${path} failed to start: ` + e.message);
+    toast(`${path} failed to start: ` + e.message, "error");
   }
 }
 
@@ -4581,16 +4701,19 @@ document.getElementById("cdt-save").addEventListener("click", cdtSaveCandidates)
 document.getElementById("cdt-prepare").addEventListener("click", () =>
   cdtAction("prepare", { extended: document.getElementById("cdt-extended").checked }));
 document.getElementById("cdt-status-btn").addEventListener("click", cdtRefreshStatus);
-document.getElementById("cdt-execute").addEventListener("click", () => {
+document.getElementById("cdt-execute").addEventListener("click", async () => {
   const name = document.getElementById("cdt-server").value;
   const count = cdtCandidates ? cdtCandidates.rows.length : "?";
   // Executing deploys to EVERY firewall in the candidates list, in order.
-  const sure = confirm(
-    `Execute the CDT deployment from ${name || "?"}?\n\n` +
-    `This deploys to ${count} firewall(s) in the saved candidate order, ` +
-    "including automatic cluster failovers. Make sure this is inside a " +
-    "maintenance window and the candidate list was reviewed and saved."
-  );
+  const sure = await confirmDialog({
+    title: `Execute the CDT deployment from ${name || "?"}?`,
+    message:
+      `This deploys to ${count} firewall(s) in the saved candidate order, ` +
+      "including automatic cluster failovers. Make sure this is inside a " +
+      "maintenance window and the candidate list was reviewed and saved.",
+    confirmLabel: "Execute deployment",
+    danger: true,
+  });
   if (sure) cdtAction("execute", { confirmed: true });
 });
 
@@ -4693,12 +4816,12 @@ async function loadPackages() {
         lastJobStatus.set(job.id, job.status);
         if (job.status !== "succeeded") {
           pin.checked = !pin.checked; // revert — the write itself failed
-          toast("Retention update failed: " + (job.error || "unknown error"));
+          toast("Retention update failed: " + (job.error || "unknown error"), "error");
         }
         await Promise.all([loadJobs(), loadPackages()]);
       } catch (e) {
         pin.checked = !pin.checked; // revert the optimistic toggle — the request itself failed
-        toast("Could not update retention: " + e.message);
+        toast("Could not update retention: " + e.message, "error");
       } finally {
         pin.disabled = false;
       }
@@ -4706,12 +4829,17 @@ async function loadPackages() {
 
     // Delete likewise executes immediately — see the comment above.
     row.querySelector(".btn-delete").addEventListener("click", async () => {
-      if (!confirm(`Delete package ${pkg.filename}?`)) return;
+      if (!await confirmDialog({
+        title: `Delete package ${pkg.filename}?`,
+        message: "This removes it from this tool's package store.",
+        confirmLabel: "Delete package",
+        danger: true,
+      })) return;
       try {
         const job = await api(`/api/packages/${encodeURIComponent(pkg.filename)}`, { method: "DELETE" });
         lastJobStatus.set(job.id, job.status);
         await Promise.all([loadJobs(), loadPackages()]);
-      } catch (e) { toast("Delete failed to start: " + e.message); }
+      } catch (e) { toast("Delete failed to start: " + e.message, "error"); }
     });
 
     // Unlike the rest of this table, this is genuinely slow (SFTP to the
@@ -4745,7 +4873,7 @@ async function loadPackages() {
         applyPushProgress(row, pkg.filename);
         await loadJobs();
       } catch (e) {
-        toast("Could not start upload: " + e.message);
+        toast("Could not start upload: " + e.message, "error");
       } finally {
         // Leave it disabled if the job is now tracked as in-flight — only the
         // failure path (job never got created) should re-enable immediately.
@@ -4795,12 +4923,12 @@ async function uploadPackageFile(file) {
       await Promise.all([loadJobs(), loadPackages()]);
     } else {
       text.textContent = UPLOAD_FIELD_HINT;
-      toast(`Upload of ${file.name} failed: ` + (job.error || "unknown error"));
+      toast(`Upload of ${file.name} failed: ` + (job.error || "unknown error"), "error");
       await loadJobs();
     }
   } catch (e) {
     text.textContent = UPLOAD_FIELD_HINT;
-    toast(`Upload of ${file.name} failed to start: ` + e.message);
+    toast(`Upload of ${file.name} failed to start: ` + e.message, "error");
   } finally {
     field.classList.remove("uploading");
     input.disabled = false;
@@ -4890,7 +5018,7 @@ async function loadCredentialSets() {
       try {
         await api(envUrl(`/credentials/${encodeURIComponent(set.name)}/default`), { method: "POST" });
         await loadCredentialSets();
-      } catch (e) { toast("Could not set default: " + e.message); }
+      } catch (e) { toast("Could not set default: " + e.message, "error"); }
     });
     row.querySelector(".cs-user").textContent = set.ssh_username ?? "";
     row.querySelector(".cs-auth").textContent = set.ssh_auth; // password | key | none
@@ -4899,12 +5027,17 @@ async function loadCredentialSets() {
     row.querySelector(".btn-edit").addEventListener("click", () => openCredEditModal(set));
     // Executes immediately as a tracked cred.delete job (services/cred_ops.py).
     row.querySelector(".btn-delete").addEventListener("click", async () => {
-      if (!confirm(`Delete credential set "${set.name}"? Servers using it lose access.`)) return;
+      if (!await confirmDialog({
+        title: `Delete credential set "${set.name}"?`,
+        message: "Servers using it lose access.",
+        confirmLabel: "Delete credential set",
+        danger: true,
+      })) return;
       try {
         const job = await api(envUrl(`/credentials/${encodeURIComponent(set.name)}`), { method: "DELETE" });
         lastJobStatus.set(job.id, job.status);
         await Promise.all([loadJobs(), loadCredentialSets(), loadServers()]);
-      } catch (e) { toast("Delete failed to start: " + e.message); }
+      } catch (e) { toast("Delete failed to start: " + e.message, "error"); }
     });
     tbody.appendChild(row);
   }
@@ -5032,7 +5165,7 @@ document.getElementById("credential-form").addEventListener("submit", async (ev)
     closeCredAddModal(); // resets the form so no secrets linger in the DOM
     await Promise.all([loadJobs(), loadCredentialSets(), loadServers()]);
   } catch (e) {
-    toast("Save failed to start: " + e.message);
+    toast("Save failed to start: " + e.message, "error");
   }
 });
 
@@ -5324,7 +5457,7 @@ function wireJobRow(row, jobId) {
   row.querySelector(".btn-cancel").addEventListener("click", async (ev) => {
     ev.stopPropagation(); // don't also toggle the log row
     try { await api(`/api/jobs/${jobId}/cancel`, { method: "POST" }); }
-    catch (e) { toast("Cancel failed: " + e.message); }
+    catch (e) { toast("Cancel failed: " + e.message, "error"); }
     await loadJobs();
   });
   row.querySelector(".btn-retry-low-space").addEventListener("click", async (ev) => {
@@ -5332,16 +5465,15 @@ function wireJobRow(row, jobId) {
     const btn = ev.currentTarget;
     const host = row.querySelector(".job-target").textContent;
     const env = row.querySelector(".job-env").textContent;
-    const sure = confirm(
-      `${host} did not have the recommended free space for this import, but still has at ` +
-      `least 1.5x the package size available.` +
-      `
-
-Retry the import anyway?
-
-The original failure stays on the Jobs tab as the ` +
-      `record of why this was overridden.`
-    );
+    const sure = await confirmDialog({
+      title: "Retry the import anyway?",
+      message:
+        `${host} did not have the recommended free space for this import, but ` +
+        "still has at least 1.5x the package size available.\n\n" +
+        "The original failure stays on the Jobs tab as the record of why this " +
+        "was overridden.",
+      confirmLabel: "Retry import",
+    });
     if (!sure) return;
     const extra = await operationCredentials(host, "retry the import", env, true);
     if (extra === null) return; // credential prompt cancelled
@@ -5356,7 +5488,7 @@ The original failure stays on the Jobs tab as the ` +
       toast(`Retrying the import on ${host} with the disk-space override.`);
       await loadJobs();
     } catch (e) {
-      toast("Retry failed: " + e.message);
+      toast("Retry failed: " + e.message, "error");
     } finally {
       btn.disabled = false;
     }
@@ -5385,7 +5517,7 @@ The original failure stays on the Jobs tab as the ` +
           : "Still not listed as imported yet."
       );
     } catch (e) {
-      toast("Check status failed: " + e.message);
+      toast("Check status failed: " + e.message, "error");
     } finally {
       btn.disabled = false;
     }

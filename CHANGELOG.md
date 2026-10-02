@@ -9,6 +9,23 @@ Known issues and planned work live under Roadmap / Punch List in
 [README.md](README.md); a fix that closes an item there moves it into this file
 in the same commit as the fix and the version bump.
 
+## v1.2.0
+
+**Every confirmation and message now uses the app's own UI, not the
+browser's.** Twelve yes/no gates still used the browser's native confirm
+dialog, among them deleting an environment, accepting a changed SSH host key,
+installs that can reboot a host, and CDT execute. Every toast message was a
+native alert. Besides looking out of place next to the coded modals, the native
+dialogs froze the page, so job polling and live status stopped while one was
+open. Browsers also let you suppress them after a few in a row, which silently
+threw away error messages. Confirmations now open a shared modal that sits above
+any dialog it is opened from. Destructive ones get a red action button and start
+with focus on Cancel, so a reflexive Enter never confirms one. Escape cancels
+only the confirmation, not the dialog behind it. Messages are now non-blocking
+toasts in the bottom-right corner. Informational ones fade on their own, while
+failures and warnings stay until dismissed so none is missed. The purpose-built
+gates, such as typed-name uninstall and the command previews, are unchanged.
+
 ## v1.1.2
 
 **Connect to Primary only offers the primary that fits the environment.** An

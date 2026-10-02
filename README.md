@@ -108,7 +108,6 @@ These gates define the major version releases - the milestones may change in the
 ✨ Add logic to display a warning on mobile devices that the UI of this tool does not scale down well (by design) and you should use it on a larger display.   
 🤞 RADIUS auth option  
 🤞 Timed/scheduled install actions  
-✨ Standarize all user questions or confirmations to the modal UI and avoid using browser UI elements  
 🤞 Separate AD group auth per environment?  
 
 #### Provisioning

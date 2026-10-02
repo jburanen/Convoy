@@ -868,6 +868,58 @@ button.link-btn.fw-name-link {
 #fw-spark-cred-modal,
 #fw-spark-bootstrap-modal { z-index: 101; }
 #prov-overwrite-modal { z-index: 102; }
+/* The shared confirmation (confirmDialog in app.js) can open from inside any
+   of the modals above, so it outranks them all. */
+#confirm-modal { z-index: 200; }
+#confirm-modal-message { white-space: pre-line; } /* messages carry line breaks */
+#confirm-modal.danger #confirm-modal-message { color: var(--warn); }
+
+/* ---- toasts (toast() in app.js) ----
+   Non-blocking replacement for alert(): stacked bottom-right, above every
+   modal (#confirm-modal included) so a failure raised while a dialog is open
+   is still seen. Info fades on its own; warn/error stay until dismissed. */
+#toast-stack {
+  position: fixed;
+  right: 1rem;
+  bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.5rem;
+  max-width: min(440px, calc(100vw - 2rem));
+  pointer-events: none; /* the gaps between toasts don't block the page */
+}
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  transition: opacity 0.25s ease;
+}
+.toast.warn { border-left-color: var(--warn); }
+.toast.error { border-left-color: var(--danger); }
+.toast.leaving { opacity: 0; }
+.toast-text { flex: 1; }
+.toast-close {
+  background: none;
+  border: none;
+  color: var(--muted);
+  padding: 0 0.15rem;
+  font-size: 1rem;
+  line-height: 1.2;
+  cursor: pointer;
+}
+.toast-close:hover { color: var(--text); }
 
 .modal-card {
   background: var(--panel);

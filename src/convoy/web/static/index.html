@@ -723,7 +723,33 @@
 </div>
 
 <!-- ============ Spark major-version mismatch confirm (Firewalls Install) ===== -->
-<!-- Shown before the usual reboot confirm() when the picked .img's major
+<!-- ============ Shared confirmation modal (every tab) ===================== -->
+<!-- The app's one yes/no gate, replacing the browser's native confirm():
+     opened by confirmDialog() in app.js, which resolves true on the action
+     button and false on Cancel, the close button, Escape, or a backdrop click.
+     Ranked above every other modal (see #confirm-modal in app.css) because it
+     is routinely opened from inside one, e.g. Manage Environments -> Delete.
+     Purpose-built gates (typed-name uninstall, the command-preview confirms,
+     the Spark major-version warning) stay separate on purpose. -->
+<div id="confirm-modal" class="modal hidden" role="alertdialog" aria-modal="true" aria-labelledby="confirm-modal-title" aria-describedby="confirm-modal-message">
+  <div class="modal-card narrow">
+    <div class="modal-head">
+      <h2 id="confirm-modal-title"></h2>
+      <button type="button" id="confirm-modal-close" class="small" title="Close">✕</button>
+    </div>
+    <p id="confirm-modal-message" class="hint"></p>
+    <div class="cred-modal-actions">
+      <button type="button" id="confirm-modal-ok"></button>
+      <button type="button" id="confirm-modal-cancel" class="secondary">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast stack (non-blocking messages, see toast() in app.js). Sits above
+     every modal so an error raised while a dialog is open is still seen. -->
+<div id="toast-stack" aria-live="polite"></div>
+
+<!-- Shown before the usual reboot confirmation when the picked .img's major
      version (first two dot/underscore-separated numeric groups) differs
      from the firewall's currently detected one — see installFirewallPackage/
      sparkMajorVersion in app.js. Resolves a Promise<boolean>, same pattern
@@ -1185,7 +1211,7 @@
 
 <!-- ============ Uninstall confirmation modal (CPUSE / Management tabs) ====== -->
 <!-- Uninstall is destructive (reverts the host to a prior version, may reboot
-     it) so — unlike Install's confirm() dialog — this requires the operator to
+     it) so — unlike Install's plain confirmation — this requires the operator to
      type the exact target host name before the Uninstall button is enabled,
      the same "type to confirm" pattern used for other high-blast-radius
      actions elsewhere in the app. -->
