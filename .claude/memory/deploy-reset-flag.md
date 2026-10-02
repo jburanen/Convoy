@@ -40,9 +40,9 @@ built-in defaults: basic auth admin/admin, no LDAP, no TLS, credential store
 unconfigured. Added 2026-08-27 alongside the `--reset` change.
 
 ## Gotcha: certs are usually owned by someone else
-On dev-host, `data/certs` is `owner:deploy drwxr-sr-x` while the deploy runs as
-`deployer` — group has r-x, **not** w, so deployer cannot delete anything inside
-it. A blind `rm -rf ./data` therefore fails, and under `set -e` it aborted the
+On the dev host, `data/certs` is owned by a different account than the one
+the deploy runs as (shared group, `drwxr-sr-x`) — group has r-x, **not** w, so
+the deploying user cannot delete anything inside it. A blind `rm -rf ./data` therefore fails, and under `set -e` it aborted the
 wipe *after* `docker compose down`: stack down, data half-gone, nothing
 redeployed. `--reset-all` now pre-flights with `find ./data -type d ! -writable`
 and exits **before** stopping the stack, naming the offending directories.

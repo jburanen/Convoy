@@ -17,7 +17,7 @@ services:
     # user wasn't that exact uid (observed 2026-07-25: `mkdir -p data` on a
     # fresh host created a directory owned by whoever ran it, not 1001, and
     # the container — always uid 1001 — got Permission denied). Defaults to
-    # 1001:1001 (deployer on the original dev host) if run without deploy.sh's
+    # 1001:1001 (the deploy account on the original dev host) if run without deploy.sh's
     # exports, e.g. a bare `docker compose -f docker-compose.dev.yml up`.
     user: "${DEPLOY_UID:-1001}:${DEPLOY_GID:-1001}"
     ports:
