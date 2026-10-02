@@ -1481,12 +1481,14 @@
 
 <template id="tpl-credential-row">
   <tr>
-    <td><span class="cs-name-text"></span><span class="cs-default-pill pill hidden">default</span></td>
+    <td class="cs-name-text"></td>
     <td class="cs-user"></td>
     <td class="cs-auth"></td>
     <td class="cs-expert"></td>
     <td class="cs-api"></td>
     <td class="cs-actions row-actions">
+      <!-- the default set shows the pill in place of its Make default button -->
+      <span class="cs-default-pill pill hidden">default</span>
       <button class="btn-default small secondary">Make default</button>
       <button class="btn-edit small">Edit</button>
       <button class="btn-delete small danger">Delete</button>

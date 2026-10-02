@@ -9,6 +9,14 @@ Known issues and planned work live under Roadmap / Punch List in
 [README.md](README.md); a fix that closes an item there moves it into this file
 in the same commit as the fix and the version bump.
 
+## v1.3.2
+
+**The Credentials table shows the default pill where Make default would be.**
+The default credential set's pill sat beside its name, while every other set's
+Make default button sat in the actions column, so the one piece of state moved
+between two columns depending on the row. The pill now takes the button's
+place in the actions column, and the Name column holds just the name.
+
 ## v1.3.1
 
 **Manage Environments settings toggle only from the checkbox itself.** Each
