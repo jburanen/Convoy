@@ -1174,7 +1174,10 @@ button.link-btn.fw-name-link {
   gap: 0.4rem;
   font-size: 0.9rem;
 }
-.env-storage-toggle input { flex: none; margin-top: 0.15rem; }
+/* A <div>, not a <label>: these rows span the modal, and a label made a click
+   anywhere on the row (blank space included) flip the setting. Only the
+   checkbox itself toggles; it carries its own aria-label. */
+.env-storage-toggle input { flex: none; margin-top: 0.15rem; cursor: pointer; }
 /* Label text with the muted hint stacked underneath it. */
 .env-storage-main { display: flex; flex-direction: column; gap: 0.1rem; }
 .env-storage-note { margin: 0; }

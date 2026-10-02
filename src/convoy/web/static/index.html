@@ -1567,15 +1567,15 @@
         <button type="button" class="env-edit-cancel small secondary">Cancel</button>
       </form>
       <p class="hint env-type-note"></p>
-      <label class="env-storage-toggle">
-        <input type="checkbox" class="env-storage-input">
+      <div class="env-storage-toggle">
+        <input type="checkbox" class="env-storage-input" aria-label="Enable encrypted credential storage">
         <span class="env-storage-main">
           Enable encrypted credential storage
           <span class="hint env-storage-note"></span>
         </span>
-      </label>
-      <label class="env-storage-toggle">
-        <input type="checkbox" class="env-skip-verify-input">
+      </div>
+      <div class="env-storage-toggle">
+        <input type="checkbox" class="env-skip-verify-input" aria-label="Skip verify by default for installs">
         <span class="env-storage-main">
           Skip verify by default for installs
           <span class="hint">
@@ -1584,7 +1584,7 @@
             reasons unrelated to whether the install itself would succeed
           </span>
         </span>
-      </label>
+      </div>
     </div>
   </li>
 </template>

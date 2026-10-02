@@ -9,6 +9,15 @@ Known issues and planned work live under Roadmap / Punch List in
 [README.md](README.md); a fix that closes an item there moves it into this file
 in the same commit as the fix and the version bump.
 
+## v1.3.1
+
+**Manage Environments settings toggle only from the checkbox itself.** Each
+row (encrypted credential storage, skip verify by default) used to span the
+whole modal, so a click anywhere on it, blank space included, flipped the
+setting. That was easy to do by accident, especially credential storage, whose
+disable path deletes stored credentials after a confirmation. Now only a click
+on the checkbox changes anything.
+
 ## v1.3.0
 
 **Manage Environments is now a collapsible, reorderable list.** Only one
