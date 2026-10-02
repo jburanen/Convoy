@@ -572,8 +572,10 @@
     </div>
     <p class="hint">
       Environments are independent management estates — each has its own inventory
-      of management servers and its own credentials. Edit a name and click
-      <strong>Rename</strong>: servers, credentials, and job history move with it.
+      of management servers and its own credentials. Click an environment to
+      expand its settings, and drag the handle to reorder the list (the picker
+      follows the same order). <strong>Rename</strong> moves servers,
+      credentials, and job history with the new name.
       Servers and deletion are managed on the <strong>Provisioning</strong> tab.
       An environment is entirely one <strong>type</strong> — never a mix — so
       discovery and every other command knows which variant to run.
@@ -1529,39 +1531,61 @@
   </tr>
 </template>
 
-<!-- one row in the Manage Environments modal: editable name + Rename, plus
-     per-environment credential-storage and MDS-kind toggles -->
+<!-- one row in the Manage Environments modal. Collapsed it shows only the
+     drag handle, name and type; expanding it (one row at a time) reveals the
+     Rename / Change type / Delete buttons and the per-environment settings.
+     Name and type are read-only text until Rename or Change type opens the
+     matching editor, since both are set once and rarely touched again. -->
 <template id="tpl-env-manage-row">
   <li class="env-manage-row">
-    <div class="env-manage-name">
-      <input type="text" class="env-rename-input">
-      <select class="env-type-select" title="What kind of management estate this environment is">
-        <option value="sms">SmartCenter (SMS)</option>
-        <option value="mds">Multi-Domain (MDS)</option>
-        <option value="s1c">Smart-1 Cloud</option>
-      </select>
-      <button class="env-rename-btn small">Rename</button>
-      <button class="env-delete-btn small danger" title="Delete this environment — removes its servers and stored credentials">Delete</button>
+    <div class="env-manage-head">
+      <button type="button" class="env-drag-handle" title="Drag to reorder (or focus and press the arrow keys)" aria-label="Reorder environment">⠿</button>
+      <button type="button" class="env-expand-btn" aria-expanded="false">
+        <span class="env-caret" aria-hidden="true">▸</span>
+        <span class="env-manage-title"></span>
+        <span class="badge env-type-label"></span>
+      </button>
+      <span class="env-manage-actions">
+        <button type="button" class="env-rename-btn small secondary">Rename</button>
+        <button type="button" class="env-type-btn small secondary">Change type</button>
+        <button type="button" class="env-delete-btn small danger" title="Delete this environment — removes its servers and stored credentials">Delete</button>
+      </span>
     </div>
-    <p class="hint env-type-note"></p>
-    <label class="env-storage-toggle">
-      <input type="checkbox" class="env-storage-input">
-      <span class="env-storage-main">
-        Enable encrypted credential storage
-        <span class="hint env-storage-note"></span>
-      </span>
-    </label>
-    <label class="env-storage-toggle">
-      <input type="checkbox" class="env-skip-verify-input">
-      <span class="env-storage-main">
-        Skip verify by default for installs
-        <span class="hint">
-          Pre-checks "skip verify" on the Management tab's Install control —
-          for environments where `installer verify` chronically fails for
-          reasons unrelated to whether the install itself would succeed
+    <div class="env-manage-body">
+      <form class="env-edit-row env-rename-form hidden">
+        <input type="text" class="env-rename-input" aria-label="New environment name" required>
+        <button type="submit" class="small">Save</button>
+        <button type="button" class="env-edit-cancel small secondary">Cancel</button>
+      </form>
+      <form class="env-edit-row env-type-form hidden">
+        <select class="env-type-select" aria-label="Environment type" title="What kind of management estate this environment is">
+          <option value="sms">SmartCenter (SMS)</option>
+          <option value="mds">Multi-Domain (MDS)</option>
+          <option value="s1c">Smart-1 Cloud</option>
+        </select>
+        <button type="submit" class="small">Save</button>
+        <button type="button" class="env-edit-cancel small secondary">Cancel</button>
+      </form>
+      <p class="hint env-type-note"></p>
+      <label class="env-storage-toggle">
+        <input type="checkbox" class="env-storage-input">
+        <span class="env-storage-main">
+          Enable encrypted credential storage
+          <span class="hint env-storage-note"></span>
         </span>
-      </span>
-    </label>
+      </label>
+      <label class="env-storage-toggle">
+        <input type="checkbox" class="env-skip-verify-input">
+        <span class="env-storage-main">
+          Skip verify by default for installs
+          <span class="hint">
+            Pre-checks "skip verify" on the Management tab's Install control —
+            for environments where `installer verify` chronically fails for
+            reasons unrelated to whether the install itself would succeed
+          </span>
+        </span>
+      </label>
+    </div>
   </li>
 </template>
 

@@ -235,6 +235,15 @@ class EnvironmentManager:
         self.rebuild()
         return new
 
+    def reorder_environments(self, names: list[str]) -> None:
+        """Set the order environments are listed in (Manage Environments and
+        the env picker). ``names`` must name every environment exactly once."""
+        if not self._store.reorder_environments(names):
+            raise InventoryError(
+                "environment order must list every environment exactly once; reload and try again"
+            )
+        self.rebuild()  # the registry, and so GET /api/environments, follows it
+
     def delete_environment(self, name: str) -> None:
         if not self._store.delete_environment(name):
             raise InventoryError(f"unknown environment: {name!r}")

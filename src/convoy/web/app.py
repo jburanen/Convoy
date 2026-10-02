@@ -354,6 +354,10 @@ class EnvironmentIn(BaseModel):
     is_mds: bool = False
 
 
+class EnvironmentOrderIn(BaseModel):
+    names: list[str]
+
+
 class EnvironmentKindIn(BaseModel):
     is_mds: bool
 
@@ -1154,6 +1158,15 @@ def _register_routes(app: FastAPI) -> None:
         except OrchestratorError as exc:
             raise _map_error(exc) from exc
         return {"name": name}
+
+    @app.post("/api/environments/order")
+    def reorder_environments(body: EnvironmentOrderIn, request: Request) -> dict[str, list[str]]:
+        """Set the listing order (drag-and-drop in Manage Environments)."""
+        try:
+            _envmgr(request).reorder_environments(body.names)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        return {"names": _registry(request).names()}
 
     @app.post("/api/environments/{env}/rename")
     def rename_environment(env: str, body: EnvironmentIn, request: Request) -> dict[str, str]:

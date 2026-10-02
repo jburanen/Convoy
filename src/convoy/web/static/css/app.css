@@ -1115,15 +1115,59 @@ button.link-btn.fw-name-link {
   padding: 0.5rem 0;
   border-bottom: 1px solid var(--border);
 }
-.env-manage-name { display: flex; gap: 0.5rem; align-items: center; }
-/* The name grows, the type picker stays its natural width beside it — the two
-   read as one line describing the environment, which is the point of folding
-   the old MDS/API-only checkboxes into it. */
-.env-manage-name .env-rename-input { flex: 1 1 auto; min-width: 8rem; }
-.env-manage-name .env-type-select { flex: 0 0 auto; }
-/* Explains whichever type is selected, in place of the per-checkbox hints. */
+/* Accordion: a collapsed row is just handle + name + type; .expanded (one row
+   at a time, see renderEnvManageList) adds the action buttons and the body. */
+.env-manage-head { display: flex; gap: 0.4rem; align-items: center; }
+.env-manage-row:not(.expanded) .env-manage-actions,
+.env-manage-row:not(.expanded) .env-manage-body { display: none; }
+.env-manage-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding-left: 1.6rem; /* line up under the name, past the drag handle */
+}
+.env-expand-btn {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: none;
+  border: none;
+  color: var(--text);
+  padding: 0.25rem 0;
+  text-align: left;
+  cursor: pointer;
+}
+.env-expand-btn:hover { filter: none; color: var(--accent); }
+.env-caret { color: var(--muted); transition: transform 0.15s ease; }
+.env-manage-row.expanded .env-caret { transform: rotate(90deg); }
+.env-manage-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.env-manage-actions { display: flex; gap: 0.35rem; flex-wrap: wrap; justify-content: flex-end; }
+.env-drag-handle {
+  flex: none;
+  background: none;
+  border: none;
+  color: var(--muted);
+  padding: 0.1rem 0.2rem;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: grab;
+  touch-action: none;
+}
+.env-drag-handle:hover, .env-drag-handle:focus-visible { color: var(--text); filter: none; }
+.env-manage-row.dragging { opacity: 0.45; }
+/* Rename / Change type editors: hidden until their button is clicked. */
+.env-edit-row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+.env-edit-row.hidden { display: none; } /* out-rank the generic .hidden */
+.env-edit-row .env-rename-input { flex: 1 1 12rem; min-width: 0; }
+/* Explains the current type (or, while Change type is open, the one picked). */
 .env-type-note { margin: 0.15rem 0 0.4rem; }
-.env-manage-name input { flex: 1; }
 .env-storage-toggle {
   display: flex;
   align-items: flex-start; /* checkbox aligns with the first line of the label */

@@ -615,6 +615,14 @@ _MIGRATIONS: tuple[str, ...] = (
     UPDATE firewalls SET role = 'firewall' WHERE role = 'gateway';
     UPDATE env_hosts SET role = 'firewall' WHERE role = 'gateway';
     """,
+    # v31: operator-chosen environment order (drag-and-drop in Manage
+    # Environments), which the env picker follows too. Existing rows keep the
+    # alphabetical order they were listed in until now.
+    """
+    ALTER TABLE environments ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
+    UPDATE environments SET sort_order =
+        (SELECT COUNT(*) FROM environments AS e WHERE e.name < environments.name);
+    """,
 )
 
 
@@ -790,7 +798,7 @@ class Store:
 
     def list_environments(self) -> list[EnvironmentRow]:
         with self._connect() as conn:
-            rows = conn.execute("SELECT * FROM environments ORDER BY name").fetchall()
+            rows = conn.execute("SELECT * FROM environments ORDER BY sort_order, name").fetchall()
         return [_environment_from_row(r) for r in rows]
 
     def get_environment(self, name: str) -> EnvironmentRow | None:
@@ -813,12 +821,13 @@ class Store:
     ) -> None:
         """Raises sqlite3.IntegrityError if the name already exists. New
         environments default to credential storage *disabled*, SMS (not MDS),
-        and SSH-reachable (not API-only)."""
+        and SSH-reachable (not API-only). It is listed last."""
         with self._connect() as conn:
             conn.execute(
                 "INSERT INTO environments"
-                " (name, created_at, credential_storage_enabled, is_mds, api_only)"
-                " VALUES (?, ?, ?, ?, ?)",
+                " (name, created_at, credential_storage_enabled, is_mds, api_only, sort_order)"
+                " VALUES (?, ?, ?, ?, ?,"
+                " (SELECT COALESCE(MAX(sort_order) + 1, 0) FROM environments))",
                 (
                     name,
                     utcnow().isoformat(),
@@ -865,6 +874,21 @@ class Store:
             )
         return cur.rowcount > 0
 
+    def reorder_environments(self, names: list[str]) -> bool:
+        """Set the listing order to ``names``, which must be exactly the
+        existing environments, each once. Returns False (and changes nothing)
+        otherwise, so a stale list from a second browser can't drop or
+        duplicate a position."""
+        with self._connect() as conn:
+            existing = {r["name"] for r in conn.execute("SELECT name FROM environments")}
+            if len(names) != len(existing) or set(names) != existing:
+                return False
+            conn.executemany(
+                "UPDATE environments SET sort_order = ? WHERE name = ?",
+                [(i, name) for i, name in enumerate(names)],
+            )
+        return True
+
     def delete_environment(self, name: str) -> bool:
         """Deletes the environment and (via cascade) its env_hosts."""
         with self._connect() as conn:
@@ -881,7 +905,7 @@ class Store:
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT created_at, credential_storage_enabled, is_mds, api_only,"
-                " skip_verify_by_default"
+                " skip_verify_by_default, sort_order"
                 " FROM environments WHERE name = ?",
                 (old,),
             ).fetchone()
@@ -890,8 +914,8 @@ class Store:
             conn.execute(
                 "INSERT INTO environments"
                 " (name, created_at, credential_storage_enabled, is_mds, api_only,"
-                " skip_verify_by_default)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
+                " skip_verify_by_default, sort_order)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     new,
                     row["created_at"],
@@ -899,6 +923,7 @@ class Store:
                     row["is_mds"],
                     row["api_only"],
                     row["skip_verify_by_default"],
+                    row["sort_order"],  # a rename keeps its place in the list
                 ),
             )
             conn.execute("UPDATE env_hosts SET environment = ? WHERE environment = ?", (new, old))

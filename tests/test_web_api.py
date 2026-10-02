@@ -759,6 +759,21 @@ def test_rename_environment_errors(client: TestClient) -> None:
     assert client.post("/api/environments/r1/rename", json={"name": "x!"}).status_code == 400
 
 
+def test_reorder_environments(client: TestClient) -> None:
+    client.post("/api/environments", json={"name": "o1"})
+    client.post("/api/environments", json={"name": "o2"})
+    names = [e["name"] for e in client.get("/api/environments").json()]
+    wanted = list(reversed(names))
+
+    resp = client.post("/api/environments/order", json={"names": wanted})
+    assert resp.status_code == 200
+    assert resp.json() == {"names": wanted}
+    assert [e["name"] for e in client.get("/api/environments").json()] == wanted
+
+    stale = client.post("/api/environments/order", json={"names": wanted[:-1]})
+    assert stale.status_code == 400
+
+
 def test_remove_server(client: TestClient) -> None:
     client.post("/api/environments", json={"name": "e1"})
     job = _add_server(client, "e1", name="m1", address="192.0.2.90", role="management")

@@ -522,6 +522,56 @@ def test_rename_environment_errors(store: Store) -> None:
     assert store.environment_exists("a") is True
 
 
+def test_environments_list_in_creation_order_until_reordered(store: Store) -> None:
+    for name in ("zeta", "alpha", "mid"):
+        store.insert_environment(name)
+    assert [e.name for e in store.list_environments()] == ["zeta", "alpha", "mid"]
+
+    assert store.reorder_environments(["mid", "zeta", "alpha"]) is True
+    assert [e.name for e in store.list_environments()] == ["mid", "zeta", "alpha"]
+
+    store.insert_environment("new")  # appended last
+    store.rename_environment("zeta", "Zeta HQ")  # keeps its place
+    assert [e.name for e in store.list_environments()] == ["mid", "Zeta HQ", "alpha", "new"]
+
+
+@pytest.mark.parametrize(
+    "names",
+    [["a"], ["a", "b", "ghost"], ["a", "a"], ["b", "a", "a"]],
+)
+def test_reorder_environments_rejects_a_list_that_is_not_every_env_once(
+    store: Store, names: list[str]
+) -> None:
+    store.insert_environment("a")
+    store.insert_environment("b")
+    assert store.reorder_environments(names) is False
+    assert [e.name for e in store.list_environments()] == ["a", "b"]
+
+
+def test_v30_database_keeps_alphabetical_order_after_sort_order_migration(
+    tmp_path: Path,
+) -> None:
+    import sqlite3
+
+    path = tmp_path / "orch.db"
+    conn = sqlite3.connect(path)
+    for script in _MIGRATIONS[:30]:
+        conn.executescript(script)
+    conn.execute("PRAGMA user_version = 30")
+    for name in ("charlie", "alpha", "bravo"):
+        conn.execute(
+            "INSERT INTO environments (name, created_at) VALUES (?, '2026-01-01T00:00:00Z')",
+            (name,),
+        )
+    conn.commit()
+    conn.close()
+
+    store = Store(path)
+    assert [e.name for e in store.list_environments()] == ["alpha", "bravo", "charlie"]
+    store.insert_environment("aardvark")
+    assert [e.name for e in store.list_environments()][-1] == "aardvark"
+
+
 def test_v3_database_upgrades_to_env_tables(tmp_path: Path) -> None:
     # A v3 DB (as deployed before this feature) must gain the environments +
     # env_hosts tables on reopen, keeping existing data.

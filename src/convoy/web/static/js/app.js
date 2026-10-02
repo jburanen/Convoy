@@ -712,9 +712,17 @@ const ENV_TYPE_NOTES = {
 // on the Provisioning tab (section 1a-prov below), scoped to the picker's
 // selection. A rename moves servers, credentials, and job history atomically.
 
+// Which row of the accordion is open (by name); null = all collapsed. Opening
+// the modal starts on the environment the picker has selected.
+let envManageExpanded = null;
+// Names in the order last rendered/saved, so a drag that ends where it began
+// doesn't post an order change.
+let envManageOrder = [];
+
 async function openEnvModal() {
   document.getElementById("env-first-run-hint").classList.toggle("hidden", !envModalIsFirstRun);
   document.getElementById("env-modal").classList.remove("hidden");
+  envManageExpanded = currentEnv;
   await renderEnvManageList();
 }
 function closeEnvModal() {
@@ -734,17 +742,99 @@ function noteFirstRunChoice() {
   document.getElementById("env-first-run-hint").classList.add("hidden");
 }
 
+// Expand one row and collapse every other (the list is an accordion), or
+// collapse them all with name=null.
+function setEnvManageExpanded(name) {
+  envManageExpanded = name;
+  for (const row of document.querySelectorAll("#env-manage-list .env-manage-row")) {
+    const open = row.dataset.env === name;
+    row.classList.toggle("expanded", open);
+    row.querySelector(".env-expand-btn").setAttribute("aria-expanded", String(open));
+  }
+}
+
+// Persist the list's current DOM order (after a drag or an arrow-key move).
+// The picker is reloaded so it follows the same order.
+async function saveEnvManageOrder() {
+  const names = [...document.querySelectorAll("#env-manage-list .env-manage-row")]
+    .map((row) => row.dataset.env);
+  if (names.join("\n") === envManageOrder.join("\n")) return;
+  try {
+    await api("/api/environments/order", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ names }),
+    });
+    envManageOrder = names;
+    await loadEnvironments();
+  } catch (e) {
+    toast("Could not reorder environments: " + e.message, "error");
+    await renderEnvManageList(); // put the rows back where the server has them
+  }
+}
+
 async function renderEnvManageList() {
   const list = document.getElementById("env-manage-list");
   const envs = await api("/api/environments");
+  envManageOrder = envs.map((env) => env.name);
+  if (!envManageOrder.includes(envManageExpanded)) envManageExpanded = null;
+  // A lone environment has nothing to collapse against, so it starts open.
+  if (envs.length === 1) envManageExpanded = envs[0].name;
   list.replaceChildren();
   for (const env of envs) {
     const row = el("tpl-env-manage-row");
+    row.dataset.env = env.name;
+    row.querySelector(".env-manage-title").textContent = env.name;
+    row.querySelector(".env-expand-btn").addEventListener("click", () => {
+      setEnvManageExpanded(envManageExpanded === env.name ? null : env.name);
+    });
+    wireEnvManageDrag(row);
+
+    // Name and type are plain text until Rename / Change type opens the
+    // matching editor: both are set once and rarely changed, so they
+    // shouldn't sit there as live inputs inviting an accidental edit.
+    const renameForm = row.querySelector(".env-rename-form");
+    const typeForm = row.querySelector(".env-type-form");
+    const typeSelect = row.querySelector(".env-type-select");
+    const typeNote = row.querySelector(".env-type-note");
+    // api_only wins on read: it is what actually changes behaviour, so a legacy
+    // row carrying both flags reads as Smart-1 Cloud and is normalized to that
+    // pair the next time the type is changed.
+    const currentType = env.api_only ? "s1c" : env.is_mds ? "mds" : "sms";
+    row.querySelector(".env-type-label").textContent =
+      typeSelect.querySelector(`option[value="${currentType}"]`).textContent;
+    typeNote.textContent = ENV_TYPE_NOTES[currentType];
+
     const input = row.querySelector(".env-rename-input");
-    input.value = env.name;
-    row.querySelector(".env-rename-btn").addEventListener("click", async () => {
+    const closeEditors = () => {
+      renameForm.classList.add("hidden");
+      typeForm.classList.add("hidden");
+      typeSelect.value = currentType;
+      typeNote.textContent = ENV_TYPE_NOTES[currentType];
+    };
+    for (const cancel of row.querySelectorAll(".env-edit-cancel")) {
+      cancel.addEventListener("click", closeEditors);
+    }
+    // Escape in an editor cancels just that edit, not the whole modal.
+    for (const form of [renameForm, typeForm]) {
+      form.addEventListener("keydown", (ev) => {
+        if (ev.key !== "Escape") return;
+        ev.stopPropagation();
+        closeEditors();
+      });
+    }
+
+    row.querySelector(".env-rename-btn").addEventListener("click", () => {
+      closeEditors();
+      input.value = env.name;
+      renameForm.classList.remove("hidden");
+      input.focus();
+      input.select();
+    });
+    renameForm.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
       const newName = input.value.trim();
-      if (!newName || newName === env.name) return;
+      if (!newName || newName === env.name) { closeEditors(); return; }
       try {
         const resp = await api(`/api/environments/${encodeURIComponent(env.name)}/rename`, {
           method: "POST",
@@ -756,8 +846,47 @@ async function renderEnvManageList() {
         const wasCurrent = currentEnv === env.name;
         await loadEnvironments();
         if (wasCurrent) await selectEnvironment(resp.name); // refresh env-scoped views
+        envManageExpanded = resp.name;
         await renderEnvManageList();
       } catch (e) { toast("Rename failed: " + e.message, "error"); }
+    });
+
+    // Environment type. One picker over what used to be two independent
+    // checkboxes (MDS, API-only), because they were never really independent:
+    // the three combinations an operator actually deploys are SMS, MDS and
+    // Smart-1 Cloud, and a checkbox pair also offers "MDS + API-only", which
+    // nothing here is built to drive. Applied through /type so both flags move
+    // together — two sequential calls could leave an environment in exactly the
+    // combination the picker exists to prevent.
+    row.querySelector(".env-type-btn").addEventListener("click", () => {
+      closeEditors();
+      typeForm.classList.remove("hidden");
+      typeSelect.focus();
+    });
+    // Preview the picked type's note before it is saved.
+    typeSelect.addEventListener("change", () => {
+      typeNote.textContent = ENV_TYPE_NOTES[typeSelect.value];
+    });
+    typeForm.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const chosen = typeSelect.value;
+      if (chosen === currentType) { closeEditors(); return; }
+      try {
+        await api(`/api/environments/${encodeURIComponent(env.name)}/type`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(ENV_TYPE_FLAGS[chosen]),
+        });
+        noteFirstRunChoice();
+        await loadEnvironments();
+        if (env.name === currentEnv) {
+          updateProvisionCollapse();
+          await loadServers();
+        }
+        await renderEnvManageList();
+      } catch (e) {
+        toast("Could not change environment type: " + e.message, "error");
+      }
     });
 
     // Per-row delete: removes this environment (its servers AND stored credentials).
@@ -787,42 +916,6 @@ async function renderEnvManageList() {
         }
         await renderEnvManageList();
       } catch (e) { toast("Delete failed: " + e.message, "error"); }
-    });
-
-    // Environment type. One picker over what used to be two independent
-    // checkboxes (MDS, API-only), because they were never really independent:
-    // the three combinations an operator actually deploys are SMS, MDS and
-    // Smart-1 Cloud, and a checkbox pair also offers "MDS + API-only", which
-    // nothing here is built to drive. Applied through /type so both flags move
-    // together — two sequential calls could leave an environment in exactly the
-    // combination the picker exists to prevent.
-    const typeSelect = row.querySelector(".env-type-select");
-    const typeNote = row.querySelector(".env-type-note");
-    // api_only wins on read: it is what actually changes behaviour, so a legacy
-    // row carrying both flags reads as Smart-1 Cloud and is normalized to that
-    // pair the next time the picker is touched.
-    const currentType = env.api_only ? "s1c" : env.is_mds ? "mds" : "sms";
-    typeSelect.value = currentType;
-    typeNote.textContent = ENV_TYPE_NOTES[currentType];
-    typeSelect.addEventListener("change", async () => {
-      const chosen = typeSelect.value;
-      try {
-        await api(`/api/environments/${encodeURIComponent(env.name)}/type`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(ENV_TYPE_FLAGS[chosen]),
-        });
-        noteFirstRunChoice();
-        await loadEnvironments();
-        if (env.name === currentEnv) {
-          updateProvisionCollapse();
-          await loadServers();
-        }
-        await renderEnvManageList();
-      } catch (e) {
-        typeSelect.value = currentType; // revert on failure
-        toast("Could not change environment type: " + e.message, "error");
-      }
     });
 
     // Credential-storage toggle. Disabling purges any stored credentials, so we
@@ -890,9 +983,57 @@ async function renderEnvManageList() {
     });
     list.appendChild(row);
   }
+  setEnvManageExpanded(envManageExpanded);
   if (!envs.length) {
     document.getElementById("env-add-name").focus();
   }
+}
+
+// Drag-and-drop reordering. A row is only draggable while its handle is held,
+// so text in the expanded settings can still be selected normally. The row
+// moves live under the pointer; the new order is saved once on drop.
+let envManageDragRow = null;
+function wireEnvManageDrag(row) {
+  const handle = row.querySelector(".env-drag-handle");
+  handle.addEventListener("pointerdown", () => { row.draggable = true; });
+  handle.addEventListener("pointerup", () => { row.draggable = false; });
+  row.addEventListener("dragstart", (ev) => {
+    if (!row.draggable) return;
+    envManageDragRow = row;
+    row.classList.add("dragging");
+    ev.dataTransfer.effectAllowed = "move";
+    ev.dataTransfer.setData("text/plain", row.dataset.env); // Firefox needs data set
+  });
+  row.addEventListener("dragend", async () => {
+    row.draggable = false;
+    row.classList.remove("dragging");
+    envManageDragRow = null;
+    await saveEnvManageOrder();
+  });
+  // Keyboard alternative: arrow keys on the focused handle move the row.
+  handle.addEventListener("keydown", async (ev) => {
+    if (ev.key !== "ArrowUp" && ev.key !== "ArrowDown") return;
+    ev.preventDefault();
+    const sibling = ev.key === "ArrowUp" ? row.previousElementSibling : row.nextElementSibling;
+    if (!sibling) return;
+    sibling.insertAdjacentElement(ev.key === "ArrowUp" ? "beforebegin" : "afterend", row);
+    handle.focus();
+    await saveEnvManageOrder();
+  });
+}
+
+{
+  const list = document.getElementById("env-manage-list");
+  list.addEventListener("dragover", (ev) => {
+    if (!envManageDragRow) return;
+    ev.preventDefault(); // allow the drop
+    const target = ev.target.closest(".env-manage-row");
+    if (!target || target === envManageDragRow) return;
+    const rect = target.getBoundingClientRect();
+    const after = ev.clientY > rect.top + rect.height / 2;
+    target.insertAdjacentElement(after ? "afterend" : "beforebegin", envManageDragRow);
+  });
+  list.addEventListener("drop", (ev) => { if (envManageDragRow) ev.preventDefault(); });
 }
 
 document.getElementById("env-modal-close").addEventListener("click", closeEnvModal);

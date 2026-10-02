@@ -9,6 +9,22 @@ Known issues and planned work live under Roadmap / Punch List in
 [README.md](README.md); a fix that closes an item there moves it into this file
 in the same commit as the fix and the version bump.
 
+## v1.3.0
+
+**Manage Environments is now a collapsible, reorderable list.** Only one
+environment is expanded at a time. Opening the modal expands the one the picker
+has selected, and expanding another collapses it. A collapsed row shows just the
+name and type. The name and type are now plain text rather than an always-live
+input box and dropdown, because both are set once and rarely changed. Rename and
+Change type (shown only on the expanded row) open an editor with Save and
+Cancel, and Change type previews the chosen type's description before you save
+it. Environments can be reordered by dragging the handle beside each name, or
+by focusing the handle and pressing the arrow keys. The Env picker follows the
+same order. The order is stored server-side, so it is shared by everyone and
+survives restarts. Existing environments keep their alphabetical order until
+moved, new ones are added at the end, and a renamed environment keeps its
+place.
+
 ## v1.2.0
 
 **Every confirmation and message now uses the app's own UI, not the

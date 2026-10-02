@@ -332,6 +332,18 @@ def test_rename_environment_errors(store: Store) -> None:
     assert mgr.rename_environment("a", "a") == "a"  # no-op
 
 
+def test_reorder_environments_reorders_the_registry(store: Store) -> None:
+    registry = EnvironmentRegistry()
+    mgr = _manager(store, registry)
+    for name in ("a", "b", "c"):
+        mgr.create_environment(name)
+    mgr.reorder_environments(["c", "a", "b"])
+    assert registry.names() == ["c", "a", "b"]
+    with pytest.raises(InventoryError, match="every environment exactly once"):
+        mgr.reorder_environments(["c", "a"])
+    assert registry.names() == ["c", "a", "b"]
+
+
 def test_remove_server(store: Store) -> None:
     mgr = _manager(store, EnvironmentRegistry())
     mgr.create_environment("corp")
