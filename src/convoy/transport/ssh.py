@@ -794,7 +794,13 @@ def is_config_lock_error(result: CommandResult) -> bool:
     return not result.ok and bool(_CONFIG_LOCK_RE.search(result.stdout + result.stderr))
 
 
+<<<<<<< HEAD
 def run_breaking_config_lock(run: Callable[[str], CommandResult], command: str) -> CommandResult:
+=======
+def run_breaking_config_lock(
+    run: Callable[[str], CommandResult], command: str, *, display: str | None = None
+) -> CommandResult:
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
     """Run a MUTATING clish command, taking the config lock only if we are
     actually blocked by it.
 
@@ -812,13 +818,25 @@ def run_breaking_config_lock(run: Callable[[str], CommandResult], command: str) 
     Read-only `show` commands must NOT use this. They are not blocked by the
     lock -- Gaia prints the CLINFR0771 notice and answers anyway (confirmed
     against real device output, see tests/test_cpuse.py::PACKAGE_DETAIL) -- so
+<<<<<<< HEAD
     overriding for them only steals the lock from someone mid-change."""
+=======
+    overriding for them only steals the lock from someone mid-change.
+
+    ``display`` is what gets logged in place of ``command`` when the command
+    carries a secret (the bootstrap's ``password-hash``, see
+    services/mgmt_bootstrap.py)."""
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
     result = run(command)
     if not is_config_lock_error(result):
         return result
     logger.warning(
         "clish config lock held; overriding to continue",
+<<<<<<< HEAD
         command=command,
+=======
+        command=command if display is None else display,
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
         detail=(result.stdout.strip() or result.stderr.strip())[:200],
     )
     run("lock database override")

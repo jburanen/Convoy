@@ -69,6 +69,10 @@ from ..services.discovery import DiscoveryService, MgmtClientFactory
 from ..services.environments import EnvironmentManager
 from ..services.firewall_bootstrap import FirewallBootstrapService
 from ..services.firewalls import FirewallManager
+<<<<<<< HEAD
+=======
+from ..services.mgmt_bootstrap import MgmtBootstrapService
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
 from ..services.patching import PatchingService
 from ..services.pkg_repo_ops import PackageRepoService, RepoClientFactory
 from ..services.pkgs_ops import PackageJobService
@@ -354,6 +358,13 @@ class EnvironmentIn(BaseModel):
     is_mds: bool = False
 
 
+<<<<<<< HEAD
+=======
+class EnvironmentOrderIn(BaseModel):
+    names: list[str]
+
+
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
 class EnvironmentKindIn(BaseModel):
     is_mds: bool
 
@@ -438,6 +449,24 @@ class ConnectPrimaryIn(OperationCredentials):
     credential_set: str | None = None
 
 
+<<<<<<< HEAD
+=======
+class MgmtBootstrapIn(BaseModel):
+    """Run the Bootstrap panel's commands on one management server, logging
+    in with an existing account. ``login_*`` is that existing login: used for
+    this one job and never stored (see services/mgmt_bootstrap.py). The
+    ``account_*`` pair is the service account to create, rendered into the
+    same clish commands the panel shows."""
+
+    address: str
+    ssh_port: int = Field(default=22, ge=1, le=65535)
+    login_username: str
+    login_password: str = Field(min_length=1)
+    account_username: str
+    account_password: str = Field(min_length=1)
+
+
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
 class DiscoverIn(BaseModel):
     primary: str  # name of the already-defined management server to scan from
 
@@ -607,9 +636,19 @@ def create_app(
         # refresher is built further down (it needs the patching services), so
         # it is read at call time rather than captured here.
         state_refresh: StateRefreshService | None = None
+<<<<<<< HEAD
 
         def job_finished(job_id: str) -> None:
             vault.discard(job_id)
+=======
+        # Same late binding: built below, after the runner it registers with.
+        mgmt_bootstrap: MgmtBootstrapService | None = None
+
+        def job_finished(job_id: str) -> None:
+            vault.discard(job_id)
+            if mgmt_bootstrap is not None:
+                mgmt_bootstrap.discard(job_id)  # the new account's rendered commands
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
             if state_refresh is not None:
                 state_refresh.after_job(job_id)
 
@@ -661,6 +700,12 @@ def create_app(
             runner=runner,
             store=store,
         )
+<<<<<<< HEAD
+=======
+        mgmt_bootstrap = MgmtBootstrapService(
+            registry=registry, vault=vault, runner=runner, store=store
+        )
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
         smart1_cloud = Smart1CloudService(
             registry=registry,
             env_manager=env_manager,
@@ -706,6 +751,10 @@ def create_app(
         app.state.cred_jobs = cred_jobs
         app.state.prov_jobs = prov_jobs
         app.state.primary_connect = primary_connect
+<<<<<<< HEAD
+=======
+        app.state.mgmt_bootstrap = mgmt_bootstrap
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
         app.state.smart1_cloud = smart1_cloud
         app.state.discovery = discovery
         app.state.api_access = api_access
@@ -908,6 +957,14 @@ def _prov_jobs(request: Request) -> ProvisioningJobService:
     return service
 
 
+<<<<<<< HEAD
+=======
+def _mgmt_bootstrap(request: Request) -> MgmtBootstrapService:
+    service: MgmtBootstrapService = request.app.state.mgmt_bootstrap
+    return service
+
+
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
 def _primary_connect(request: Request) -> PrimaryConnectService:
     service: PrimaryConnectService = request.app.state.primary_connect
     return service
@@ -1155,6 +1212,18 @@ def _register_routes(app: FastAPI) -> None:
             raise _map_error(exc) from exc
         return {"name": name}
 
+<<<<<<< HEAD
+=======
+    @app.post("/api/environments/order")
+    def reorder_environments(body: EnvironmentOrderIn, request: Request) -> dict[str, list[str]]:
+        """Set the listing order (drag-and-drop in Manage Environments)."""
+        try:
+            _envmgr(request).reorder_environments(body.names)
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+        return {"names": _registry(request).names()}
+
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
     @app.post("/api/environments/{env}/rename")
     def rename_environment(env: str, body: EnvironmentIn, request: Request) -> dict[str, str]:
         """Servers, credentials, and job history move with the new name."""
@@ -1441,6 +1510,30 @@ def _register_routes(app: FastAPI) -> None:
             raise _map_error(exc) from exc
         return {"commands": commands, "notes": PROVISIONING_NOTES}
 
+<<<<<<< HEAD
+=======
+    @app.post("/api/environments/{env}/bootstrap-mgmt", status_code=202)
+    def bootstrap_mgmt(env: str, body: MgmtBootstrapIn, request: Request) -> JobRecord:
+        """The Bootstrap panel's "log in and run them for me" option: SSH in
+        with an existing login and create the service account. The login is
+        held in memory for this one job only and never stored, whatever the
+        environment's credential-storage setting."""
+        _require_env(request, env)
+        try:
+            return _mgmt_bootstrap(request).submit_bootstrap(
+                env,
+                address=body.address,
+                ssh_port=body.ssh_port,
+                login_username=body.login_username,
+                login_password=body.login_password,
+                account_username=body.account_username,
+                account_password=body.account_password,
+                triggered_by=_current_user(request),
+            )
+        except OrchestratorError as exc:
+            raise _map_error(exc) from exc
+
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
     # -- connect to primary (SSH-executed Management API provisioning) --------
 
     @app.get("/api/environments/{env}/connect-primary/preview")

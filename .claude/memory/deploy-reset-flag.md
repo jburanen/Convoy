@@ -40,9 +40,15 @@ built-in defaults: basic auth admin/admin, no LDAP, no TLS, credential store
 unconfigured. Added 2026-08-27 alongside the `--reset` change.
 
 ## Gotcha: certs are usually owned by someone else
+<<<<<<< HEAD
 On inbev01, `data/certs` is `jason:deploy drwxr-sr-x` while the deploy runs as
 `devuser` — group has r-x, **not** w, so devuser cannot delete anything inside
 it. A blind `rm -rf ./data` therefore fails, and under `set -e` it aborted the
+=======
+On the dev host, `data/certs` is owned by a different account than the one
+the deploy runs as (shared group, `drwxr-sr-x`) — group has r-x, **not** w, so
+the deploying user cannot delete anything inside it. A blind `rm -rf ./data` therefore fails, and under `set -e` it aborted the
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
 wipe *after* `docker compose down`: stack down, data half-gone, nothing
 redeployed. `--reset-all` now pre-flights with `find ./data -type d ! -writable`
 and exits **before** stopping the stack, naming the offending directories.

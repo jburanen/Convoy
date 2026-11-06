@@ -104,6 +104,13 @@
         <summary><h2>Bootstrap initial management access</h2></summary>
         <div class="section-head-actions">
           <button type="submit" form="provision-form" id="prov-generate" class="small">Generate commands</button>
+<<<<<<< HEAD
+=======
+          <!-- Alternative to pasting: log in with an existing account and run
+               the commands, then carry on into Connect to Primary and server
+               discovery (see startBootstrapRun in app.js). -->
+          <button type="button" id="prov-run" class="small secondary">Log in and run for me…</button>
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
           <button type="button" class="help-btn" data-help="provision" title="About this panel" aria-label="About this panel">?</button>
         </div>
         <p class="hint" id="hint-provision"></p>
@@ -138,6 +145,11 @@
         </div>
         <!-- Saved-credential status: sits at the bottom, below the output box. -->
         <div id="prov-cred-status" class="prov-notes hidden"></div>
+<<<<<<< HEAD
+=======
+        <!-- Progress of the "Log in and run for me" option. -->
+        <div id="prov-run-status" class="prov-notes hidden"></div>
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
       </details>
     </section>
 
@@ -165,9 +177,16 @@
             <label for="cp-port">SSH port</label>
             <input type="text" id="cp-name" placeholder="e.g. mgmt-primary" required>
             <input type="text" id="cp-address" placeholder="hostname or IP" required>
+<<<<<<< HEAD
             <select id="cp-role">
               <option value="primary_sms">Primary SMS</option>
               <option value="primary_mds">Primary MDS</option>
+=======
+            <!-- Rebuilt per environment by syncConnectPrimaryRole (app.js):
+                 only the primary matching the environment's SMS/MDS kind. -->
+            <select id="cp-role">
+              <option value="primary_sms">Primary SMS</option>
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
             </select>
             <input type="number" id="cp-port" value="22" min="1" max="65535">
           </div>
@@ -571,8 +590,15 @@
     </div>
     <p class="hint">
       Environments are independent management estates — each has its own inventory
+<<<<<<< HEAD
       of management servers and its own credentials. Edit a name and click
       <strong>Rename</strong>: servers, credentials, and job history move with it.
+=======
+      of management servers and its own credentials. Click an environment to
+      expand its settings, and drag the handle to reorder the list (the picker
+      follows the same order). <strong>Rename</strong> moves servers,
+      credentials, and job history with the new name.
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
       Servers and deletion are managed on the <strong>Provisioning</strong> tab.
       An environment is entirely one <strong>type</strong> — never a mix — so
       discovery and every other command knows which variant to run.
@@ -702,6 +728,48 @@
   </div>
 </div>
 
+<<<<<<< HEAD
+=======
+<!-- ============ Bootstrap: run with an existing login (Provisioning tab) ===== -->
+<!-- Opened by the Bootstrap panel's "Log in and run for me" button. Collects the
+     primary to bootstrap and an EXISTING Gaia login to do it with. That login is
+     temporary: held in this page's memory for the setup flow and in the
+     server's memory for each job, never saved anywhere (services/
+     mgmt_bootstrap.py). Run starts the chain bootstrap -> Connect to Primary ->
+     Discover servers, each later step still confirmed in its own modal. -->
+<div id="prov-run-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="prov-run-title">
+  <div class="modal-card narrow">
+    <div class="modal-head">
+      <h2 id="prov-run-title">Log in and run the bootstrap</h2>
+      <button type="button" id="prov-run-close" class="small" title="Close">✕</button>
+    </div>
+    <p class="hint">
+      Convoy logs in to the primary with an existing Gaia account (for example
+      the box's own admin), runs the commands shown in the panel to create
+      <strong id="prov-run-account"></strong>, then continues to Connect to
+      Primary and server discovery. You confirm each of those steps as it comes
+      up, and can use the same login to create the account on the servers
+      discovery finds.
+    </p>
+    <p class="hint prov-note-warn">
+      This login is used only for bootstrapping. It is kept in memory until the
+      setup finishes or you cancel, and is never saved.
+    </p>
+    <form id="prov-run-form" class="stacked">
+      <label>Primary name <input type="text" id="prov-run-name" placeholder="e.g. mgmt-primary" required></label>
+      <label>Address / IP <input type="text" id="prov-run-address" placeholder="hostname or IP" required></label>
+      <label>SSH port <input type="number" id="prov-run-port" min="1" max="65535" value="22" required></label>
+      <label>Existing username <input type="text" id="prov-run-login-user" placeholder="e.g. admin" autocomplete="off" required></label>
+      <label>Existing password <input type="password" id="prov-run-login-password" autocomplete="off" required></label>
+      <div class="cred-modal-actions">
+        <button type="submit" id="prov-run-submit">Run and continue</button>
+        <button type="button" id="prov-run-cancel" class="secondary">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
 <!-- ============ Bootstrap credential overwrite gate (Provisioning tab) ====== -->
 <!-- Shown when the SSH username just provisioned already backs another stored
      credential set. Blocks the silent save until the operator picks one of the
@@ -722,7 +790,37 @@
 </div>
 
 <!-- ============ Spark major-version mismatch confirm (Firewalls Install) ===== -->
+<<<<<<< HEAD
 <!-- Shown before the usual reboot confirm() when the picked .img's major
+=======
+<!-- ============ Shared confirmation modal (every tab) ===================== -->
+<!-- The app's one yes/no gate, replacing the browser's native confirm():
+     opened by confirmDialog() in app.js, which resolves true on the action
+     button and false on Cancel, the close button, Escape, or a backdrop click.
+     Ranked above every other modal (see #confirm-modal in app.css) because it
+     is routinely opened from inside one, e.g. Manage Environments -> Delete.
+     Purpose-built gates (typed-name uninstall, the command-preview confirms,
+     the Spark major-version warning) stay separate on purpose. -->
+<div id="confirm-modal" class="modal hidden" role="alertdialog" aria-modal="true" aria-labelledby="confirm-modal-title" aria-describedby="confirm-modal-message">
+  <div class="modal-card narrow">
+    <div class="modal-head">
+      <h2 id="confirm-modal-title"></h2>
+      <button type="button" id="confirm-modal-close" class="small" title="Close">✕</button>
+    </div>
+    <p id="confirm-modal-message" class="hint"></p>
+    <div class="cred-modal-actions">
+      <button type="button" id="confirm-modal-ok"></button>
+      <button type="button" id="confirm-modal-cancel" class="secondary">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast stack (non-blocking messages, see toast() in app.js). Sits above
+     every modal so an error raised while a dialog is open is still seen. -->
+<div id="toast-stack" aria-live="polite"></div>
+
+<!-- Shown before the usual reboot confirmation when the picked .img's major
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
      version (first two dot/underscore-separated numeric groups) differs
      from the firewall's currently detected one — see installFirewallPackage/
      sparkMajorVersion in app.js. Resolves a Promise<boolean>, same pattern
@@ -1184,7 +1282,11 @@
 
 <!-- ============ Uninstall confirmation modal (CPUSE / Management tabs) ====== -->
 <!-- Uninstall is destructive (reverts the host to a prior version, may reboot
+<<<<<<< HEAD
      it) so — unlike Install's confirm() dialog — this requires the operator to
+=======
+     it) so — unlike Install's plain confirmation — this requires the operator to
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
      type the exact target host name before the Uninstall button is enabled,
      the same "type to confirm" pattern used for other high-blast-radius
      actions elsewhere in the app. -->
@@ -1452,12 +1554,21 @@
 
 <template id="tpl-credential-row">
   <tr>
+<<<<<<< HEAD
     <td><span class="cs-name-text"></span><span class="cs-default-pill pill hidden">default</span></td>
+=======
+    <td class="cs-name-text"></td>
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
     <td class="cs-user"></td>
     <td class="cs-auth"></td>
     <td class="cs-expert"></td>
     <td class="cs-api"></td>
     <td class="cs-actions row-actions">
+<<<<<<< HEAD
+=======
+      <!-- the default set shows the pill in place of its Make default button -->
+      <span class="cs-default-pill pill hidden">default</span>
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
       <button class="btn-default small secondary">Make default</button>
       <button class="btn-edit small">Edit</button>
       <button class="btn-delete small danger">Delete</button>
@@ -1502,6 +1613,7 @@
   </tr>
 </template>
 
+<<<<<<< HEAD
 <!-- one row in the Manage Environments modal: editable name + Rename, plus
      per-environment credential-storage and MDS-kind toggles -->
 <template id="tpl-env-manage-row">
@@ -1535,6 +1647,63 @@
         </span>
       </span>
     </label>
+=======
+<!-- one row in the Manage Environments modal. Collapsed it shows only the
+     drag handle, name and type; expanding it (one row at a time) reveals the
+     Rename / Change type / Delete buttons and the per-environment settings.
+     Name and type are read-only text until Rename or Change type opens the
+     matching editor, since both are set once and rarely touched again. -->
+<template id="tpl-env-manage-row">
+  <li class="env-manage-row">
+    <div class="env-manage-head">
+      <button type="button" class="env-drag-handle" title="Drag to reorder (or focus and press the arrow keys)" aria-label="Reorder environment">⠿</button>
+      <button type="button" class="env-expand-btn" aria-expanded="false">
+        <span class="env-caret" aria-hidden="true">▸</span>
+        <span class="env-manage-title"></span>
+        <span class="badge env-type-label"></span>
+      </button>
+      <span class="env-manage-actions">
+        <button type="button" class="env-rename-btn small secondary">Rename</button>
+        <button type="button" class="env-type-btn small secondary">Change type</button>
+        <button type="button" class="env-delete-btn small danger" title="Delete this environment — removes its servers and stored credentials">Delete</button>
+      </span>
+    </div>
+    <div class="env-manage-body">
+      <form class="env-edit-row env-rename-form hidden">
+        <input type="text" class="env-rename-input" aria-label="New environment name" required>
+        <button type="submit" class="small">Save</button>
+        <button type="button" class="env-edit-cancel small secondary">Cancel</button>
+      </form>
+      <form class="env-edit-row env-type-form hidden">
+        <select class="env-type-select" aria-label="Environment type" title="What kind of management estate this environment is">
+          <option value="sms">SmartCenter (SMS)</option>
+          <option value="mds">Multi-Domain (MDS)</option>
+          <option value="s1c">Smart-1 Cloud</option>
+        </select>
+        <button type="submit" class="small">Save</button>
+        <button type="button" class="env-edit-cancel small secondary">Cancel</button>
+      </form>
+      <p class="hint env-type-note"></p>
+      <div class="env-storage-toggle">
+        <input type="checkbox" class="env-storage-input" aria-label="Enable encrypted credential storage">
+        <span class="env-storage-main">
+          Enable encrypted credential storage
+          <span class="hint env-storage-note"></span>
+        </span>
+      </div>
+      <div class="env-storage-toggle">
+        <input type="checkbox" class="env-skip-verify-input" aria-label="Skip verify by default for installs">
+        <span class="env-storage-main">
+          Skip verify by default for installs
+          <span class="hint">
+            Pre-checks "skip verify" on the Management tab's Install control —
+            for environments where `installer verify` chronically fails for
+            reasons unrelated to whether the install itself would succeed
+          </span>
+        </span>
+      </div>
+    </div>
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   </li>
 </template>
 

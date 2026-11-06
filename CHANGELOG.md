@@ -9,6 +9,96 @@ Known issues and planned work live under Roadmap / Punch List in
 [README.md](README.md); a fix that closes an item there moves it into this file
 in the same commit as the fix and the version bump.
 
+<<<<<<< HEAD
+=======
+## v1.4.0
+
+**Bootstrap can log in and run the commands for you.** Closes the punch-list
+item for a one-time login in place of pasting the bootstrap commands on each
+management server. The Bootstrap initial management access panel gains **Log in
+and run for me**: give the primary's address and an existing Gaia login (for
+example the box's own admin), and Convoy SSHes in with it and runs the same
+commands the panel shows. It then carries straight on to Connect to Primary,
+pre-filled with that server and the new account, and on to Discover servers,
+where importing offers to create the account on the discovered servers with the
+same login. You still confirm each step in its own dialog, and cancelling any of
+them stops the flow there. The existing login is used only for bootstrapping
+and is never saved: not to the credential store, the job record, or any log or
+error message, which also redact the new account's password hash. Both the
+browser and the server hold it in memory only until the setup finishes or is
+cancelled. If another session holds the server's clish configuration lock (an
+open WebUI session, say), the run takes it with `lock database override` and
+retries the command, noting that in the job log. In an environment that stores
+credentials, the expert password is required up front, because Connect to
+Primary logs in with the saved set.
+
+**Connect to Primary now works in environments that don't store credentials.**
+Its Run button never sent the one-off SSH and expert passwords such an
+environment needs, so the job was refused. It now prompts for them, as every
+other job there does.
+
+## v1.3.2
+
+**The Credentials table shows the default pill where Make default would be.**
+The default credential set's pill sat beside its name, while every other set's
+Make default button sat in the actions column, so the one piece of state moved
+between two columns depending on the row. The pill now takes the button's
+place in the actions column, and the Name column holds just the name.
+
+## v1.3.1
+
+**Manage Environments settings toggle only from the checkbox itself.** Each
+row (encrypted credential storage, skip verify by default) used to span the
+whole modal, so a click anywhere on it, blank space included, flipped the
+setting. That was easy to do by accident, especially credential storage, whose
+disable path deletes stored credentials after a confirmation. Now only a click
+on the checkbox changes anything.
+
+## v1.3.0
+
+**Manage Environments is now a collapsible, reorderable list.** Only one
+environment is expanded at a time. Opening the modal expands the one the picker
+has selected, and expanding another collapses it. A collapsed row shows just the
+name and type. The name and type are now plain text rather than an always-live
+input box and dropdown, because both are set once and rarely changed. Rename and
+Change type (shown only on the expanded row) open an editor with Save and
+Cancel, and Change type previews the chosen type's description before you save
+it. Environments can be reordered by dragging the handle beside each name, or
+by focusing the handle and pressing the arrow keys. The Env picker follows the
+same order. The order is stored server-side, so it is shared by everyone and
+survives restarts. Existing environments keep their alphabetical order until
+moved, new ones are added at the end, and a renamed environment keeps its
+place.
+
+## v1.2.0
+
+**Every confirmation and message now uses the app's own UI, not the
+browser's.** Twelve yes/no gates still used the browser's native confirm
+dialog, among them deleting an environment, accepting a changed SSH host key,
+installs that can reboot a host, and CDT execute. Every toast message was a
+native alert. Besides looking out of place next to the coded modals, the native
+dialogs froze the page, so job polling and live status stopped while one was
+open. Browsers also let you suppress them after a few in a row, which silently
+threw away error messages. Confirmations now open a shared modal that sits above
+any dialog it is opened from. Destructive ones get a red action button and start
+with focus on Cancel, so a reflexive Enter never confirms one. Escape cancels
+only the confirmation, not the dialog behind it. Messages are now non-blocking
+toasts in the bottom-right corner. Informational ones fade on their own, while
+failures and warnings stay until dismissed so none is missed. The purpose-built
+gates, such as typed-name uninstall and the command previews, are unchanged.
+
+## v1.1.2
+
+**Connect to Primary only offers the primary that fits the environment.** An
+environment is entirely SMS or entirely Multi-Domain, yet the Provisioning tab's
+Connect to Primary panel offered both Primary SMS and Primary MDS as its Role,
+so an operator could record an SMS primary in an MDS estate or the reverse. The
+Role now lists only Primary MDS for a Multi-Domain environment and only Primary
+SMS otherwise, and it follows the environment when you switch environments or
+change one's type. The server refuses a mismatched role from any caller too, so
+the API cannot be used to slip the wrong kind of primary in.
+
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
 ## v1.1.1
 
 **Refreshing one cluster member now refreshes the rest of its cluster.** A

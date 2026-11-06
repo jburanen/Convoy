@@ -129,9 +129,18 @@ local/
 scratch/
 tmp/
 
+<<<<<<< HEAD
 # --- Local-only project memory (host-specific; real infra identifiers) ---
 # This note names the internal test host + account; must not enter the public repo.
 .claude/memory/test-host-deploy.md
+=======
+# --- Local-only Claude Code files (host-specific; real infra identifiers) ---
+# This note names the internal test host + account; must not enter the public repo.
+.claude/memory/test-host-deploy.md
+# Per-user permission grants (can embed hostnames, paths, commands). Also
+# matched by *.local.* below; listed explicitly so that rule can't be lost.
+.claude/settings.local.json
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
 
 # --- Local-only dev-host bootstrap doc (OneDrive-synced, never committed) --
 # Sensitive infra identifiers for the test host; carry it across machines via

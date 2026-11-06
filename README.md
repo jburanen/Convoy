@@ -108,6 +108,7 @@ These gates define the major version releases - the milestones may change in the
 ✨ Add logic to display a warning on mobile devices that the UI of this tool does not scale down well (by design) and you should use it on a larger display.   
 🤞 RADIUS auth option  
 🤞 Timed/scheduled install actions  
+<<<<<<< HEAD
 ✨ Standarize all user questions or confirmations to the modal UI and avoid using browser UI elements  
 🤞 Separate AD group auth per environment?  
 🤞 For major version upgrades, handle the gateway object version change via API  
@@ -116,6 +117,12 @@ These gates define the major version releases - the milestones may change in the
 🤞 Generate password option on bootstrapping  
 🤞 Give option to enter one-time runtime user/pw to ssh and deploy the bootstrapping commands instead of pasting on each mgmt server  
 🤞 If env is defined as MDS then it should only offer to connect to a Primary MDS  
+=======
+🤞 Separate AD group auth per environment?  
+
+#### Provisioning
+🤞 Generate password option on bootstrapping  
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
 
 #### Packages
 🤞 If disk space check fails, parse for large folders, suggest things to clean  

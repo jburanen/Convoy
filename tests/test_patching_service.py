@@ -1411,7 +1411,11 @@ def test_set_in_other_environment_does_not_satisfy_unassigned_server(
 
 
 # ---- CPUSE display name -> file name resolution -----------------------------
+<<<<<<< HEAD
 # All names below are verbatim from clockwerks, 2026-08-27.
+=======
+# All names below are verbatim from mgmt-lab, 2026-08-27.
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
 
 # CPUSE shows some packages under a friendly display name and others under
 # their file name, on the same host, regardless of how each got there. clish

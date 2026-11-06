@@ -173,11 +173,107 @@ function el(tplId) {
   return document.getElementById(tplId).content.firstElementChild.cloneNode(true);
 }
 
+<<<<<<< HEAD
 function toast(message) {
   // Minimal feedback channel; replace with something fancier if you like.
   alert(message);
 }
 
+=======
+/* ---------- 0a. toasts + confirmation modal ----------
+   The UI never uses the browser's native alert()/confirm(). Those freeze the
+   page (job polling and live status stop while one is open), can't carry the
+   danger styling a destructive gate needs, and browsers let the operator
+   suppress them after a few in a row, so a suppressed alert() silently loses
+   an error message. */
+
+// How long an info toast stays up. Warnings and errors never auto-dismiss: a
+// failure must be acknowledged, not missed while looking elsewhere.
+const TOAST_INFO_MS = 6000;
+
+// Non-blocking message, stacked bottom-right. kind: "info" (default, fades on
+// its own), "warn" or "error" (both stay until dismissed). Hovering an info
+// toast holds it so a long message can be finished.
+function toast(message, kind = "info") {
+  const item = document.createElement("div");
+  item.className = `toast ${kind}`;
+  item.setAttribute("role", kind === "info" ? "status" : "alert");
+  const text = document.createElement("span");
+  text.className = "toast-text";
+  text.textContent = message;
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "toast-close";
+  close.title = "Dismiss";
+  close.setAttribute("aria-label", "Dismiss");
+  close.textContent = "\u2715";
+  item.append(text, close);
+
+  let timer = null;
+  const dismiss = () => {
+    clearTimeout(timer);
+    item.classList.add("leaving");
+    setTimeout(() => item.remove(), 250);
+  };
+  close.addEventListener("click", dismiss);
+  if (kind === "info") {
+    const arm = () => { timer = setTimeout(dismiss, TOAST_INFO_MS); };
+    item.addEventListener("mouseenter", () => clearTimeout(timer));
+    item.addEventListener("mouseleave", arm);
+    arm();
+  }
+  document.getElementById("toast-stack").appendChild(item);
+}
+
+// The app's one yes/no gate (replaces confirm()). Resolves true only on the
+// action button; Cancel, the close button, Escape and a backdrop click all
+// resolve false. `danger` styles the action button as destructive and puts
+// initial focus on Cancel, so a reflexive Enter never confirms one.
+let _confirmResolve = null;
+let _confirmReturnFocus = null;
+
+function confirmDialog({ title, message, confirmLabel = "Confirm", cancelLabel = "Cancel", danger = false }) {
+  // A second request while one is open (shouldn't happen, the modal blocks
+  // the page) cancels the first rather than leaving its caller hanging.
+  if (_confirmResolve) closeConfirmDialog(false);
+  const modal = document.getElementById("confirm-modal");
+  const ok = document.getElementById("confirm-modal-ok");
+  document.getElementById("confirm-modal-title").textContent = title;
+  document.getElementById("confirm-modal-message").textContent = message;
+  ok.textContent = confirmLabel;
+  document.getElementById("confirm-modal-cancel").textContent = cancelLabel;
+  ok.classList.toggle("danger", danger);
+  modal.classList.toggle("danger", danger);
+  _confirmReturnFocus = document.activeElement;
+  modal.classList.remove("hidden");
+  (danger ? document.getElementById("confirm-modal-cancel") : ok).focus();
+  return new Promise((resolve) => { _confirmResolve = resolve; });
+}
+
+function closeConfirmDialog(result) {
+  const resolve = _confirmResolve;
+  if (!resolve) return;
+  _confirmResolve = null;
+  document.getElementById("confirm-modal").classList.add("hidden");
+  if (_confirmReturnFocus && document.contains(_confirmReturnFocus)) _confirmReturnFocus.focus();
+  _confirmReturnFocus = null;
+  resolve(result);
+}
+
+document.getElementById("confirm-modal-ok").addEventListener("click", () => closeConfirmDialog(true));
+document.getElementById("confirm-modal-cancel").addEventListener("click", () => closeConfirmDialog(false));
+document.getElementById("confirm-modal-close").addEventListener("click", () => closeConfirmDialog(false));
+onBackdropClick("confirm-modal", () => closeConfirmDialog(false)); // backdrop click cancels
+// Escape while the confirmation is open cancels only the confirmation, not
+// the modal it was opened from, which the app-wide Escape handler further
+// down would otherwise close too. Capture phase, so this runs first.
+document.addEventListener("keydown", (ev) => {
+  if (ev.key !== "Escape" || !_confirmResolve) return;
+  ev.stopImmediatePropagation();
+  closeConfirmDialog(false);
+}, true);
+
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
 // Fills a "pick a stored package" <select> (the bulk-import pickers on the
 // CPUSE/Firewalls panels, and the CDT tab's own). Called both by each of
 // those panels' own load functions AND by loadPackages() itself, so a
@@ -316,6 +412,11 @@ let envStorage = {}; // name -> boolean
 // Per-environment MDS-vs-SMS kind, refreshed by loadEnvironments — used to
 // show/hide the Domain picker in the discover-firewalls modal.
 let envIsMds = {}; // name -> boolean
+<<<<<<< HEAD
+=======
+// The Bootstrap panel's "Log in and run for me" setup flow (section 2c).
+let bootstrapFlow = null;
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
 
 // Per-environment access mode, refreshed by loadEnvironments — true means the
 // management server(s) are reachable ONLY via the Management API, no SSH at
@@ -529,6 +630,10 @@ async function loadEnvironments() {
 }
 
 async function selectEnvironment(name) {
+<<<<<<< HEAD
+=======
+  endBootstrapFlow(); // a setup flow belongs to the environment it started in
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   currentEnv = name;
   localStorage.setItem("currentEnv", currentEnv);
   document.getElementById("env-picker").value = name;
@@ -625,9 +730,23 @@ const ENV_TYPE_NOTES = {
 // on the Provisioning tab (section 1a-prov below), scoped to the picker's
 // selection. A rename moves servers, credentials, and job history atomically.
 
+<<<<<<< HEAD
 async function openEnvModal() {
   document.getElementById("env-first-run-hint").classList.toggle("hidden", !envModalIsFirstRun);
   document.getElementById("env-modal").classList.remove("hidden");
+=======
+// Which row of the accordion is open (by name); null = all collapsed. Opening
+// the modal starts on the environment the picker has selected.
+let envManageExpanded = null;
+// Names in the order last rendered/saved, so a drag that ends where it began
+// doesn't post an order change.
+let envManageOrder = [];
+
+async function openEnvModal() {
+  document.getElementById("env-first-run-hint").classList.toggle("hidden", !envModalIsFirstRun);
+  document.getElementById("env-modal").classList.remove("hidden");
+  envManageExpanded = currentEnv;
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   await renderEnvManageList();
 }
 function closeEnvModal() {
@@ -647,6 +766,7 @@ function noteFirstRunChoice() {
   document.getElementById("env-first-run-hint").classList.add("hidden");
 }
 
+<<<<<<< HEAD
 async function renderEnvManageList() {
   const list = document.getElementById("env-manage-list");
   const envs = await api("/api/environments");
@@ -658,6 +778,101 @@ async function renderEnvManageList() {
     row.querySelector(".env-rename-btn").addEventListener("click", async () => {
       const newName = input.value.trim();
       if (!newName || newName === env.name) return;
+=======
+// Expand one row and collapse every other (the list is an accordion), or
+// collapse them all with name=null.
+function setEnvManageExpanded(name) {
+  envManageExpanded = name;
+  for (const row of document.querySelectorAll("#env-manage-list .env-manage-row")) {
+    const open = row.dataset.env === name;
+    row.classList.toggle("expanded", open);
+    row.querySelector(".env-expand-btn").setAttribute("aria-expanded", String(open));
+  }
+}
+
+// Persist the list's current DOM order (after a drag or an arrow-key move).
+// The picker is reloaded so it follows the same order.
+async function saveEnvManageOrder() {
+  const names = [...document.querySelectorAll("#env-manage-list .env-manage-row")]
+    .map((row) => row.dataset.env);
+  if (names.join("\n") === envManageOrder.join("\n")) return;
+  try {
+    await api("/api/environments/order", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ names }),
+    });
+    envManageOrder = names;
+    await loadEnvironments();
+  } catch (e) {
+    toast("Could not reorder environments: " + e.message, "error");
+    await renderEnvManageList(); // put the rows back where the server has them
+  }
+}
+
+async function renderEnvManageList() {
+  const list = document.getElementById("env-manage-list");
+  const envs = await api("/api/environments");
+  envManageOrder = envs.map((env) => env.name);
+  if (!envManageOrder.includes(envManageExpanded)) envManageExpanded = null;
+  // A lone environment has nothing to collapse against, so it starts open.
+  if (envs.length === 1) envManageExpanded = envs[0].name;
+  list.replaceChildren();
+  for (const env of envs) {
+    const row = el("tpl-env-manage-row");
+    row.dataset.env = env.name;
+    row.querySelector(".env-manage-title").textContent = env.name;
+    row.querySelector(".env-expand-btn").addEventListener("click", () => {
+      setEnvManageExpanded(envManageExpanded === env.name ? null : env.name);
+    });
+    wireEnvManageDrag(row);
+
+    // Name and type are plain text until Rename / Change type opens the
+    // matching editor: both are set once and rarely changed, so they
+    // shouldn't sit there as live inputs inviting an accidental edit.
+    const renameForm = row.querySelector(".env-rename-form");
+    const typeForm = row.querySelector(".env-type-form");
+    const typeSelect = row.querySelector(".env-type-select");
+    const typeNote = row.querySelector(".env-type-note");
+    // api_only wins on read: it is what actually changes behaviour, so a legacy
+    // row carrying both flags reads as Smart-1 Cloud and is normalized to that
+    // pair the next time the type is changed.
+    const currentType = env.api_only ? "s1c" : env.is_mds ? "mds" : "sms";
+    row.querySelector(".env-type-label").textContent =
+      typeSelect.querySelector(`option[value="${currentType}"]`).textContent;
+    typeNote.textContent = ENV_TYPE_NOTES[currentType];
+
+    const input = row.querySelector(".env-rename-input");
+    const closeEditors = () => {
+      renameForm.classList.add("hidden");
+      typeForm.classList.add("hidden");
+      typeSelect.value = currentType;
+      typeNote.textContent = ENV_TYPE_NOTES[currentType];
+    };
+    for (const cancel of row.querySelectorAll(".env-edit-cancel")) {
+      cancel.addEventListener("click", closeEditors);
+    }
+    // Escape in an editor cancels just that edit, not the whole modal.
+    for (const form of [renameForm, typeForm]) {
+      form.addEventListener("keydown", (ev) => {
+        if (ev.key !== "Escape") return;
+        ev.stopPropagation();
+        closeEditors();
+      });
+    }
+
+    row.querySelector(".env-rename-btn").addEventListener("click", () => {
+      closeEditors();
+      input.value = env.name;
+      renameForm.classList.remove("hidden");
+      input.focus();
+      input.select();
+    });
+    renameForm.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const newName = input.value.trim();
+      if (!newName || newName === env.name) { closeEditors(); return; }
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
       try {
         const resp = await api(`/api/environments/${encodeURIComponent(env.name)}/rename`, {
           method: "POST",
@@ -669,17 +884,73 @@ async function renderEnvManageList() {
         const wasCurrent = currentEnv === env.name;
         await loadEnvironments();
         if (wasCurrent) await selectEnvironment(resp.name); // refresh env-scoped views
+<<<<<<< HEAD
         await renderEnvManageList();
       } catch (e) { toast("Rename failed: " + e.message); }
+=======
+        envManageExpanded = resp.name;
+        await renderEnvManageList();
+      } catch (e) { toast("Rename failed: " + e.message, "error"); }
+    });
+
+    // Environment type. One picker over what used to be two independent
+    // checkboxes (MDS, API-only), because they were never really independent:
+    // the three combinations an operator actually deploys are SMS, MDS and
+    // Smart-1 Cloud, and a checkbox pair also offers "MDS + API-only", which
+    // nothing here is built to drive. Applied through /type so both flags move
+    // together — two sequential calls could leave an environment in exactly the
+    // combination the picker exists to prevent.
+    row.querySelector(".env-type-btn").addEventListener("click", () => {
+      closeEditors();
+      typeForm.classList.remove("hidden");
+      typeSelect.focus();
+    });
+    // Preview the picked type's note before it is saved.
+    typeSelect.addEventListener("change", () => {
+      typeNote.textContent = ENV_TYPE_NOTES[typeSelect.value];
+    });
+    typeForm.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const chosen = typeSelect.value;
+      if (chosen === currentType) { closeEditors(); return; }
+      try {
+        await api(`/api/environments/${encodeURIComponent(env.name)}/type`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(ENV_TYPE_FLAGS[chosen]),
+        });
+        noteFirstRunChoice();
+        await loadEnvironments();
+        if (env.name === currentEnv) {
+          updateProvisionCollapse();
+          await loadServers();
+        }
+        await renderEnvManageList();
+      } catch (e) {
+        toast("Could not change environment type: " + e.message, "error");
+      }
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
     });
 
     // Per-row delete: removes this environment (its servers AND stored credentials).
     row.querySelector(".env-delete-btn").addEventListener("click", async () => {
+<<<<<<< HEAD
       if (!confirm(
         `Delete environment "${env.name}"?\n\nIts management-server list AND all ` +
         "stored credentials for it are permanently removed. This cannot be undone. " +
         "Job logs are NOT deleted — they're kept for audit purposes."
       )) return;
+=======
+      if (!await confirmDialog({
+        title: `Delete environment "${env.name}"?`,
+        message:
+          "Its management-server list and all stored credentials for it are " +
+          "permanently removed. This cannot be undone.\n\n" +
+          "Job logs are not deleted. They're kept for audit purposes.",
+        confirmLabel: "Delete environment",
+        danger: true,
+      })) return;
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
       try {
         await api(`/api/environments/${encodeURIComponent(env.name)}`, { method: "DELETE" });
         const wasCurrent = currentEnv === env.name;
@@ -695,6 +966,7 @@ async function renderEnvManageList() {
           await Promise.all([loadServers(), loadCredentialSets(), refreshStatus()]);
         }
         await renderEnvManageList();
+<<<<<<< HEAD
       } catch (e) { toast("Delete failed: " + e.message); }
     });
 
@@ -732,6 +1004,9 @@ async function renderEnvManageList() {
         typeSelect.value = currentType; // revert on failure
         toast("Could not change environment type: " + e.message);
       }
+=======
+      } catch (e) { toast("Delete failed: " + e.message, "error"); }
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
     });
 
     // Credential-storage toggle. Disabling purges any stored credentials, so we
@@ -750,11 +1025,22 @@ async function renderEnvManageList() {
     }
     toggle.addEventListener("change", async () => {
       const enable = toggle.checked;
+<<<<<<< HEAD
       if (!enable && !confirm(
         `Disable credential storage for "${env.name}"?\n\n` +
         "Any credentials already stored for this environment are permanently " +
         "deleted, and future actions will prompt for credentials each time."
       )) { toggle.checked = true; return; }
+=======
+      if (!enable && !await confirmDialog({
+        title: `Disable credential storage for "${env.name}"?`,
+        message:
+          "Any credentials already stored for this environment are permanently " +
+          "deleted, and future actions will prompt for credentials each time.",
+        confirmLabel: "Disable storage",
+        danger: true,
+      })) { toggle.checked = true; return; }
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
       try {
         await api(`/api/environments/${encodeURIComponent(env.name)}/credential-storage`, {
           method: "POST",
@@ -768,7 +1054,11 @@ async function renderEnvManageList() {
         await renderEnvManageList();
       } catch (e) {
         toggle.checked = !enable; // revert on failure
+<<<<<<< HEAD
         toast("Could not change credential storage: " + e.message);
+=======
+        toast("Could not change credential storage: " + e.message, "error");
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
       }
     });
 
@@ -791,16 +1081,74 @@ async function renderEnvManageList() {
         if (env.name === currentEnv) await loadServers(); // re-check existing rows' boxes
       } catch (e) {
         skipVerifyToggle.checked = !skip; // revert on failure
+<<<<<<< HEAD
         toast("Could not change skip-verify default: " + e.message);
+=======
+        toast("Could not change skip-verify default: " + e.message, "error");
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
       }
     });
     list.appendChild(row);
   }
+<<<<<<< HEAD
+=======
+  setEnvManageExpanded(envManageExpanded);
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   if (!envs.length) {
     document.getElementById("env-add-name").focus();
   }
 }
 
+<<<<<<< HEAD
+=======
+// Drag-and-drop reordering. A row is only draggable while its handle is held,
+// so text in the expanded settings can still be selected normally. The row
+// moves live under the pointer; the new order is saved once on drop.
+let envManageDragRow = null;
+function wireEnvManageDrag(row) {
+  const handle = row.querySelector(".env-drag-handle");
+  handle.addEventListener("pointerdown", () => { row.draggable = true; });
+  handle.addEventListener("pointerup", () => { row.draggable = false; });
+  row.addEventListener("dragstart", (ev) => {
+    if (!row.draggable) return;
+    envManageDragRow = row;
+    row.classList.add("dragging");
+    ev.dataTransfer.effectAllowed = "move";
+    ev.dataTransfer.setData("text/plain", row.dataset.env); // Firefox needs data set
+  });
+  row.addEventListener("dragend", async () => {
+    row.draggable = false;
+    row.classList.remove("dragging");
+    envManageDragRow = null;
+    await saveEnvManageOrder();
+  });
+  // Keyboard alternative: arrow keys on the focused handle move the row.
+  handle.addEventListener("keydown", async (ev) => {
+    if (ev.key !== "ArrowUp" && ev.key !== "ArrowDown") return;
+    ev.preventDefault();
+    const sibling = ev.key === "ArrowUp" ? row.previousElementSibling : row.nextElementSibling;
+    if (!sibling) return;
+    sibling.insertAdjacentElement(ev.key === "ArrowUp" ? "beforebegin" : "afterend", row);
+    handle.focus();
+    await saveEnvManageOrder();
+  });
+}
+
+{
+  const list = document.getElementById("env-manage-list");
+  list.addEventListener("dragover", (ev) => {
+    if (!envManageDragRow) return;
+    ev.preventDefault(); // allow the drop
+    const target = ev.target.closest(".env-manage-row");
+    if (!target || target === envManageDragRow) return;
+    const rect = target.getBoundingClientRect();
+    const after = ev.clientY > rect.top + rect.height / 2;
+    target.insertAdjacentElement(after ? "afterend" : "beforebegin", envManageDragRow);
+  });
+  list.addEventListener("drop", (ev) => { if (envManageDragRow) ev.preventDefault(); });
+}
+
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
 document.getElementById("env-modal-close").addEventListener("click", closeEnvModal);
 onBackdropClick("env-modal", () => closeEnvModal()); // click on backdrop closes
 document.addEventListener("keydown", (ev) => {
@@ -809,8 +1157,14 @@ document.addEventListener("keydown", (ev) => {
   closeHelpModal();
   closeEnvModal();
   closeCredAddModal();
+<<<<<<< HEAD
   closeDiscoverModal();
   closeConnectPrimaryConfirmModal();
+=======
+  cancelDiscoverModal();
+  cancelConnectPrimaryConfirm();
+  cancelProvRunModal();
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   closeApiKeyRevealModal();
   closeServerModal();
   closeUninstallModal();
@@ -833,7 +1187,11 @@ document.getElementById("env-add-form").addEventListener("submit", async (ev) =>
     // Land where the new environment's servers are added.
     selectTab("provisioning");
     history.replaceState(null, "", "#tab-provisioning");
+<<<<<<< HEAD
   } catch (e) { toast("Create failed: " + e.message); }
+=======
+  } catch (e) { toast("Create failed: " + e.message, "error"); }
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
 });
 
 /* ---------- 1a-prov. environment management (Provisioning tab) ---------- */
@@ -946,7 +1304,11 @@ document.getElementById("server-form").addEventListener("submit", async (ev) => 
     });
     lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if another tab is watching
     if (job.status !== "succeeded") {
+<<<<<<< HEAD
       toast("Save failed: " + (job.error || "unknown error"));
+=======
+      toast("Save failed: " + (job.error || "unknown error"), "error");
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
       await loadJobs();
       return;
     }
@@ -957,7 +1319,11 @@ document.getElementById("server-form").addEventListener("submit", async (ev) => 
     // "Not yet checked." An edit changes nothing on the host, so no watch.
     if (job.kind === "prov.add") await watchForStateRefresh();
     await Promise.all([loadJobs(), loadServers(), refreshStatus()]);
+<<<<<<< HEAD
   } catch (e) { toast("Save failed: " + e.message); }
+=======
+  } catch (e) { toast("Save failed: " + e.message, "error"); }
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
 });
 document.getElementById("server-modal-close").addEventListener("click", closeServerModal);
 document.getElementById("server-modal-cancel").addEventListener("click", closeServerModal);
@@ -1046,22 +1412,61 @@ document.getElementById("connect-primary-form").addEventListener("submit", async
     notesBox.classList.toggle("hidden", !notesBox.childElementCount);
     document.getElementById("connect-primary-confirm-modal").classList.remove("hidden");
   } catch (e) {
+<<<<<<< HEAD
     toast("Could not render command preview: " + e.message);
+=======
+    toast("Could not render command preview: " + e.message, "error");
+    endBootstrapFlow();
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   }
 });
 
 function closeConnectPrimaryConfirmModal() {
   document.getElementById("connect-primary-confirm-modal").classList.add("hidden");
 }
+<<<<<<< HEAD
 document.getElementById("connect-primary-confirm-close").addEventListener("click", closeConnectPrimaryConfirmModal);
 document.getElementById("connect-primary-confirm-cancel").addEventListener("click", closeConnectPrimaryConfirmModal);
 onBackdropClick("connect-primary-confirm-modal", () => closeConnectPrimaryConfirmModal());
+=======
+// Cancel/close/Escape/backdrop, as opposed to Run closing it to proceed. Ends a
+// bootstrap setup flow, but only when the modal was actually open: the
+// app-wide Escape handler calls this whatever is on screen.
+function cancelConnectPrimaryConfirm() {
+  const modal = document.getElementById("connect-primary-confirm-modal");
+  if (modal.classList.contains("hidden")) return;
+  closeConnectPrimaryConfirmModal();
+  if (bootstrapFlow) {
+    endBootstrapFlow();
+    bootstrapRunStatus(
+      "Stopped before Connect to Primary. The account was created; run Connect to " +
+        "Primary below when you're ready.",
+      "warn",
+    );
+  }
+}
+document.getElementById("connect-primary-confirm-close").addEventListener("click", cancelConnectPrimaryConfirm);
+document.getElementById("connect-primary-confirm-cancel").addEventListener("click", cancelConnectPrimaryConfirm);
+onBackdropClick("connect-primary-confirm-modal", () => cancelConnectPrimaryConfirm());
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
 
 document.getElementById("connect-primary-confirm-run").addEventListener("click", async () => {
   if (!_connectPrimaryPayload || !currentEnv) return;
   const payload = _connectPrimaryPayload;
   _connectPrimaryPayload = null;
   closeConnectPrimaryConfirmModal();
+<<<<<<< HEAD
+=======
+  // A storage-disabled environment has no credential set to log in with, so
+  // the job needs this one-off login (and the expert password: mgmt_cli is
+  // bash-native). Storage-enabled returns {} and uses the chosen set.
+  const inline = await operationCredentials(payload.name, "Connect to Primary", currentEnv, true);
+  if (inline === null) {
+    connectPrimaryStatus("Connect to Primary cancelled.", "warn");
+    endBootstrapFlow();
+    return;
+  }
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   const btn = document.getElementById("connect-primary-btn");
   btn.disabled = true;
   connectPrimaryStatus(`Connecting to ${payload.name}…`);
@@ -1069,7 +1474,11 @@ document.getElementById("connect-primary-confirm-run").addEventListener("click",
     const job = await api(`/api/environments/${encodeURIComponent(currentEnv)}/connect-primary`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+<<<<<<< HEAD
       body: JSON.stringify(payload),
+=======
+      body: JSON.stringify({ ...payload, ...inline }),
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
     });
     lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if it finishes fast
     await Promise.all([loadJobs(), loadServers(), refreshStatus()]);
@@ -1089,6 +1498,11 @@ document.getElementById("connect-primary-confirm-run").addEventListener("click",
         `Connect to Primary failed: ${finished.error || "see the Jobs tab for details"}`,
         "err",
       );
+<<<<<<< HEAD
+=======
+      cacheEvictCreds(payload.name); // a stale typed password re-prompts next time
+      endBootstrapFlow();
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
       return;
     }
     connectPrimaryStatus("Connected — Management API access provisioned.", "ok");
@@ -1109,8 +1523,22 @@ document.getElementById("connect-primary-confirm-run").addEventListener("click",
     // it was just provisioned, rather than leaving an accessibility problem to
     // surface later as a confusing 403 during discovery.
     checkApiAccessAfterConnect();
+<<<<<<< HEAD
   } catch (e) {
     connectPrimaryStatus("Connect to Primary failed: " + e.message, "err");
+=======
+    // Bootstrap setup flow: discovery is next, once the one-time API key (if
+    // one was shown) has been dealt with, so the two modals never stack.
+    if (bootstrapFlow) {
+      bootstrapRunStatus("Connected to the primary. Next: discover the other servers.", "ok");
+      const next = () => openDiscoverModal(payload.name);
+      if (document.getElementById("api-key-reveal-modal").classList.contains("hidden")) next();
+      else bootstrapFlow.afterReveal = next;
+    }
+  } catch (e) {
+    connectPrimaryStatus("Connect to Primary failed: " + e.message, "err");
+    endBootstrapFlow();
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   } finally {
     btn.disabled = false;
   }
@@ -1176,7 +1604,11 @@ document.getElementById("cp-api-access-repair").addEventListener("click", async 
       preview.commands.join("\n");
     document.getElementById("api-access-repair-confirm-modal").classList.remove("hidden");
   } catch (e) {
+<<<<<<< HEAD
     toast("Could not render command preview: " + e.message);
+=======
+    toast("Could not render command preview: " + e.message, "error");
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   }
 });
 
@@ -1240,6 +1672,14 @@ function openApiKeyRevealModal(apiKey, credentialSetName) {
 function closeApiKeyRevealModal() {
   document.getElementById("api-key-reveal-modal").classList.add("hidden");
   document.getElementById("api-key-reveal-output").textContent = ""; // don't linger in the DOM
+<<<<<<< HEAD
+=======
+  const next = bootstrapFlow?.afterReveal;
+  if (next) {
+    delete bootstrapFlow.afterReveal;
+    next();
+  }
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
 }
 document.getElementById("api-key-reveal-close").addEventListener("click", closeApiKeyRevealModal);
 document.getElementById("api-key-reveal-done").addEventListener("click", closeApiKeyRevealModal);
@@ -1384,7 +1824,11 @@ async function openDiscoverModal(preselectName) {
   let servers = [];
   try {
     servers = await api(`/api/environments/${encodeURIComponent(currentEnv)}/servers`);
+<<<<<<< HEAD
   } catch (e) { toast("Could not load servers: " + e.message); return; }
+=======
+  } catch (e) { toast("Could not load servers: " + e.message, "error"); return; }
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   const primaries = servers.filter((s) => s.role === "primary_sms" || s.role === "primary_mds");
   if (!primaries.length) {
     toast("Add a Primary SMS or Primary MDS server before discovering the rest.");
@@ -1417,6 +1861,23 @@ function resetDiscoverResults() {
 function closeDiscoverModal() {
   document.getElementById("discover-modal").classList.add("hidden");
 }
+<<<<<<< HEAD
+=======
+// Close/cancel/Escape/backdrop without importing. Ends a bootstrap setup flow
+// if the modal was actually open (the app-wide Escape handler calls this
+// regardless).
+function cancelDiscoverModal() {
+  if (document.getElementById("discover-modal").classList.contains("hidden")) return;
+  closeDiscoverModal();
+  if (bootstrapFlow) {
+    endBootstrapFlow();
+    bootstrapRunStatus(
+      "Setup finished at Connect to Primary. Discover servers whenever you're ready.",
+      "ok",
+    );
+  }
+}
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
 
 document.getElementById("discover-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
@@ -1514,6 +1975,13 @@ document.getElementById("discover-import").addEventListener("click", async () =>
   if (!picks.length) { toast("Nothing selected to import."); return; }
   const importBtn = document.getElementById("discover-import");
   importBtn.disabled = true;
+<<<<<<< HEAD
+=======
+  // Bootstrap setup flow: offer to create the service account on these
+  // servers first, with the same temporary login, so they can be reached the
+  // moment they're imported. The flow ends here either way.
+  const bootFailed = bootstrapFlow ? await bootstrapDiscoveredServers(picks) : [];
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   let ok = 0;
   const failed = [];
   for (const r of picks) {
@@ -1548,8 +2016,20 @@ document.getElementById("discover-import").addEventListener("click", async () =>
   }
   if (ok) await watchForStateRefresh(); // each import is queried once — see saveServer
   await Promise.all([loadJobs(), loadServers(), refreshStatus()]);
+<<<<<<< HEAD
   if (failed.length) {
     toast(`Imported ${ok}. Failed: ${failed.join("; ")}`);
+=======
+  if (bootFailed.length) {
+    toast(
+      `Imported, but the service account could not be created on: ${bootFailed.join("; ")}. ` +
+        "Paste the bootstrap commands on those servers yourself.",
+      "error",
+    );
+  }
+  if (failed.length) {
+    toast(`Imported ${ok}. Failed: ${failed.join("; ")}`, "error");
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
     importBtn.disabled = false;
   } else {
     closeDiscoverModal();
@@ -1560,9 +2040,15 @@ document.getElementById("discover-import").addEventListener("click", async () =>
 // primary itself is now added via the Connect to Primary panel above, not a
 // modal reached from here.
 document.getElementById("discover-btn").addEventListener("click", () => openDiscoverModal());
+<<<<<<< HEAD
 document.getElementById("discover-close").addEventListener("click", closeDiscoverModal);
 document.getElementById("discover-cancel").addEventListener("click", closeDiscoverModal);
 onBackdropClick("discover-modal", () => closeDiscoverModal()); // backdrop click closes
+=======
+document.getElementById("discover-close").addEventListener("click", cancelDiscoverModal);
+document.getElementById("discover-cancel").addEventListener("click", cancelDiscoverModal);
+onBackdropClick("discover-modal", () => cancelDiscoverModal()); // backdrop click closes
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
 
 /* ---------- 1a-header. sticky header scroll state ---------- */
 
@@ -1890,7 +2376,12 @@ async function saveBootstrapCredential(setName, username, password, expertPasswo
 // button to its "Generate commands" state.
 function resetProvForm() {
   document.getElementById("provision-form").reset();
+<<<<<<< HEAD
   for (const id of ["prov-clish-notes", "prov-clish-wrap", "prov-cred-status"]) {
+=======
+  endBootstrapFlow();
+  for (const id of ["prov-clish-notes", "prov-clish-wrap", "prov-cred-status", "prov-run-status"]) {
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
     document.getElementById(id).classList.add("hidden");
   }
   const btn = document.getElementById("prov-generate");
@@ -1908,8 +2399,16 @@ document.getElementById("prov-generate").addEventListener("click", (ev) => {
   }
 });
 
+<<<<<<< HEAD
 document.getElementById("provision-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
+=======
+// Render the commands, save the new account as a credential set when it can,
+// and show both in the panel. Returns { username, password, credStatus } for
+// the "Log in and run for me" option, which needs the password to run them;
+// null if rendering failed.
+async function generateBootstrapCommands() {
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   const passwordInput = document.getElementById("prov-password");
   const expertInput = document.getElementById("prov-expert");
   const username = document.getElementById("prov-username").value.trim();
@@ -1940,11 +2439,210 @@ document.getElementById("provision-form").addEventListener("submit", async (ev) 
     btn.textContent = "Reset";
     btn.classList.add("danger");
     btn.dataset.mode = "reset";
+<<<<<<< HEAD
   } catch (e) {
     toast("Generate failed: " + e.message);
   }
 });
 
+=======
+    return { username, password, credStatus };
+  } catch (e) {
+    toast("Generate failed: " + e.message, "error");
+    return null;
+  }
+}
+
+document.getElementById("provision-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  await generateBootstrapCommands();
+});
+
+/* ---------- 2c. bootstrap: log in and run for me ---------- */
+
+// The alternative to pasting: the operator gives an EXISTING Gaia login once,
+// Convoy runs the commands with it (services/mgmt_bootstrap.py), then walks
+// on through Connect to Primary and Discover servers, each still confirmed in
+// its own modal. Holds that temporary login and the new account's password
+// for the length of the flow only. It is never stored: not in localStorage,
+// not in the credential cache, and the server keeps it in memory for each job.
+// Cleared by endBootstrapFlow() when the flow finishes, fails, or is
+// cancelled at any step, and on Reset or an environment switch. The state
+// itself (bootstrapFlow) is declared with the page-level state near the top.
+
+function endBootstrapFlow() {
+  bootstrapFlow = null;
+}
+
+function bootstrapRunStatus(message, cls) {
+  const box = document.getElementById("prov-run-status");
+  box.textContent = message;
+  box.classList.remove("prov-note-warn", "prov-note-err", "prov-note-ok");
+  if (cls) box.classList.add(`prov-note-${cls}`);
+  box.classList.toggle("hidden", !message);
+}
+
+// One bootstrap job against one address with the flow's temporary login.
+// Resolves { ok, error }; never throws.
+async function runBootstrapJob(address, sshPort) {
+  const flow = bootstrapFlow;
+  if (!flow || !currentEnv) return { ok: false, error: "setup was cancelled" };
+  try {
+    const job = await api(`/api/environments/${encodeURIComponent(currentEnv)}/bootstrap-mgmt`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        address,
+        ssh_port: sshPort,
+        login_username: flow.loginUsername,
+        login_password: flow.loginPassword,
+        account_username: flow.accountUsername,
+        account_password: flow.accountPassword,
+      }),
+    });
+    lastJobStatus.set(job.id, job.status); // so pollJobs() reports it too
+    loadJobs();
+    const finished = await waitForJobDone(job.id, { timeoutMs: 120000, intervalMs: 500 });
+    if (!finished) return { ok: false, error: "still running, check the Jobs tab" };
+    if (finished.status === "succeeded") return { ok: true };
+    return { ok: false, error: finished.error || "see the Jobs tab for details" };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+document.getElementById("prov-run").addEventListener("click", async () => {
+  if (!currentEnv) { toast("Create an environment first (picker → New Environment…)."); return; }
+  const form = document.getElementById("provision-form");
+  if (!form.reportValidity()) return;
+  // Connect to Primary logs in as the new account, from its saved credential
+  // set, and needs the box's expert password for mgmt_cli. Without one the
+  // set can't be saved (credentials.py's put_set), so the chain would stall.
+  if (storageEnabled() && !document.getElementById("prov-expert").value) {
+    toast(
+      "Enter the box's expert password too: Connect to Primary needs it saved " +
+        "with the new account's credentials.",
+    );
+    document.getElementById("prov-expert").focus();
+    return;
+  }
+  endBootstrapFlow();
+  bootstrapRunStatus("");
+  const gen = await generateBootstrapCommands();
+  if (!gen) return;
+  if (storageEnabled() && !gen.credStatus?.ok) {
+    bootstrapRunStatus(
+      "Not continuing: Connect to Primary needs the new account saved as a credential " +
+        `set (${gen.credStatus?.reason || "not saved"}). Paste the commands instead, ` +
+        "or save the set and try again.",
+      "err",
+    );
+    return;
+  }
+  bootstrapFlow = {
+    accountUsername: gen.username,
+    accountPassword: gen.password,
+    credSet: gen.credStatus?.ok ? gen.credStatus.name : null,
+  };
+  document.getElementById("prov-run-account").textContent = gen.username;
+  document.getElementById("prov-run-name").value = document.getElementById("cp-name").value;
+  document.getElementById("prov-run-address").value = document.getElementById("cp-address").value;
+  document.getElementById("prov-run-port").value = document.getElementById("cp-port").value || 22;
+  document.getElementById("prov-run-login-user").value = "";
+  document.getElementById("prov-run-login-password").value = "";
+  document.getElementById("prov-run-modal").classList.remove("hidden");
+  const firstEmpty = ["prov-run-name", "prov-run-address", "prov-run-login-user"]
+    .map((id) => document.getElementById(id))
+    .find((input) => !input.value);
+  (firstEmpty || document.getElementById("prov-run-login-password")).focus();
+});
+
+function closeProvRunModal() {
+  document.getElementById("prov-run-modal").classList.add("hidden");
+  document.getElementById("prov-run-login-password").value = "";
+}
+// Cancel before anything ran: drop the flow. Only acts when the modal is
+// open, since the app-wide Escape handler calls it regardless.
+function cancelProvRunModal() {
+  if (document.getElementById("prov-run-modal").classList.contains("hidden")) return;
+  closeProvRunModal();
+  endBootstrapFlow();
+}
+document.getElementById("prov-run-close").addEventListener("click", cancelProvRunModal);
+document.getElementById("prov-run-cancel").addEventListener("click", cancelProvRunModal);
+onBackdropClick("prov-run-modal", () => cancelProvRunModal());
+
+document.getElementById("prov-run-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const flow = bootstrapFlow;
+  if (!flow) { closeProvRunModal(); return; }
+  const name = document.getElementById("prov-run-name").value.trim();
+  const address = document.getElementById("prov-run-address").value.trim();
+  const port = Number(document.getElementById("prov-run-port").value) || 22;
+  flow.loginUsername = document.getElementById("prov-run-login-user").value.trim();
+  flow.loginPassword = document.getElementById("prov-run-login-password").value;
+  closeProvRunModal();
+  bootstrapRunStatus(`Creating ${flow.accountUsername} on ${address}…`);
+  const result = await runBootstrapJob(address, port);
+  if (bootstrapFlow !== flow) return; // cancelled or replaced meanwhile
+  if (!result.ok) {
+    bootstrapRunStatus(`Bootstrap failed on ${address}: ${result.error}`, "err");
+    endBootstrapFlow();
+    return;
+  }
+  bootstrapRunStatus(
+    `Created ${flow.accountUsername} on ${address}. Next: confirm Connect to Primary.`,
+    "ok",
+  );
+  // Hand straight on to Connect to Primary, pre-filled with the same server
+  // and the new account; its own preview modal is the next confirmation.
+  document.getElementById("cp-name").value = name;
+  document.getElementById("cp-address").value = address;
+  document.getElementById("cp-port").value = port;
+  if (storageEnabled()) {
+    document.getElementById("cp-cred-select").value = flow.credSet || "";
+  } else {
+    document.getElementById("cp-user").value = flow.accountUsername;
+  }
+  document.getElementById("connect-primary-details").open = true;
+  document.getElementById("connect-primary-form").requestSubmit();
+});
+
+// Discover-import step of the flow: offer to run the same bootstrap on the
+// servers about to be imported. Returns "address: reason" strings for the
+// ones that failed. Always ends the flow.
+async function bootstrapDiscoveredServers(rows) {
+  const flow = bootstrapFlow;
+  const targets = rows
+    .map((r) => r.querySelector(".disc-address").value.trim())
+    .filter(Boolean);
+  try {
+    if (!targets.length) return [];
+    const yes = await confirmDialog({
+      title: `Create ${flow.accountUsername} on ${targets.length} server${targets.length === 1 ? "" : "s"}?`,
+      message:
+        `Logs in to ${targets.join(", ")} with your temporary login and runs the same ` +
+        "bootstrap commands before importing them, so Convoy can reach them straight " +
+        "away. Choose Skip to import them without it and paste the commands yourself.",
+      confirmLabel: "Create account",
+      cancelLabel: "Skip",
+    });
+    if (!yes) return [];
+    const status = document.getElementById("discover-status");
+    status.textContent = `Creating ${flow.accountUsername} on ${targets.length} server(s)…`;
+    // Discovered servers listen on SSH's default port, which is also what the
+    // import below records for them.
+    const results = await Promise.all(targets.map((address) => runBootstrapJob(address, 22)));
+    return targets
+      .map((address, i) => (results[i].ok ? null : `${address}: ${results[i].error}`))
+      .filter(Boolean);
+  } finally {
+    endBootstrapFlow();
+    bootstrapRunStatus("Setup complete.", "ok");
+  }
+}
+
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
 // Copy icons: each carries data-copy = the id of the <pre> it copies. Manual only.
 for (const btn of document.querySelectorAll(".copy-icon[data-copy]")) {
   btn.addEventListener("click", async () => {
@@ -1952,7 +2650,11 @@ for (const btn of document.querySelectorAll(".copy-icon[data-copy]")) {
       await copyText(document.getElementById(btn.dataset.copy).textContent);
       flashCopied(btn);
     } catch {
+<<<<<<< HEAD
       toast("Clipboard unavailable — select and copy manually.");
+=======
+      toast("Clipboard unavailable — select and copy manually.", "error");
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
     }
   });
 }
@@ -2194,7 +2896,18 @@ async function loadServers() {
       openEditServerModal(srv, assignedByName.get(srv.name));
     });
     info.querySelector(".btn-remove").addEventListener("click", async () => {
+<<<<<<< HEAD
       if (!confirm(`Remove server ${srv.name} from ${currentEnv}?`)) return;
+=======
+      if (!await confirmDialog({
+        title: `Remove server ${srv.name}?`,
+        message:
+          `This removes it from ${currentEnv} in this tool's inventory. ` +
+          "The server itself is not changed.",
+        confirmLabel: "Remove server",
+        danger: true,
+      })) return;
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
       try {
         // Executes immediately as a tracked prov.delete job — see the server
         // form submit handler above for the same immediate-outcome model.
@@ -2203,9 +2916,15 @@ async function loadServers() {
           { method: "DELETE" },
         );
         lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if another tab is watching
+<<<<<<< HEAD
         if (job.status !== "succeeded") toast("Remove failed: " + (job.error || "unknown error"));
         await Promise.all([loadJobs(), loadServers(), refreshStatus()]);
       } catch (e) { toast("Remove failed: " + e.message); }
+=======
+        if (job.status !== "succeeded") toast("Remove failed: " + (job.error || "unknown error"), "error");
+        await Promise.all([loadJobs(), loadServers(), refreshStatus()]);
+      } catch (e) { toast("Remove failed: " + e.message, "error"); }
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
     });
     infoTbody.appendChild(info);
   }
@@ -2517,6 +3236,7 @@ const LOW_SPACE_OVERRIDABLE_RE = /can be overridden if you choose to proceed any
 const HOST_KEY_CHANGED_RE = /host key .* has changed|host key changed/i;
 
 async function acceptHostKey(name) {
+<<<<<<< HEAD
   const sure = confirm(
     `Accept a NEW SSH host key for "${name}"?
 
@@ -2524,6 +3244,18 @@ Only do this if you know the host was rebuilt, reimaged, or upgraded.
 
 If it wasn't, a changed host key can mean the connection is being intercepted — and accepting it will send this host's stored SSH and expert-mode passwords to whatever is answering.`
   );
+=======
+  const sure = await confirmDialog({
+    title: `Accept a new SSH host key for "${name}"?`,
+    message:
+      "Only do this if you know the host was rebuilt, reimaged, or upgraded.\n\n" +
+      "If it wasn't, a changed host key can mean the connection is being " +
+      "intercepted. Accepting it will send this host's stored SSH and " +
+      "expert-mode passwords to whatever is answering.",
+    confirmLabel: "Accept new key",
+    danger: true,
+  });
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   if (!sure) return false;
   try {
     await api(`/api/environments/${encodeURIComponent(currentEnv)}/hosts/${encodeURIComponent(name)}/accept-host-key`, {
@@ -2534,7 +3266,11 @@ If it wasn't, a changed host key can mean the connection is being intercepted �
     toast(`Cleared the pinned host key for ${name} — the next connection will pin the new one.`);
     return true;
   } catch (e) {
+<<<<<<< HEAD
     toast("Could not clear the host key: " + e.message);
+=======
+    toast("Could not clear the host key: " + e.message, "error");
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
     return false;
   }
 }
@@ -2587,12 +3323,24 @@ async function installPackage(name, row) {
   const packageId = select.value;
   const verifyFirst = !row.querySelector(".skip-verify").checked;
   // Installs can REBOOT the management server — always confirm explicitly.
+<<<<<<< HEAD
   const sure = confirm(
     `Install ${packageId} on ${name}?\n\n` +
     (verifyFirst ? "" : "Skipping `installer verify` — installing directly.\n\n") +
     "This may reboot the management server when it completes. " +
     "Make sure this is inside a maintenance window and any HA peer is healthy."
   );
+=======
+  const sure = await confirmDialog({
+    title: `Install ${packageId} on ${name}?`,
+    message:
+      (verifyFirst ? "" : "Skipping `installer verify`, installing directly.\n\n") +
+      "This may reboot the management server when it completes. " +
+      "Make sure this is inside a maintenance window and any HA peer is healthy.",
+    confirmLabel: "Install",
+    danger: true,
+  });
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   if (!sure) return;
   const extra = await operationCredentials(name, "install a package", currentEnv, true);
   if (extra === null) return;
@@ -2610,7 +3358,11 @@ async function installPackage(name, row) {
     await loadJobs();
   } catch (e) {
     cacheEvictCreds(name);
+<<<<<<< HEAD
     toast("Install failed to start: " + e.message);
+=======
+    toast("Install failed to start: " + e.message, "error");
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   }
 }
 
@@ -2618,7 +3370,11 @@ async function installPackage(name, row) {
 
 // Uninstall is destructive (reverts the host to a prior version, may reboot
 // it) so it gets its own modal requiring the operator to type the exact
+<<<<<<< HEAD
 // target host name, rather than installPackage's plain confirm() dialog.
+=======
+// target host name, rather than installPackage's plain confirmation modal.
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
 // Shared by both the Management tab's server rows and the Firewalls panel —
 // `kind` ("server" | "firewall") picks the API path.
 let uninstallModalCtx = null;
@@ -2667,7 +3423,11 @@ document.getElementById("uninstall-modal-form").addEventListener("submit", async
     closeUninstallModal();
   } catch (e) {
     cacheEvictCreds(name);
+<<<<<<< HEAD
     toast("Uninstall failed to start: " + e.message);
+=======
+    toast("Uninstall failed to start: " + e.message, "error");
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
     submit.disabled = false;
   }
 });
@@ -2729,7 +3489,11 @@ async function bulkImport(btn, getTargets, perServer) {
         if (job && job.id) submitted.push(job.id);
       } catch (e) {
         cacheEvictCreds(name);
+<<<<<<< HEAD
         toast(`Import to ${name} failed to start: ${e.message}`);
+=======
+        toast(`Import to ${name} failed to start: ${e.message}`, "error");
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
       }
     }
     if (submitted.length) selectTab("jobs");
@@ -3162,7 +3926,11 @@ async function testSparkCredentials(name) {
     lastJobStatus.set(job.id, job.status);
     toast(`Credential test started for ${name} — see the Jobs tab for the result.`);
   } catch (e) {
+<<<<<<< HEAD
     toast("Could not start the credential test: " + e.message);
+=======
+    toast("Could not start the credential test: " + e.message, "error");
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   }
 }
 
@@ -3183,7 +3951,11 @@ async function openBootstrapCredsConfirm(name, handlers) {
       preview.commands.join("\n");
     document.getElementById("fw-bootstrap-creds-confirm-modal").classList.remove("hidden");
   } catch (e) {
+<<<<<<< HEAD
     toast("Could not render command preview: " + e.message);
+=======
+    toast("Could not render command preview: " + e.message, "error");
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   }
 }
 
@@ -3261,7 +4033,11 @@ async function openSparkBootstrapModal(name) {
     document.getElementById("fw-spark-bootstrap-output").textContent = preview.commands.join("\n");
     document.getElementById("fw-spark-bootstrap-modal").classList.remove("hidden");
   } catch (e) {
+<<<<<<< HEAD
     toast("Could not render command preview: " + e.message);
+=======
+    toast("Could not render command preview: " + e.message, "error");
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
     return;
   }
   await new Promise((resolve) => { _fwSparkBootstrapResolve = resolve; });
@@ -3370,7 +4146,11 @@ document.getElementById("fw-spark-cred-form").addEventListener("submit", async (
     return;
   }
   const result = await saveSparkCredential({ name, ssh_username, ssh_password, expert_password, api_key });
+<<<<<<< HEAD
   if (!result.ok) { toast("Save failed: " + result.reason); return; }
+=======
+  if (!result.ok) { toast("Save failed: " + result.reason, "error"); return; }
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   closeSparkCredModal({ credentialSetName: result.name, scenario });
 });
 document.getElementById("fw-spark-cred-cancel").addEventListener("click", () => closeSparkCredModal(null));
@@ -3447,12 +4227,24 @@ async function installFirewallPackage(name, row) {
     }
   }
   // Installs can REBOOT the firewall — always confirm explicitly.
+<<<<<<< HEAD
   const sure = confirm(
     `Install ${packageId} on ${name}?\n\n` +
     (!isSpark && !verifyFirst ? "Skipping `installer verify` — installing directly.\n\n" : "") +
     "This may reboot the firewall when it completes. " +
     "Make sure this is inside a maintenance window and any HA peer is healthy."
   );
+=======
+  const sure = await confirmDialog({
+    title: `Install ${packageId} on ${name}?`,
+    message:
+      (!isSpark && !verifyFirst ? "Skipping `installer verify`, installing directly.\n\n" : "") +
+      "This may reboot the firewall when it completes. " +
+      "Make sure this is inside a maintenance window and any HA peer is healthy.",
+    confirmLabel: "Install",
+    danger: true,
+  });
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   if (!sure) return;
   const extra = await operationCredentials(name, "install a package", currentEnv, true);
   if (extra === null) return;
@@ -3470,7 +4262,11 @@ async function installFirewallPackage(name, row) {
     await loadJobs();
   } catch (e) {
     cacheEvictCreds(name);
+<<<<<<< HEAD
     toast("Install failed to start: " + e.message);
+=======
+    toast("Install failed to start: " + e.message, "error");
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   }
 }
 
@@ -3511,12 +4307,24 @@ document.getElementById("fw-remove-selected-btn").addEventListener("click", asyn
   const listed = names.length <= 10
     ? names.join(", ")
     : `${names.slice(0, 10).join(", ")} and ${names.length - 10} more`;
+<<<<<<< HEAD
   if (!confirm(
     `Remove ${names.length} firewall${names.length === 1 ? "" : "s"} from ${currentEnv}?\n\n` +
     `${listed}\n\n` +
     "This only removes them from this tool's inventory — the devices themselves " +
     "are not changed."
   )) return;
+=======
+  if (!await confirmDialog({
+    title: `Remove ${names.length} firewall${names.length === 1 ? "" : "s"} from ${currentEnv}?`,
+    message:
+      `${listed}\n\n` +
+      "This only removes them from this tool's inventory. The devices themselves " +
+      "are not changed.",
+    confirmLabel: "Remove",
+    danger: true,
+  })) return;
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   const btn = document.getElementById("fw-remove-selected-btn");
   btn.disabled = true;
   const failed = [];
@@ -3531,7 +4339,11 @@ document.getElementById("fw-remove-selected-btn").addEventListener("click", asyn
     } catch (e) { failed.push(`${name}: ${e.message}`); }
   }
   btn.disabled = false;
+<<<<<<< HEAD
   if (failed.length) toast(`Removed ${names.length - failed.length}. Failed: ${failed.join("; ")}`);
+=======
+  if (failed.length) toast(`Removed ${names.length - failed.length}. Failed: ${failed.join("; ")}`, "error");
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   await Promise.all([loadJobs(), loadFirewalls()]);
 });
 
@@ -3783,7 +4595,11 @@ async function populateFirewallDomainSelect(currentDomain) {
       `/api/environments/${encodeURIComponent(currentEnv)}/domains`,
     );
     for (const d of domains) select.appendChild(new Option(d, d));
+<<<<<<< HEAD
     for (const w of warnings || []) toast(w);
+=======
+    for (const w of warnings || []) toast(w, "warn");
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   } catch (e) {
     document.getElementById("fm-domain-status").textContent = "Could not load domains: " + e.message;
   }
@@ -3907,7 +4723,11 @@ document.getElementById("firewall-form").addEventListener("submit", async (ev) =
     });
     lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if another tab is watching
     if (job.status !== "succeeded") {
+<<<<<<< HEAD
       toast("Save failed: " + (job.error || "unknown error"));
+=======
+      toast("Save failed: " + (job.error || "unknown error"), "error");
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
       await loadJobs();
       return;
     }
@@ -3918,12 +4738,27 @@ document.getElementById("firewall-form").addEventListener("submit", async (ev) =
       pendingSparkBootstrap = false;
       await openSparkBootstrapModal(name);
     }
+<<<<<<< HEAD
   } catch (e) { toast("Save failed: " + e.message); }
+=======
+  } catch (e) { toast("Save failed: " + e.message, "error"); }
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
 });
 document.getElementById("firewall-modal-remove").addEventListener("click", async () => {
   const name = editingFirewallName;
   if (!name || !currentEnv) return;
+<<<<<<< HEAD
   if (!confirm(`Remove firewall ${name} from ${currentEnv}?`)) return;
+=======
+  if (!await confirmDialog({
+    title: `Remove firewall ${name}?`,
+    message:
+      `This removes it from ${currentEnv} in this tool's inventory. ` +
+      "The firewall itself is not changed.",
+    confirmLabel: "Remove firewall",
+    danger: true,
+  })) return;
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   try {
     // Executes immediately as a tracked prov.delete job — see the firewall
     // form submit handler above.
@@ -3932,10 +4767,17 @@ document.getElementById("firewall-modal-remove").addEventListener("click", async
       { method: "DELETE" },
     );
     lastJobStatus.set(job.id, job.status); // so pollJobs() catches it even if another tab is watching
+<<<<<<< HEAD
     if (job.status !== "succeeded") toast("Remove failed: " + (job.error || "unknown error"));
     closeFirewallModal();
     await Promise.all([loadJobs(), loadFirewalls()]);
   } catch (e) { toast("Remove failed: " + e.message); }
+=======
+    if (job.status !== "succeeded") toast("Remove failed: " + (job.error || "unknown error"), "error");
+    closeFirewallModal();
+    await Promise.all([loadJobs(), loadFirewalls()]);
+  } catch (e) { toast("Remove failed: " + e.message, "error"); }
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
 });
 document.getElementById("firewall-modal-close").addEventListener("click", closeFirewallModal);
 document.getElementById("firewall-modal-cancel").addEventListener("click", closeFirewallModal);
@@ -3961,7 +4803,11 @@ async function openDiscoverFirewallsModal() {
   let servers = [];
   try {
     servers = await api(`/api/environments/${encodeURIComponent(currentEnv)}/servers`);
+<<<<<<< HEAD
   } catch (e) { toast("Could not load servers: " + e.message); return; }
+=======
+  } catch (e) { toast("Could not load servers: " + e.message, "error"); return; }
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   if (!findPrimaryServer(servers)) {
     toast("Add a Primary SMS or Primary MDS server on the Provisioning tab before discovering firewalls.");
     return;
@@ -3978,7 +4824,11 @@ async function openDiscoverFirewallsModal() {
       const { domains, warnings } = await api(`/api/environments/${encodeURIComponent(currentEnv)}/domains`);
       for (const d of domains) domainSelect.appendChild(new Option(d, d));
       status.textContent = domains.length ? "" : "No Domains found on the primary MDS.";
+<<<<<<< HEAD
       for (const w of warnings || []) toast(w);
+=======
+      for (const w of warnings || []) toast(w, "warn");
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
     } catch (e) {
       status.textContent = "Could not load domains: " + e.message;
     }
@@ -4220,7 +5070,11 @@ document.getElementById("discover-firewalls-import").addEventListener("click", a
   }
   if (ok) await watchForStateRefresh(); // each imported firewall is queried once
   await Promise.all([loadJobs(), loadFirewalls()]);
+<<<<<<< HEAD
   if (failed.length) toast(`Imported ${ok}. Failed: ${failed.join("; ")}`);
+=======
+  if (failed.length) toast(`Imported ${ok}. Failed: ${failed.join("; ")}`, "error");
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   // The table now represents the import, not the scan: drop every row that
   // wasn't picked (unselected, or already in inventory) so what's left is
   // exactly the firewalls chosen — nothing greyed out, nothing to re-read.
@@ -4487,7 +5341,11 @@ async function cdtLoadCandidates() {
     renderCdtCandidates();
   } catch (e) {
     cacheEvictCreds(name);
+<<<<<<< HEAD
     toast("Load failed: " + e.message);
+=======
+    toast("Load failed: " + e.message, "error");
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   }
 }
 
@@ -4546,7 +5404,11 @@ async function cdtSaveCandidates() {
     toast(`Saved ${resp.rows} candidate(s). Row order is the deployment order.`);
   } catch (e) {
     cacheEvictCreds(name);
+<<<<<<< HEAD
     toast("Save failed: " + e.message);
+=======
+    toast("Save failed: " + e.message, "error");
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   }
 }
 
@@ -4566,7 +5428,11 @@ async function cdtAction(path, body) {
     await loadJobs();
   } catch (e) {
     cacheEvictCreds(name);
+<<<<<<< HEAD
     toast(`${path} failed to start: ` + e.message);
+=======
+    toast(`${path} failed to start: ` + e.message, "error");
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   }
 }
 
@@ -4581,6 +5447,7 @@ document.getElementById("cdt-save").addEventListener("click", cdtSaveCandidates)
 document.getElementById("cdt-prepare").addEventListener("click", () =>
   cdtAction("prepare", { extended: document.getElementById("cdt-extended").checked }));
 document.getElementById("cdt-status-btn").addEventListener("click", cdtRefreshStatus);
+<<<<<<< HEAD
 document.getElementById("cdt-execute").addEventListener("click", () => {
   const name = document.getElementById("cdt-server").value;
   const count = cdtCandidates ? cdtCandidates.rows.length : "?";
@@ -4591,6 +5458,21 @@ document.getElementById("cdt-execute").addEventListener("click", () => {
     "including automatic cluster failovers. Make sure this is inside a " +
     "maintenance window and the candidate list was reviewed and saved."
   );
+=======
+document.getElementById("cdt-execute").addEventListener("click", async () => {
+  const name = document.getElementById("cdt-server").value;
+  const count = cdtCandidates ? cdtCandidates.rows.length : "?";
+  // Executing deploys to EVERY firewall in the candidates list, in order.
+  const sure = await confirmDialog({
+    title: `Execute the CDT deployment from ${name || "?"}?`,
+    message:
+      `This deploys to ${count} firewall(s) in the saved candidate order, ` +
+      "including automatic cluster failovers. Make sure this is inside a " +
+      "maintenance window and the candidate list was reviewed and saved.",
+    confirmLabel: "Execute deployment",
+    danger: true,
+  });
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   if (sure) cdtAction("execute", { confirmed: true });
 });
 
@@ -4693,12 +5575,20 @@ async function loadPackages() {
         lastJobStatus.set(job.id, job.status);
         if (job.status !== "succeeded") {
           pin.checked = !pin.checked; // revert — the write itself failed
+<<<<<<< HEAD
           toast("Retention update failed: " + (job.error || "unknown error"));
+=======
+          toast("Retention update failed: " + (job.error || "unknown error"), "error");
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
         }
         await Promise.all([loadJobs(), loadPackages()]);
       } catch (e) {
         pin.checked = !pin.checked; // revert the optimistic toggle — the request itself failed
+<<<<<<< HEAD
         toast("Could not update retention: " + e.message);
+=======
+        toast("Could not update retention: " + e.message, "error");
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
       } finally {
         pin.disabled = false;
       }
@@ -4706,12 +5596,25 @@ async function loadPackages() {
 
     // Delete likewise executes immediately — see the comment above.
     row.querySelector(".btn-delete").addEventListener("click", async () => {
+<<<<<<< HEAD
       if (!confirm(`Delete package ${pkg.filename}?`)) return;
+=======
+      if (!await confirmDialog({
+        title: `Delete package ${pkg.filename}?`,
+        message: "This removes it from this tool's package store.",
+        confirmLabel: "Delete package",
+        danger: true,
+      })) return;
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
       try {
         const job = await api(`/api/packages/${encodeURIComponent(pkg.filename)}`, { method: "DELETE" });
         lastJobStatus.set(job.id, job.status);
         await Promise.all([loadJobs(), loadPackages()]);
+<<<<<<< HEAD
       } catch (e) { toast("Delete failed to start: " + e.message); }
+=======
+      } catch (e) { toast("Delete failed to start: " + e.message, "error"); }
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
     });
 
     // Unlike the rest of this table, this is genuinely slow (SFTP to the
@@ -4745,7 +5648,11 @@ async function loadPackages() {
         applyPushProgress(row, pkg.filename);
         await loadJobs();
       } catch (e) {
+<<<<<<< HEAD
         toast("Could not start upload: " + e.message);
+=======
+        toast("Could not start upload: " + e.message, "error");
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
       } finally {
         // Leave it disabled if the job is now tracked as in-flight — only the
         // failure path (job never got created) should re-enable immediately.
@@ -4795,12 +5702,20 @@ async function uploadPackageFile(file) {
       await Promise.all([loadJobs(), loadPackages()]);
     } else {
       text.textContent = UPLOAD_FIELD_HINT;
+<<<<<<< HEAD
       toast(`Upload of ${file.name} failed: ` + (job.error || "unknown error"));
+=======
+      toast(`Upload of ${file.name} failed: ` + (job.error || "unknown error"), "error");
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
       await loadJobs();
     }
   } catch (e) {
     text.textContent = UPLOAD_FIELD_HINT;
+<<<<<<< HEAD
     toast(`Upload of ${file.name} failed to start: ` + e.message);
+=======
+    toast(`Upload of ${file.name} failed to start: ` + e.message, "error");
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   } finally {
     field.classList.remove("uploading");
     input.disabled = false;
@@ -4890,7 +5805,11 @@ async function loadCredentialSets() {
       try {
         await api(envUrl(`/credentials/${encodeURIComponent(set.name)}/default`), { method: "POST" });
         await loadCredentialSets();
+<<<<<<< HEAD
       } catch (e) { toast("Could not set default: " + e.message); }
+=======
+      } catch (e) { toast("Could not set default: " + e.message, "error"); }
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
     });
     row.querySelector(".cs-user").textContent = set.ssh_username ?? "";
     row.querySelector(".cs-auth").textContent = set.ssh_auth; // password | key | none
@@ -4899,12 +5818,25 @@ async function loadCredentialSets() {
     row.querySelector(".btn-edit").addEventListener("click", () => openCredEditModal(set));
     // Executes immediately as a tracked cred.delete job (services/cred_ops.py).
     row.querySelector(".btn-delete").addEventListener("click", async () => {
+<<<<<<< HEAD
       if (!confirm(`Delete credential set "${set.name}"? Servers using it lose access.`)) return;
+=======
+      if (!await confirmDialog({
+        title: `Delete credential set "${set.name}"?`,
+        message: "Servers using it lose access.",
+        confirmLabel: "Delete credential set",
+        danger: true,
+      })) return;
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
       try {
         const job = await api(envUrl(`/credentials/${encodeURIComponent(set.name)}`), { method: "DELETE" });
         lastJobStatus.set(job.id, job.status);
         await Promise.all([loadJobs(), loadCredentialSets(), loadServers()]);
+<<<<<<< HEAD
       } catch (e) { toast("Delete failed to start: " + e.message); }
+=======
+      } catch (e) { toast("Delete failed to start: " + e.message, "error"); }
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
     });
     tbody.appendChild(row);
   }
@@ -4922,9 +5854,30 @@ async function loadCredentialSets() {
 function updateProvisionCollapse() {
   document.getElementById("provision-details").open = !hasProvisionedPrimary;
   document.getElementById("connect-primary-details").open = !hasProvisionedPrimary;
+<<<<<<< HEAD
   updateApiOnlyVisibility();
 }
 
+=======
+  syncConnectPrimaryRole();
+  updateApiOnlyVisibility();
+}
+
+// Connect to Primary's Role offers only the primary that matches the
+// environment's kind: Primary MDS for a Multi-Domain environment, Primary SMS
+// otherwise. An environment is entirely one or the other (see envIsMds), so
+// offering both only invites recording the wrong kind of primary — the
+// backend refuses a mismatch too (PrimaryConnectService.submit_connect_primary).
+// Runs on every environment load/switch and estate-type change, via
+// updateProvisionCollapse.
+function syncConnectPrimaryRole() {
+  const role = envIsMds[currentEnv] ? "primary_mds" : "primary_sms";
+  const select = document.getElementById("cp-role");
+  select.replaceChildren(new Option(roleLabel(role), role));
+  select.value = role;
+}
+
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
 // Hides the UI surfaces that assume SSH/SCP reachability to the management
 // server(s) when the current environment is API-only (see envApiOnly) —
 // Bootstrap and Connect to Primary (Provisioning tab) and the CPUSE tab's
@@ -5017,7 +5970,11 @@ document.getElementById("credential-form").addEventListener("submit", async (ev)
     closeCredAddModal(); // resets the form so no secrets linger in the DOM
     await Promise.all([loadJobs(), loadCredentialSets(), loadServers()]);
   } catch (e) {
+<<<<<<< HEAD
     toast("Save failed to start: " + e.message);
+=======
+    toast("Save failed to start: " + e.message, "error");
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   }
 });
 
@@ -5309,7 +6266,11 @@ function wireJobRow(row, jobId) {
   row.querySelector(".btn-cancel").addEventListener("click", async (ev) => {
     ev.stopPropagation(); // don't also toggle the log row
     try { await api(`/api/jobs/${jobId}/cancel`, { method: "POST" }); }
+<<<<<<< HEAD
     catch (e) { toast("Cancel failed: " + e.message); }
+=======
+    catch (e) { toast("Cancel failed: " + e.message, "error"); }
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
     await loadJobs();
   });
   row.querySelector(".btn-retry-low-space").addEventListener("click", async (ev) => {
@@ -5317,6 +6278,7 @@ function wireJobRow(row, jobId) {
     const btn = ev.currentTarget;
     const host = row.querySelector(".job-target").textContent;
     const env = row.querySelector(".job-env").textContent;
+<<<<<<< HEAD
     const sure = confirm(
       `${host} did not have the recommended free space for this import, but still has at ` +
       `least 1.5x the package size available.` +
@@ -5327,6 +6289,17 @@ Retry the import anyway?
 The original failure stays on the Jobs tab as the ` +
       `record of why this was overridden.`
     );
+=======
+    const sure = await confirmDialog({
+      title: "Retry the import anyway?",
+      message:
+        `${host} did not have the recommended free space for this import, but ` +
+        "still has at least 1.5x the package size available.\n\n" +
+        "The original failure stays on the Jobs tab as the record of why this " +
+        "was overridden.",
+      confirmLabel: "Retry import",
+    });
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
     if (!sure) return;
     const extra = await operationCredentials(host, "retry the import", env, true);
     if (extra === null) return; // credential prompt cancelled
@@ -5341,7 +6314,11 @@ The original failure stays on the Jobs tab as the ` +
       toast(`Retrying the import on ${host} with the disk-space override.`);
       await loadJobs();
     } catch (e) {
+<<<<<<< HEAD
       toast("Retry failed: " + e.message);
+=======
+      toast("Retry failed: " + e.message, "error");
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
     } finally {
       btn.disabled = false;
     }
@@ -5370,7 +6347,11 @@ The original failure stays on the Jobs tab as the ` +
           : "Still not listed as imported yet."
       );
     } catch (e) {
+<<<<<<< HEAD
       toast("Check status failed: " + e.message);
+=======
+      toast("Check status failed: " + e.message, "error");
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
     } finally {
       btn.disabled = false;
     }

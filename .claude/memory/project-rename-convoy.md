@@ -16,8 +16,13 @@ sequences patches/upgrades across management servers and firewalls (see
 ## What changed
 - **GitHub repo** → `jburanen/Convoy`. GitHub serves permanent redirects from the
   old path, so a clone still pointing at the old URL keeps fetching — including the
+<<<<<<< HEAD
   dev host's checkout at `/home/jason/docker-cpuse` ([[test-host-deploy]]).
 - **Local clone** → `C:\Users\jburanen\Github\Convoy`. The `.venv` needed rebuilding
+=======
+  dev host's checkout ([[test-host-deploy]]).
+- **Local clone** moved to a new `...\Github\Convoy` path. The `.venv` needed rebuilding
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
   (the editable-install `.pth` and every `Scripts\*.exe` shim bake in the absolute
   path), and Claude Code's per-project history had to be copied to the new
   path-derived key under `~/.claude/projects/`.

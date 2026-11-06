@@ -868,6 +868,61 @@ button.link-btn.fw-name-link {
 #fw-spark-cred-modal,
 #fw-spark-bootstrap-modal { z-index: 101; }
 #prov-overwrite-modal { z-index: 102; }
+<<<<<<< HEAD
+=======
+/* The shared confirmation (confirmDialog in app.js) can open from inside any
+   of the modals above, so it outranks them all. */
+#confirm-modal { z-index: 200; }
+#confirm-modal-message { white-space: pre-line; } /* messages carry line breaks */
+#confirm-modal.danger #confirm-modal-message { color: var(--warn); }
+
+/* ---- toasts (toast() in app.js) ----
+   Non-blocking replacement for alert(): stacked bottom-right, above every
+   modal (#confirm-modal included) so a failure raised while a dialog is open
+   is still seen. Info fades on its own; warn/error stay until dismissed. */
+#toast-stack {
+  position: fixed;
+  right: 1rem;
+  bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.5rem;
+  max-width: min(440px, calc(100vw - 2rem));
+  pointer-events: none; /* the gaps between toasts don't block the page */
+}
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  transition: opacity 0.25s ease;
+}
+.toast.warn { border-left-color: var(--warn); }
+.toast.error { border-left-color: var(--danger); }
+.toast.leaving { opacity: 0; }
+.toast-text { flex: 1; }
+.toast-close {
+  background: none;
+  border: none;
+  color: var(--muted);
+  padding: 0 0.15rem;
+  font-size: 1rem;
+  line-height: 1.2;
+  cursor: pointer;
+}
+.toast-close:hover { color: var(--text); }
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
 
 .modal-card {
   background: var(--panel);
@@ -1063,6 +1118,7 @@ button.link-btn.fw-name-link {
   padding: 0.5rem 0;
   border-bottom: 1px solid var(--border);
 }
+<<<<<<< HEAD
 .env-manage-name { display: flex; gap: 0.5rem; align-items: center; }
 /* The name grows, the type picker stays its natural width beside it — the two
    read as one line describing the environment, which is the point of folding
@@ -1072,13 +1128,75 @@ button.link-btn.fw-name-link {
 /* Explains whichever type is selected, in place of the per-checkbox hints. */
 .env-type-note { margin: 0.15rem 0 0.4rem; }
 .env-manage-name input { flex: 1; }
+=======
+/* Accordion: a collapsed row is just handle + name + type; .expanded (one row
+   at a time, see renderEnvManageList) adds the action buttons and the body. */
+.env-manage-head { display: flex; gap: 0.4rem; align-items: center; }
+.env-manage-row:not(.expanded) .env-manage-actions,
+.env-manage-row:not(.expanded) .env-manage-body { display: none; }
+.env-manage-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding-left: 1.6rem; /* line up under the name, past the drag handle */
+}
+.env-expand-btn {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: none;
+  border: none;
+  color: var(--text);
+  padding: 0.25rem 0;
+  text-align: left;
+  cursor: pointer;
+}
+.env-expand-btn:hover { filter: none; color: var(--accent); }
+.env-caret { color: var(--muted); transition: transform 0.15s ease; }
+.env-manage-row.expanded .env-caret { transform: rotate(90deg); }
+.env-manage-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.env-manage-actions { display: flex; gap: 0.35rem; flex-wrap: wrap; justify-content: flex-end; }
+.env-drag-handle {
+  flex: none;
+  background: none;
+  border: none;
+  color: var(--muted);
+  padding: 0.1rem 0.2rem;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: grab;
+  touch-action: none;
+}
+.env-drag-handle:hover, .env-drag-handle:focus-visible { color: var(--text); filter: none; }
+.env-manage-row.dragging { opacity: 0.45; }
+/* Rename / Change type editors: hidden until their button is clicked. */
+.env-edit-row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+.env-edit-row.hidden { display: none; } /* out-rank the generic .hidden */
+.env-edit-row .env-rename-input { flex: 1 1 12rem; min-width: 0; }
+/* Explains the current type (or, while Change type is open, the one picked). */
+.env-type-note { margin: 0.15rem 0 0.4rem; }
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
 .env-storage-toggle {
   display: flex;
   align-items: flex-start; /* checkbox aligns with the first line of the label */
   gap: 0.4rem;
   font-size: 0.9rem;
 }
+<<<<<<< HEAD
 .env-storage-toggle input { flex: none; margin-top: 0.15rem; }
+=======
+/* A <div>, not a <label>: these rows span the modal, and a label made a click
+   anywhere on the row (blank space included) flip the setting. Only the
+   checkbox itself toggles; it carries its own aria-label. */
+.env-storage-toggle input { flex: none; margin-top: 0.15rem; cursor: pointer; }
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
 /* Label text with the muted hint stacked underneath it. */
 .env-storage-main { display: flex; flex-direction: column; gap: 0.1rem; }
 .env-storage-note { margin: 0; }

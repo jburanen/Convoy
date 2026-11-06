@@ -759,6 +759,24 @@ def test_rename_environment_errors(client: TestClient) -> None:
     assert client.post("/api/environments/r1/rename", json={"name": "x!"}).status_code == 400
 
 
+<<<<<<< HEAD
+=======
+def test_reorder_environments(client: TestClient) -> None:
+    client.post("/api/environments", json={"name": "o1"})
+    client.post("/api/environments", json={"name": "o2"})
+    names = [e["name"] for e in client.get("/api/environments").json()]
+    wanted = list(reversed(names))
+
+    resp = client.post("/api/environments/order", json={"names": wanted})
+    assert resp.status_code == 200
+    assert resp.json() == {"names": wanted}
+    assert [e["name"] for e in client.get("/api/environments").json()] == wanted
+
+    stale = client.post("/api/environments/order", json={"names": wanted[:-1]})
+    assert stale.status_code == 400
+
+
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
 def test_remove_server(client: TestClient) -> None:
     client.post("/api/environments", json={"name": "e1"})
     job = _add_server(client, "e1", name="m1", address="192.0.2.90", role="management")
@@ -1426,6 +1444,50 @@ def test_provision_rejects_bad_input(client: TestClient) -> None:
 # -- connect to primary (SSH-executed Management API provisioning) ----------------
 
 
+<<<<<<< HEAD
+=======
+def test_bootstrap_mgmt_runs_commands_with_a_login_it_never_stores(
+    client: TestClient, transport: FakeTransport
+) -> None:
+    body = {
+        "address": "192.0.2.77",
+        "ssh_port": 22,
+        "login_username": "existing-login",
+        "login_password": "existing-pw-123",
+        "account_username": "svc-patch",
+        "account_password": "new-account-pw",
+    }
+    resp = client.post("/api/environments/default/bootstrap-mgmt", json=body)
+    assert resp.status_code == 202, resp.text
+    job = _wait_for_job(client, resp.json()["id"])
+    assert job["status"] == "succeeded", job["error"]
+    assert job["kind"] == "prov.bootstrap_mgmt" and job["target"] == "192.0.2.77"
+    assert job["params"] == {"ssh_port": 22, "account_username": "svc-patch"}
+    assert "clish -c 'add user svc-patch uid 0 homedir /home/svc-patch'" in transport.commands
+    events = client.get(f"/api/jobs/{job['id']}/events").text
+    for secret in ("existing-login", "existing-pw-123", "new-account-pw", "$6$"):
+        assert secret not in events and secret not in str(job), secret
+    # The typed server is not added to the inventory; Connect to Primary does that.
+    servers = client.get("/api/environments/default/servers").json()
+    assert "192.0.2.77" not in [srv["address"] for srv in servers]
+
+
+def test_bootstrap_mgmt_rejects_a_bad_account_name(client: TestClient) -> None:
+    resp = client.post(
+        "/api/environments/default/bootstrap-mgmt",
+        json={
+            "address": "192.0.2.77",
+            "login_username": "existing-login",
+            "login_password": "pw",
+            "account_username": "Bad User",
+            "account_password": "new-account-pw",
+        },
+    )
+    assert resp.status_code == 400
+    assert "invalid username" in resp.json()["detail"]
+
+
+>>>>>>> 771ae7efcb8d606ab7299e46e1f2c743a49196d2
 def test_connect_primary_preview_renders_commands(client: TestClient) -> None:
     resp = client.get(
         "/api/environments/default/connect-primary/preview", params={"username": "svc-patch"}
