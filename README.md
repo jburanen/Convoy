@@ -110,6 +110,7 @@ These gates define the major version releases - the milestones may change in the
 🤞 Timed/scheduled install actions  
 ✨ Standarize all user questions or confirmations to the modal UI and avoid using browser UI elements  
 🤞 Separate AD group auth per environment?  
+🤞 For major version upgrades, handle the gateway object version change via API  
 
 #### Provisioning
 🤞 Generate password option on bootstrapping  
